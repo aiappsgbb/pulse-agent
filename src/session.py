@@ -25,8 +25,8 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
 
     Args:
         config: Parsed standing-instructions.yaml
-        mode: 'triage' for monitoring, 'research' for deep research,
-              'transcripts' for transcript collection
+        mode: 'triage' for monitoring, 'digest' for content summarization,
+              'research' for deep research, 'transcripts' for transcript collection
         tools: Custom tools to register on the session
     """
     models = config.get("models", {})
@@ -156,6 +156,22 @@ Follow this multi-step workflow. Each numbered step requires at least one separa
 
 REMEMBER: Shallow one-query summaries are useless. Dig deep. Make 5-10+ WorkIQ queries per cycle.
 """
+    elif mode == "digest":
+        base += """
+## Digest Mode — Content Summarization
+
+You are analyzing content that was collected from local files (meeting transcripts,
+documents, emails). The content is provided in the user prompt.
+
+Your job:
+1. Analyze each piece of content thoroughly
+2. Extract TLDRs, decisions, action items, risk flags
+3. Generate a structured daily digest
+4. Use `write_output` to save the digest as a markdown file
+5. Use `log_action` to log each file you analyze
+
+Be SPECIFIC — use names, dates, numbers. Do NOT write vague summaries.
+"""
     elif mode == "research":
         base += f"""
 ## Deep Research Mode
@@ -184,62 +200,119 @@ def _build_transcript_prompt(config: dict) -> str:
 ## Transcript Collection Mode
 
 Your mission: Collect meeting transcript text from Microsoft Teams and save them as local files.
+You MUST save each transcript as a file. Do NOT just extract text and stop — write it to disk.
 
 ### Context
 Teams meeting transcripts do NOT sync locally as text. They exist only in the Teams/Stream cloud.
 You have Playwright (browser automation) to open Teams web in an authenticated Edge session.
 You also have WorkIQ to query calendar data.
+The "Download" button on transcripts is often disabled (non-organizer). Use DOM scraping instead.
 
 ### Output Directory
 Save all transcripts to: {output_dir}
-Filename format: YYYY-MM-DD_meeting-title-slug.vtt (or .txt if VTT not available)
+Filename format: YYYY-MM-DD_meeting-title-slug.vtt
 
-### Step-by-Step Workflow
+### Workflow — Follow These EXACT Steps
 
-#### Step 1 — Get Recent Meetings from WorkIQ
-- Ask WorkIQ: "List my meetings from the last {lookback_days} days. Include meeting title, date/time, and organizer."
-- Log the meeting list with log_action.
+#### Step 1 — Navigate to Teams Calendar (previous week)
+Use these EXACT Playwright calls in order:
+1. `playwright-browser_navigate` to `https://teams.microsoft.com`
+2. `playwright-browser_wait_for` — wait 8 seconds for full load
+3. `playwright-browser_press_key` — press `Control+Shift+3` to open Calendar
+4. `playwright-browser_wait_for` — wait 3 seconds for Calendar to render
+5. Now you MUST be on Calendar view. The page title should contain "Calendar".
+6. Find and click the "Go to previous week" button using:
+   `playwright-browser_click` on the button whose name starts with "Go to previous week"
+7. `playwright-browser_wait_for` — wait 2 seconds
 
-#### Step 2 — Check Which Transcripts Already Exist
-- Check the output directory ({output_dir}) for files already downloaded.
-- Skip any meeting whose transcript file already exists (avoid re-downloading).
-- Log which meetings are new vs already collected.
+#### Step 2 — Click a Meeting with a Recap
+1. Take a `playwright-browser_snapshot`
+2. Search the snapshot for meeting buttons — look for button elements with meeting names
+3. Click on a COMPLETED meeting (from last week, not today)
+4. In the meeting details panel, look for a "View recap" button
+5. Click "View recap" — this navigates to the recap page
+6. `playwright-browser_wait_for` — wait 3 seconds
 
-#### Step 3 — Open Teams Web in Browser
-- Use Playwright to navigate to https://teams.microsoft.com
-- Wait for the page to fully load (you should see the Teams interface).
-- If you see a sign-in page, the browser session is not authenticated — log this as an error and stop.
-- Log successful login with log_action.
+#### Step 3 — Open the Transcript Tab
+The Transcript tab is often HIDDEN behind a "show N more items" overflow button.
+1. Take a `playwright-browser_snapshot` — look for tabs
+2. If you see a "show 2 more items" or similar button, click it FIRST
+3. Then click the "Transcript" menuitem/tab that appears
+4. If Transcript is directly visible as a tab, click it
+5. `playwright-browser_wait_for` — wait 3 seconds for transcript entries to load
 
-#### Step 4 — Navigate to Each Meeting's Transcript
-For each meeting (up to {max_meetings} per run):
+#### Step 4 — Extract Full Transcript via DOM Scraping
+**Do NOT use simple selectors on the main page — the transcript is inside a nested iframe.**
 
-1. Navigate to the Teams Calendar view
-2. Find the meeting by date and title
-3. Click on the meeting to open it
-4. Look for "Recap" or "Transcript" tab/section
-5. If transcript is available:
-   - Look for a "Download" button or option to copy/export the transcript text
-   - If there's a download option, download the .vtt file
-   - If no download button, select all transcript text and copy it
-   - Save the content to {output_dir}/YYYY-MM-DD_meeting-slug.vtt
-6. If no transcript available for this meeting, log it and move on
-7. Log each transcript collected with log_action (meeting title, date, file size)
+#### CRITICAL: Transcript DOM Extraction Pattern
 
-#### Step 5 — Summary
-- Write a summary using write_output:
-  - Filename: transcripts/collection-report-YYYY-MM-DD.md
-  - Total meetings found
-  - Transcripts successfully collected (with filenames)
-  - Meetings skipped (already collected or no transcript)
-  - Any errors encountered
-- Log the final summary with log_action.
+Teams uses a **virtualized list** — it only renders entries near the scroll viewport.
+Scrolling to the bottom unloads the middle. You MUST use **incremental scroll + collect**.
 
-### Important Notes
-- Be patient with page loads — Teams web can be slow. Wait for elements to appear.
-- If a page fails to load, retry once before skipping.
-- Do NOT click on anything that would modify data (delete, edit, etc.) — READ ONLY.
-- If you encounter an error, log it and continue with the next meeting.
-- The browser is YOUR authenticated session — you have the same access as if you opened Teams manually.
-- Process meetings from newest to oldest (most recent first).
+The transcript is inside a nested iframe. From previous runs, it's typically `page.frames()[3]`
+but verify by checking which frame has `[role="listitem"]` elements with count > 5.
+
+Use this EXACT pattern in a single `playwright-browser_run_code` call:
+```javascript
+await (async (page) => {{
+  // 1. Find the transcript frame
+  const frames = page.frames();
+  let tf = null;
+  for (const frame of frames) {{
+    try {{
+      const c = await frame.locator('[role="listitem"]').count();
+      if (c > 5) {{ tf = frame; break; }}
+    }} catch {{}}
+  }}
+  if (!tf) return 'ERROR: No transcript frame found';
+
+  // 2. Get scroll dimensions
+  const info = await tf.evaluate(() => {{
+    const list = document.querySelector('[role="list"]');
+    const c = list?.parentElement || list;
+    return {{ scrollHeight: c?.scrollHeight || 0, clientHeight: c?.clientHeight || 0 }};
+  }});
+
+  // 3. Incremental scroll + collect at each position
+  const entries = new Map();
+  const step = 300;
+  for (let pos = 0; pos <= info.scrollHeight + step; pos += step) {{
+    await tf.evaluate((sp) => {{
+      const list = document.querySelector('[role="list"]');
+      const c = list?.parentElement || list;
+      if (c) c.scrollTop = sp;
+    }}, pos);
+    await new Promise(r => setTimeout(r, 400));
+
+    const items = await tf.evaluate(() => {{
+      return Array.from(document.querySelectorAll('[role="listitem"]'))
+        .map(el => el.innerText.trim()).filter(Boolean);
+    }});
+    items.forEach(text => entries.set(text.substring(0, 100), text));
+  }}
+
+  // 4. Build transcript text
+  let result = '';
+  let i = 1;
+  for (const text of entries.values()) {{
+    result += i + '\\n' + text + '\\n\\n';
+    i++;
+  }}
+  return JSON.stringify({{ entryCount: entries.size, length: result.length, transcript: result }});
+}})
+```
+
+After extraction, parse the JSON result and save the `transcript` field using write_output.
+If entryCount is 0, the frame selector may be wrong — try other frames.
+
+### Critical Rules
+- SAVE each transcript with write_output BEFORE moving to the next meeting.
+- Do NOT create helper scripts, .js files, or Node.js files — extract and save directly.
+- Do NOT write a summary report instead of saving transcripts.
+- Do NOT take screenshots or save .png files.
+- Do NOT create files in the project root directory.
+- Only save transcript files via write_output (writes to output/ directory).
+- If extraction fails, log the error and move on.
+- READ ONLY — never click delete, edit, or any destructive action.
+- Be patient — wait 3-5 seconds after each navigation for pages to load.
 """

@@ -10,6 +10,7 @@ import argparse
 from copilot import CopilotClient
 
 from config import load_config
+from digest import run_digest
 from monitor import run_monitoring_cycle
 from researcher import run_pending_tasks
 from transcripts import run_transcript_collection
@@ -26,9 +27,9 @@ async def main():
     parser = argparse.ArgumentParser(description="Pulse Agent")
     parser.add_argument(
         "--mode",
-        choices=["monitor", "research", "transcripts", "both"],
+        choices=["monitor", "digest", "research", "transcripts", "both"],
         default="both",
-        help="Run mode: monitor, research, transcripts, or both (monitor+research)",
+        help="Run mode: monitor, digest, research, transcripts, or both (monitor+research)",
     )
     parser.add_argument(
         "--once",
@@ -50,6 +51,8 @@ async def main():
         if args.once:
             if args.mode in ("monitor", "both"):
                 await run_monitoring_cycle(client, config)
+            if args.mode == "digest":
+                await run_digest(client, config)
             if args.mode in ("research", "both"):
                 await run_pending_tasks(client, config)
             if args.mode == "transcripts":
@@ -60,6 +63,8 @@ async def main():
         while True:
             if args.mode in ("monitor", "both"):
                 await run_monitoring_cycle(client, config)
+            if args.mode == "digest":
+                await run_digest(client, config)
             if args.mode in ("research", "both"):
                 await run_pending_tasks(client, config)
             if args.mode == "transcripts":

@@ -16,15 +16,53 @@ monitoring:
     auto_send_low_risk: true
     max_nudges: 2
 
+digest:
+  input_paths:
+    - path: "input/transcripts"
+      type: "transcripts"
+    - path: "input/documents"
+      type: "documents"
+    - path: "input/emails"
+      type: "emails"
+  supported_extensions: [".vtt", ".txt", ".md", ".docx", ".pptx", ".pdf", ".xlsx", ".csv", ".eml"]
+  incremental: true
+  state_file: "output/.digest-state.json"
+  priorities:
+    - "Flag action items assigned to me"
+    - "Flag escalations, risks, and customer complaints"
+    - "Summarize decisions made in meetings I missed"
+    - "Highlight documents that need my review"
+
 transcripts:
   lookback_days: 7
-  max_per_run: 10
+  max_per_run: 1
   output_dir: "input/transcripts"
   playwright:
     user_data_dir: "C:/Users/arzielinski/AppData/Local/ms-playwright/mcp-msedge-profile"
 
+intelligence:
+  topics:
+    - "Azure OpenAI"
+    - "GitHub Copilot"
+    - "Microsoft AI"
+  competitors:
+    - company: "AWS"
+      watch: ["Bedrock pricing", "new AI services", "enterprise wins"]
+    - company: "Google Cloud"
+      watch: ["Gemini updates", "Vertex AI", "enterprise deals"]
+    - company: "Salesforce"
+      watch: ["Agentforce", "AI announcements", "pricing"]
+  sources:
+    - "https://techcrunch.com"
+    - "https://theverge.com"
+    - "https://news.ycombinator.com"
+    - "https://azure.microsoft.com/blog"
+    - "https://aws.amazon.com/blogs/aws"
+
 models:
   triage: "gpt-4.1"
+  digest: "claude-sonnet"
+  intel: "claude-sonnet"
   research: "claude-opus"
   transcripts: "claude-sonnet"
   default: "claude-sonnet"
