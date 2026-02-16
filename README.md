@@ -77,23 +77,23 @@ The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all
 ### Run
 
 ```bash
-# Generate a daily digest (transcripts + inbox + RSS feeds)
+# Full overnight pipeline: transcripts → digest → research (default)
+python src/main.py --once
+
+# Just the digest (skip transcript collection — useful for re-running)
 python src/main.py --mode digest --once
 
-# Collect meeting transcripts from Teams (opens browser)
-python src/main.py --mode transcripts --once
-
-# Run monitoring triage (WorkIQ queries only)
+# Lightweight daytime triage (quick WorkIQ check)
 python src/main.py --mode monitor --once
 
-# Run a deep research mission from the task queue
-python src/main.py --mode research --once
-
-# Standalone external intel brief
-python src/main.py --mode intel --once
+# Individual stages
+python src/main.py --mode transcripts --once   # Collect transcripts only
+python src/main.py --mode research --once       # Run pending research tasks
+python src/main.py --mode intel --once          # Standalone RSS intel brief
 
 # Daemon mode — runs on a loop (default 30m interval)
-python src/main.py --mode digest
+python src/main.py --mode monitor              # Daytime: triage every 30m
+python src/main.py                             # Overnight: full pipeline on loop
 ```
 
 ## Architecture
@@ -125,51 +125,34 @@ Input Sources
   └── logs/2026-02-16.jsonl            Structured audit trail
 ```
 
-## Modes
+## Pipelines
 
-### Digest (`--mode digest`)
+### Overnight (`--mode overnight`, default)
 
-The primary mode. Runs three phases:
+The full end-to-end pipeline. Run it before you go to sleep, find a filtered digest in the morning.
 
-1. **Local collection** — Scans `input/` folders for transcripts, documents, emails. Extracts text from `.txt`, `.md`, `.vtt`, `.docx`, `.pptx`, `.pdf`, `.xlsx`, `.csv`, `.eml`. Tracks what's already been processed for incremental runs.
-2. **RSS feeds** — Fetches 8 configured feeds (Google News, TechCrunch, The Verge, Hacker News, Google AI Blog). Deduplicates via content hash. Filters by recency (48h lookback).
-3. **LLM analysis** — Sends collected content + RSS articles to a GHCP SDK session. The agent also queries WorkIQ for your inbox and Teams messages, cross-references against what you've already handled, and generates a filtered digest.
+**Step 1 — Transcripts.** Playwright opens Edge, navigates to Teams Calendar, and scrapes meeting transcripts from the previous week. Teams transcripts exist only in the cloud — they don't sync as text files — so browser automation is required. The script scrolls through Fluent UI's virtualized list to capture all entries and saves each transcript as a `.txt` to `input/transcripts/`.
 
-Output: `output/digests/YYYY-MM-DD.md`
+**Step 2 — Digest.** Scans `input/` folders for new content (transcripts, documents, emails). Extracts text from 9 file types. Fetches RSS feeds (Google News, TechCrunch, The Verge, Hacker News, etc.). Sends everything to a GHCP SDK session that also queries WorkIQ for your inbox and Teams messages, cross-references against what you've already handled, and generates a filtered 30-50 line digest. Also drafts **GBB Pulse signals** — structured field reports (customer wins, losses, escalations, compete intel, product feedback) extracted from the content and saved as individual files. Output: `output/digests/YYYY-MM-DD.md` + `output/pulse-signals/*.md`
 
-### Transcripts (`--mode transcripts`)
-
-Deterministic Playwright script (no LLM involved in navigation):
-
-1. Launches Edge with persistent auth profile
-2. Navigates to Teams Calendar, goes to previous week
-3. Finds meetings with "View recap" buttons
-4. Opens each recap, navigates to the Transcript tab
-5. Scrolls through the virtualized list (Fluent UI `ms-List`), collecting all entries
-6. Saves each transcript as a `.txt` file to `input/transcripts/`
-
-This is needed because Teams transcripts exist only in the cloud — they don't sync as text files to local storage.
+**Step 3 — Research.** Picks up any queued tasks from `tasks/pending/*.yaml` and executes them autonomously with full WorkIQ + local tool access. Completed tasks move to `tasks/completed/`.
 
 ### Monitor (`--mode monitor`)
 
-Multi-step WorkIQ triage. The agent makes 5-10+ separate WorkIQ queries to:
-- Triage unread/recent emails
-- Pull context for upcoming meetings
-- Scan Teams messages and threads
-- Check for overdue follow-ups
-- Write a comprehensive monitoring report
+Lightweight daytime quick-check. The agent makes 5-10+ separate WorkIQ queries to triage recent emails, pull meeting context, scan Teams threads, check for overdue follow-ups, and write a report. No transcript collection, no RSS feeds — just what's changed since your last check.
 
 Output: `output/monitoring-YYYY-MM-DDTHH-MM.md`
 
-### Research (`--mode research`)
+### Individual stages
 
-Picks up tasks from `tasks/pending/*.yaml` and executes them autonomously. Each task gets its own GHCP SDK session with full access to WorkIQ, local files, and browser tools. Completed tasks are moved to `tasks/completed/`.
+You can run any stage standalone:
 
-### Intel (`--mode intel`)
-
-Standalone RSS feed analysis (also runs as Phase 1b of digest mode). Fetches feeds, sends articles to the agent for filtering and summarization.
-
-Output: `output/intel/YYYY-MM-DD.md`
+| Mode | What | When to use |
+|------|------|-------------|
+| `--mode digest` | Digest only (skip transcripts) | Re-run digest without re-scraping Teams |
+| `--mode transcripts` | Transcript collection only | Just grab transcripts, analyze later |
+| `--mode research` | Task queue only | Run pending research missions |
+| `--mode intel` | RSS intel brief only | Quick external news scan |
 
 ## Project Structure
 
@@ -199,6 +182,7 @@ Output: `output/intel/YYYY-MM-DD.md`
 ├── output/                            Agent output (gitignored)
 │   ├── digests/                       Daily digests
 │   ├── intel/                         Intel briefs
+│   ├── pulse-signals/                 Drafted GBB Pulse signals
 │   ├── .digest-state.json             Incremental processing state
 │   └── .intel-state.json              RSS deduplication state
 ├── tasks/

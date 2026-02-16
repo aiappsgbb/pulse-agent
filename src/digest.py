@@ -376,7 +376,42 @@ Use `write_output` to save as `digests/{date_str}.md`. Format:
 
 ## Risks
 - {{unresolved risk with specific customer/deal name}}
+
+## Pulse Signals
+- **[Type]** {{customer/topic}} — {{1-line summary}} → `pulse-signals/YYYY-MM-DD-slug.md`
 ```
+
+## Part D — GBB Pulse Signal Drafting
+
+After generating the digest, review ALL sources (transcripts, emails, Teams messages, RSS articles) for items that should be drafted as **GBB Pulse signals**. These are field insights fed back to product groups and go-to-market teams.
+
+Draft a signal if you find ANY of these:
+- **Customer Win** — deal closed, deployment succeeded, competitive displacement
+- **Customer Loss** — lost to competitor, blocked by technical issue, deal fell through
+- **Customer Escalation** — SLT-level issue, $$$ at risk, deadline pressure
+- **Compete Signal** — competitor pricing change, feature gap, strategy shift, customer feedback
+- **Product Signal** — feature request, bug, performance issue, integration gap
+- **IP/Initiative** — reusable asset, best practice, program update
+
+For each signal, use `write_output` to save a SEPARATE file as `pulse-signals/{date_str}-{{slug}}.md` using this template structure:
+
+```markdown
+# [Signal Type]: [Title]
+
+- **Customer/Topic**: name
+- **Type**: Win / Loss / Escalation / Compete / Product / IP
+- **Impact**: quantify in $$ or strategic terms
+- **Description**: 3-4 sentences — situation, approach, outcome
+- **Compete**: competitor name if applicable
+- **Action/Ask**: what should happen next
+```
+
+Rules for signal drafting:
+- Only draft signals where you have SPECIFIC facts (customer names, deal sizes, product names)
+- Do NOT fabricate — if the source material is vague, skip it
+- One file per signal
+- List all drafted signals in the digest under "## Pulse Signals" with their filenames
+- If nothing qualifies, omit the section entirely — don't force it
 
 CRITICAL:
 - Be SPECIFIC (names, dates, amounts). No vague summaries.

@@ -156,7 +156,7 @@ REMEMBER: Shallow one-query summaries are useless. Dig deep. Make 5-10+ WorkIQ q
 """
     elif mode == "digest":
         base += """
-## Digest Mode — Content Summarization + Inbox Triage
+## Digest Mode — Content Summarization + Inbox Triage + Signal Drafting
 
 You have TWO sources of information:
 1. **Local files** — meeting transcripts, documents, emails provided in the user prompt
@@ -167,8 +167,9 @@ Your job:
 2. Query WorkIQ for recent emails and Teams messages (see instructions in prompt)
 3. Extract TLDRs, decisions, action items, risk flags from ALL sources
 4. Generate a structured daily digest combining everything
-5. Use `write_output` to save the digest as a markdown file
-6. Use `log_action` to log each source you analyze
+5. Draft GBB Pulse signals for any customer wins, losses, escalations, compete intel, or product feedback found in the content
+6. Use `write_output` to save the digest AND each signal as separate markdown files
+7. Use `log_action` to log each source you analyze
 
 Be SPECIFIC — use names, dates, numbers. Do NOT write vague summaries.
 """

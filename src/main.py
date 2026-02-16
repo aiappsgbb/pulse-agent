@@ -1,8 +1,8 @@
 """Pulse Agent — Autonomous Digital Employee
 
-Local daemon entrypoint. Runs two modes:
-1. Always-on monitoring loop (standing instructions)
-2. Deep research mission runner (task queue)
+Local daemon entrypoint. Two primary pipelines:
+1. Overnight: transcripts → digest (+ RSS + WorkIQ) → research
+2. Daytime: lightweight monitoring loop via WorkIQ
 """
 
 import asyncio
@@ -29,16 +29,29 @@ async def create_client() -> CopilotClient:
 
 
 async def run_cycle(client: CopilotClient, config: dict, mode: str):
-    """Run a single cycle for the given mode. Shared by --once and daemon loop."""
-    if mode in ("monitor", "both"):
-        await run_monitoring_cycle(client, config)
-    if mode == "digest":
-        await run_digest(client, config)
-    if mode in ("research", "both"):
-        await run_pending_tasks(client, config)
-    if mode == "transcripts":
+    """Run a single cycle for the given mode.
+
+    Pipelines:
+      overnight  — transcripts → digest (includes RSS + WorkIQ) → research
+      monitor    — lightweight WorkIQ triage (daytime quick-check)
+      digest     — digest only (skip transcript collection)
+      research   — pending task queue only
+      transcripts — transcript collection only
+      intel      — standalone RSS intel brief
+    """
+    if mode == "overnight":
         await run_transcript_collection(client, config)
-    if mode == "intel":
+        await run_digest(client, config)
+        await run_pending_tasks(client, config)
+    elif mode == "monitor":
+        await run_monitoring_cycle(client, config)
+    elif mode == "digest":
+        await run_digest(client, config)
+    elif mode == "research":
+        await run_pending_tasks(client, config)
+    elif mode == "transcripts":
+        await run_transcript_collection(client, config)
+    elif mode == "intel":
         await run_intel(client, config)
 
 
@@ -46,9 +59,13 @@ async def main():
     parser = argparse.ArgumentParser(description="Pulse Agent")
     parser.add_argument(
         "--mode",
-        choices=["monitor", "digest", "research", "transcripts", "intel", "both"],
-        default="both",
-        help="Run mode: monitor, digest, research, transcripts, intel, or both (monitor+research)",
+        choices=["overnight", "monitor", "digest", "research", "transcripts", "intel"],
+        default="overnight",
+        help=(
+            "overnight: full pipeline (transcripts → digest → research). "
+            "monitor: lightweight daytime triage. "
+            "digest/research/transcripts/intel: run a single stage."
+        ),
     )
     parser.add_argument(
         "--once",
