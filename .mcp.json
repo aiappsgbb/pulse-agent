@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "workiq": {
+      "command": "workiq",
+      "args": ["mcp"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--browser", "msedge",
+        "--headless",
+        "--user-data-dir", "C:/Users/arzielinski/AppData/Local/ms-playwright/mcp-msedge-profile"
+      ]
+    }
+  }
+}

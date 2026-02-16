@@ -1,0 +1,30 @@
+owner:
+  name: "Your Name"
+  email: "your.email@microsoft.com"
+  timezone: "America/Los_Angeles"
+
+monitoring:
+  interval: "30m"
+  priorities:
+    - "Flag urgent emails"
+    - "Draft responses to emails that need a reply"
+    - "Prep briefs for meetings in the next 24 hours"
+    - "Track action items — nudge after 3 days"
+    - "Surface conflicts and things I'm probably missing"
+  autonomy:
+    auto_send: false
+    auto_send_low_risk: true
+    max_nudges: 2
+
+transcripts:
+  lookback_days: 7
+  max_per_run: 10
+  output_dir: "input/transcripts"
+  playwright:
+    user_data_dir: "C:/Users/arzielinski/AppData/Local/ms-playwright/mcp-msedge-profile"
+
+models:
+  triage: "gpt-4.1"
+  research: "claude-opus"
+  transcripts: "claude-sonnet"
+  default: "claude-sonnet"
