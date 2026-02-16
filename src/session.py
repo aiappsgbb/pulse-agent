@@ -49,10 +49,8 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
     # Transcript mode needs Playwright MCP for browser automation
     if mode == "transcripts":
         playwright_cfg = config.get("transcripts", {}).get("playwright", {})
-        user_data_dir = playwright_cfg.get(
-            "user_data_dir",
-            "C:/Users/arzielinski/AppData/Local/ms-playwright/mcp-msedge-profile",
-        )
+        default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
+        user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
         mcp_servers["playwright"] = MCPLocalServerConfig(
             type="local",
             command="npx",
@@ -158,19 +156,35 @@ REMEMBER: Shallow one-query summaries are useless. Dig deep. Make 5-10+ WorkIQ q
 """
     elif mode == "digest":
         base += """
-## Digest Mode — Content Summarization
+## Digest Mode — Content Summarization + Inbox Triage
 
-You are analyzing content that was collected from local files (meeting transcripts,
-documents, emails). The content is provided in the user prompt.
+You have TWO sources of information:
+1. **Local files** — meeting transcripts, documents, emails provided in the user prompt
+2. **WorkIQ** — live access to M365 inbox, Teams messages, and calendar via the `ask_work_iq` tool
 
 Your job:
-1. Analyze each piece of content thoroughly
-2. Extract TLDRs, decisions, action items, risk flags
-3. Generate a structured daily digest
-4. Use `write_output` to save the digest as a markdown file
-5. Use `log_action` to log each file you analyze
+1. Analyze all local file content (transcripts, docs) provided in the prompt
+2. Query WorkIQ for recent emails and Teams messages (see instructions in prompt)
+3. Extract TLDRs, decisions, action items, risk flags from ALL sources
+4. Generate a structured daily digest combining everything
+5. Use `write_output` to save the digest as a markdown file
+6. Use `log_action` to log each source you analyze
 
 Be SPECIFIC — use names, dates, numbers. Do NOT write vague summaries.
+"""
+    elif mode == "intel":
+        base += """
+## Intel Mode — External Intelligence Brief
+
+You are analyzing RSS feed articles to generate a concise intelligence brief.
+Articles are provided in the prompt. Your job:
+1. Filter for relevance — skip generic hype, keep substantive moves
+2. Group by competitor/topic
+3. Flag anything that affects our competitive positioning
+4. Write a SHORT brief (max 40 lines) using write_output
+5. Log your analysis with log_action
+
+Be specific — names, products, pricing, dates. Skip fluff.
 """
     elif mode == "research":
         base += f"""

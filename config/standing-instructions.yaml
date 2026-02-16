@@ -35,16 +35,21 @@ digest:
 
 transcripts:
   lookback_days: 7
-  max_per_run: 1
+  max_per_run: 20
   output_dir: "input/transcripts"
   playwright:
-    user_data_dir: "C:/Users/arzielinski/AppData/Local/ms-playwright/mcp-msedge-profile"
+    user_data_dir: "$LOCALAPPDATA/ms-playwright/mcp-msedge-profile"
 
 intelligence:
+  lookback_hours: 48
+  max_articles: 100
+  state_file: "output/.intel-state.json"
   topics:
     - "Azure OpenAI"
     - "GitHub Copilot"
     - "Microsoft AI"
+    - "AI Agents"
+    - "LLM"
   competitors:
     - company: "AWS"
       watch: ["Bedrock pricing", "new AI services", "enterprise wins"]
@@ -52,12 +57,33 @@ intelligence:
       watch: ["Gemini updates", "Vertex AI", "enterprise deals"]
     - company: "Salesforce"
       watch: ["Agentforce", "AI announcements", "pricing"]
-  sources:
-    - "https://techcrunch.com"
-    - "https://theverge.com"
-    - "https://news.ycombinator.com"
-    - "https://azure.microsoft.com/blog"
-    - "https://aws.amazon.com/blogs/aws"
+    - company: "Anthropic"
+      watch: ["Claude updates", "enterprise deals", "MCP protocol"]
+    - company: "OpenAI"
+      watch: ["GPT releases", "enterprise features", "pricing changes"]
+    - company: "Databricks"
+      watch: ["Mosaic ML", "enterprise AI", "data lakehouse"]
+  feeds:
+    # Google News topic searches (broad coverage)
+    - url: "https://news.google.com/rss/search?q=artificial+intelligence+LLM+agents&when:2d&hl=en-US&gl=US&ceid=US:en"
+      name: "Google News — AI/LLM/Agents"
+    - url: "https://news.google.com/rss/search?q=Microsoft+Azure+AI+Copilot&when:2d&hl=en-US&gl=US&ceid=US:en"
+      name: "Google News — Microsoft AI"
+    - url: "https://news.google.com/rss/search?q=OpenAI+OR+Anthropic+OR+Google+Gemini&when:2d&hl=en-US&gl=US&ceid=US:en"
+      name: "Google News — OpenAI/Anthropic/Gemini"
+    - url: "https://news.google.com/rss/search?q=AWS+Bedrock+OR+Databricks+AI+OR+Salesforce+Agentforce&when:2d&hl=en-US&gl=US&ceid=US:en"
+      name: "Google News — AWS/Databricks/Salesforce"
+    # Curated tech feeds
+    - url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+      name: "TechCrunch AI"
+    - url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
+      name: "The Verge AI"
+    # Vendor blogs
+    - url: "https://blog.google/technology/ai/rss/"
+      name: "Google AI Blog"
+    # Community
+    - url: "https://hnrss.org/newest?q=LLM+OR+AI+agents+OR+GPT+OR+Claude&count=30"
+      name: "Hacker News — AI"
 
 models:
   triage: "gpt-4.1"

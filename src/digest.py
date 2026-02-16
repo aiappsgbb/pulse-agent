@@ -13,22 +13,17 @@ from datetime import datetime
 from pathlib import Path
 
 from copilot import CopilotClient
-from copilot.generated.session_events import SessionEventType
 
-from config import load_config
-from session import build_session_config, PROJECT_ROOT, OUTPUT_DIR
-from tools import get_tools
+from intel import collect_feeds
+from session import PROJECT_ROOT, OUTPUT_DIR
+from tools import get_tools, _load_actions
+from utils import agent_session, log
 
 
 # Max characters to send per file (avoid blowing up the context window)
 MAX_CHARS_PER_FILE = 50_000
 # Max total characters for all content in a single digest run
-MAX_TOTAL_CHARS = 300_000
-
-
-def _print(text: str):
-    """Print with ASCII-safe encoding to avoid charmap errors on Windows."""
-    print(text.encode("ascii", "replace").decode("ascii"))
+MAX_TOTAL_CHARS = 400_000
 
 
 # --- Phase 1: Content Collection ---
@@ -46,101 +41,99 @@ def _save_digest_state(state_file: Path, state: dict):
     state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
-def _extract_text(filepath: Path) -> str | None:
-    """Extract text content from a file based on its extension.
+# ---------------------------------------------------------------------------
+# File text extractors — registry pattern for clean extensibility
+# ---------------------------------------------------------------------------
 
-    Returns text content or None if the file type isn't supported yet.
+def _extract_plaintext(filepath: Path) -> str | None:
+    """Extract text from plain text files (.txt, .md, .vtt, .csv, .eml)."""
+    try:
+        return filepath.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return filepath.read_text(encoding="latin-1")
+
+
+def _extract_docx(filepath: Path) -> str | None:
+    """Extract text from Word documents (.docx)."""
+    import docx
+    doc = docx.Document(str(filepath))
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _extract_pptx(filepath: Path) -> str | None:
+    """Extract text from PowerPoint files (.pptx)."""
+    from pptx import Presentation
+    prs = Presentation(str(filepath))
+    text_parts = []
+    for slide_num, slide in enumerate(prs.slides, 1):
+        slide_text = [shape.text for shape in slide.shapes
+                      if hasattr(shape, "text") and shape.text.strip()]
+        if slide_text:
+            text_parts.append(f"[Slide {slide_num}]\n" + "\n".join(slide_text))
+    return "\n\n".join(text_parts)
+
+
+def _extract_pdf(filepath: Path) -> str | None:
+    """Extract text from PDF files (.pdf)."""
+    import PyPDF2
+    with open(filepath, "rb") as f:
+        reader = PyPDF2.PdfReader(f)
+        text_parts = [page.extract_text() for page in reader.pages
+                      if page.extract_text() and page.extract_text().strip()]
+        return "\n\n".join(text_parts)
+
+
+def _extract_xlsx(filepath: Path) -> str | None:
+    """Extract text from Excel files (.xlsx)."""
+    import openpyxl
+    wb = openpyxl.load_workbook(str(filepath), read_only=True, data_only=True)
+    text_parts = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(cells):
+                rows.append(" | ".join(cells))
+        if rows:
+            text_parts.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows[:200]))
+    wb.close()
+    return "\n\n".join(text_parts)
+
+
+# Map file extensions to extractor functions
+EXTRACTORS: dict[str, callable] = {
+    ".txt": _extract_plaintext,
+    ".md": _extract_plaintext,
+    ".vtt": _extract_plaintext,
+    ".csv": _extract_plaintext,
+    ".eml": _extract_plaintext,
+    ".docx": _extract_docx,
+    ".pptx": _extract_pptx,
+    ".pdf": _extract_pdf,
+    ".xlsx": _extract_xlsx,
+}
+
+
+def _extract_text(filepath: Path) -> str | None:
+    """Extract text content from a file using the registered extractor.
+
+    Returns text content or None if the file type isn't supported or extraction fails.
     """
     ext = filepath.suffix.lower()
+    extractor = EXTRACTORS.get(ext)
+    if not extractor:
+        return None
 
-    # Plain text files — read directly
-    if ext in (".txt", ".md", ".vtt", ".csv", ".eml"):
-        try:
-            return filepath.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            try:
-                return filepath.read_text(encoding="latin-1")
-            except Exception:
-                return None
-
-    # Word documents
-    if ext == ".docx":
-        try:
-            import docx
-            doc = docx.Document(str(filepath))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        except ImportError:
-            _print(f"    WARNING: python-docx not installed, skipping .docx")
-            return None
-        except Exception as e:
-            _print(f"    WARNING: Failed to read .docx: {e}")
-            return None
-
-    # PowerPoint
-    if ext == ".pptx":
-        try:
-            from pptx import Presentation
-            prs = Presentation(str(filepath))
-            text_parts = []
-            for slide_num, slide in enumerate(prs.slides, 1):
-                slide_text = []
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        slide_text.append(shape.text)
-                if slide_text:
-                    text_parts.append(f"[Slide {slide_num}]\n" + "\n".join(slide_text))
-            return "\n\n".join(text_parts)
-        except ImportError:
-            _print(f"    WARNING: python-pptx not installed, skipping .pptx")
-            return None
-        except Exception as e:
-            _print(f"    WARNING: Failed to read .pptx: {e}")
-            return None
-
-    # PDF
-    if ext == ".pdf":
-        try:
-            import PyPDF2
-            with open(filepath, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                text_parts = []
-                for page in reader.pages:
-                    text = page.extract_text()
-                    if text and text.strip():
-                        text_parts.append(text)
-                return "\n\n".join(text_parts)
-        except ImportError:
-            _print(f"    WARNING: PyPDF2 not installed, skipping .pdf")
-            return None
-        except Exception as e:
-            _print(f"    WARNING: Failed to read .pdf: {e}")
-            return None
-
-    # Excel — just extract cell values as CSV-like text
-    if ext == ".xlsx":
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(str(filepath), read_only=True, data_only=True)
-            text_parts = []
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                rows = []
-                for row in ws.iter_rows(values_only=True):
-                    cells = [str(c) if c is not None else "" for c in row]
-                    if any(cells):
-                        rows.append(" | ".join(cells))
-                if rows:
-                    text_parts.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows[:200]))
-            wb.close()
-            return "\n\n".join(text_parts)
-        except ImportError:
-            _print(f"    WARNING: openpyxl not installed, skipping .xlsx")
-            return None
-        except Exception as e:
-            _print(f"    WARNING: Failed to read .xlsx: {e}")
-            return None
-
-    return None
+    try:
+        return extractor(filepath)
+    except ImportError as e:
+        # Missing optional dependency — warn once and skip
+        log.warning(f"    Missing dependency for {ext}: {e} — pip install it to enable")
+        return None
+    except Exception as e:
+        log.warning(f"    Failed to read {filepath.name}: {e}")
+        return None
 
 
 def collect_content(config: dict) -> list[dict]:
@@ -169,11 +162,11 @@ def collect_content(config: dict) -> list[dict]:
         content_type = path_cfg.get("type", "unknown")
 
         if not folder.exists():
-            _print(f"  Input path does not exist (creating): {folder}")
+            log.info(f"  Input path does not exist (creating): {folder}")
             folder.mkdir(parents=True, exist_ok=True)
             continue
 
-        _print(f"  Scanning {folder} (type: {content_type})...")
+        log.info(f"  Scanning {folder} (type: {content_type})...")
 
         for filepath in sorted(folder.rglob("*")):
             if not filepath.is_file():
@@ -193,7 +186,7 @@ def collect_content(config: dict) -> list[dict]:
             # Extract text
             text = _extract_text(filepath)
             if not text or not text.strip():
-                _print(f"    SKIP (empty/unreadable): {filepath.name}")
+                log.debug(f"    SKIP (empty/unreadable): {filepath.name}")
                 continue
 
             # Truncate if too large
@@ -201,7 +194,7 @@ def collect_content(config: dict) -> list[dict]:
                 text = text[:MAX_CHARS_PER_FILE] + f"\n\n[... truncated at {MAX_CHARS_PER_FILE} chars]"
 
             if total_chars + len(text) > MAX_TOTAL_CHARS:
-                _print(f"    STOP: Total content limit reached ({MAX_TOTAL_CHARS} chars)")
+                log.warning(f"    STOP: Total content limit reached ({MAX_TOTAL_CHARS} chars)")
                 break
 
             collected.append({
@@ -228,48 +221,45 @@ def collect_content(config: dict) -> list[dict]:
 
 async def run_digest(client: CopilotClient, config: dict):
     """Run a full digest cycle: collect content → analyze → write daily digest."""
-    _print("\n=== Digest cycle start ===")
+    log.info("\n=== Digest cycle start ===")
 
     # Phase 1: Collect content
-    _print("Phase 1: Collecting content from input folders...")
+    log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
 
-    if not items:
-        _print("  No new content to process. Digest cycle complete.")
-        _print("=== Digest cycle end ===")
-        return
+    if items:
+        log.info(f"  Collected {len(items)} local items:")
+        for item in items:
+            log.info(f"    - [{item['type']}] {item['name']} ({item['size']} chars)")
+    else:
+        log.info("  No new local content.")
 
-    _print(f"  Collected {len(items)} items:")
-    for item in items:
-        _print(f"    - [{item['type']}] {item['name']} ({item['size']} chars)")
+    # Phase 1b: Collect RSS feeds
+    log.info("\nPhase 1b: Fetching RSS feeds...")
+    articles = collect_feeds(config)
+    if articles:
+        log.info(f"  Collected {len(articles)} new articles")
+    else:
+        log.info("  No new articles.")
 
-    # Phase 2: Send to GHCP SDK agent for analysis
-    _print("\nPhase 2: Sending content to agent for analysis...")
+    # Phase 2: Send to GHCP SDK agent for analysis (always runs — WorkIQ queries happen here)
+    log.info("Phase 2: Sending to agent for analysis + WorkIQ inbox scan...")
 
-    session_config = build_session_config(config, mode="digest", tools=get_tools())
-    session = await client.create_session(session_config)
-
-    session.on(lambda event: _log_event(event))
-
-    try:
-        # Build the prompt with all collected content
-        prompt = _build_digest_prompt(items, config)
-        _print(f"  Prompt size: {len(prompt)} chars")
-        _print("  Agent working...\n")
+    async with agent_session(client, config, "digest", tools=get_tools()) as session:
+        prompt = _build_digest_prompt(items, config, articles)
+        log.info(f"  Prompt size: {len(prompt)} chars")
+        log.info("  Agent working...")
 
         response = await session.send_and_wait({"prompt": prompt}, timeout=600)
 
         if not response:
-            _print("\nNo response from agent (timed out).")
+            log.warning("No response from agent (timed out).")
 
-    finally:
-        await session.destroy()
-
-    _print("\n=== Digest cycle end ===")
+    log.info("=== Digest cycle end ===")
 
 
-def _build_digest_prompt(items: list[dict], config: dict) -> str:
-    """Build the analysis prompt containing all collected content."""
+def _build_digest_prompt(items: list[dict], config: dict, articles: list[dict] | None = None) -> str:
+    """Build the analysis prompt containing all collected content + RSS articles."""
     date_str = datetime.now().strftime("%Y-%m-%d")
     digest_cfg = config.get("digest", {})
     priorities = digest_cfg.get("priorities", [])
@@ -290,78 +280,109 @@ def _build_digest_prompt(items: list[dict], config: dict) -> str:
 
     content_block = "\n".join(content_sections)
 
-    return f"""Analyze the following content and generate a daily digest for {date_str}.
+    # Build articles block from RSS feeds
+    articles_block = ""
+    if articles:
+        article_lines = []
+        for a in articles:
+            article_lines.append(f"- [{a['source']}] **{a['title']}** ({a['published']})")
+        articles_block = f"""
+## Part C — External Intel ({len(articles)} articles from RSS feeds)
+{chr(10).join(article_lines)}
+"""
+
+    # Load dismissed items
+    actions = _load_actions()
+    dismissed = actions.get("dismissed", [])
+    notes = actions.get("notes", {})
+
+    dismissed_block = ""
+    if dismissed:
+        dismissed_items = "\n".join(f"- {d['item']}" for d in dismissed)
+        dismissed_block = f"""
+## Previously Dismissed Items (DO NOT include these)
+{dismissed_items}
+"""
+
+    notes_block = ""
+    if notes:
+        note_items = "\n".join(f"- **{k}**: {v['note']}" for k, v in notes.items())
+        notes_block = f"""
+## User Notes (context for your analysis)
+{note_items}
+"""
+
+    return f"""Generate a SHORT daily digest for {date_str}. This should be MAX 50 lines — only things I haven't dealt with yet.
 
 ## Your Priorities
 {priorities_str}
+{dismissed_block}{notes_block}
 
-## Content to Process
+## Part A — Local Content (already collected)
 {content_block}
+{articles_block}
+## Part B — Inbox & Messages (query WorkIQ)
 
-## Instructions
+Make these WorkIQ queries IN ORDER:
 
-Generate a structured daily digest. Use the `write_output` tool to save it as `digests/{date_str}.md`.
+### Step 1: Get emails and messages
+Ask WorkIQ: "Show me emails I received in the last 7 days that look like they need action or a reply. Include sender, subject, and what they need."
 
-The digest MUST follow this exact structure:
+### Step 2: Check what's already handled
+Ask WorkIQ: "Which of my recent emails have I already replied to? Which meetings have I already attended or prepared for? Which action items have I already completed?"
+
+### Step 3: Get Teams messages
+Ask WorkIQ: "What Teams messages from the last 7 days mention me or need my input?"
+
+### Step 4: FILTER
+Cross-reference Steps 1-3. REMOVE anything I've already replied to, already attended, or already dealt with. Only keep genuinely outstanding items.
+
+## Output Rules
+
+**TARGET: 30-50 lines. Not 400. Be brutal about what makes the cut.**
+
+The ONLY things that belong in the digest:
+- Things I haven't responded to yet that need a response
+- Deadlines coming up that I haven't acted on
+- Risks/escalations that are still unresolved
+- Key decisions from meetings (1 line each, not paragraphs)
+- Commitments I made that I haven't delivered on yet
+- Significant competitor/industry moves from RSS articles (max 5 lines)
+
+Things that do NOT belong:
+- Emails I already replied to
+- Meetings I already attended with no outstanding actions
+- FYI emails, newsletters, community digests
+- Anything that's clearly already handled
+- Detailed per-meeting breakdowns (just the key takeaway + any open action items)
+- Generic AI hype articles with no substance
+
+Use `write_output` to save as `digests/{date_str}.md`. Format:
 
 ```markdown
-# Daily Digest — {date_str}
-## {{count}} items processed
+# Digest — {date_str}
 
-### Needs Your Attention (urgent items first)
-- [URGENT] ... (escalations, risks, customer complaints)
-- [ACTION] ... (action items assigned to me, with deadlines)
-- [REVIEW] ... (documents needing my review)
+## Still Outstanding
+- **[REPLY]** {{sender}} — {{subject}} — {{what they need}} ({{date}})
+- **[ACTION]** {{what}} — {{deadline}} — {{context}}
+- **[DECISION]** {{what needs deciding}} — {{by when}}
 
-### Meeting TLDRs
-For each meeting transcript, provide:
-#### {{Meeting Title}}
-- **Duration**: ...
-- **Attendees**: ... (list key participants)
-- **TLDR**: 3-5 bullet points of what was discussed
-- **Decisions Made**: ... (if any)
-- **Action Items**: who → what → deadline
-- **Relevant to Me**: anything specifically mentioning the owner or their responsibilities
+## Key Takeaways This Week
+- {{1-line meeting insight or decision that matters}}
+- {{1-line meeting insight or decision that matters}}
 
-### Documents & Emails Scanned
-For each non-transcript item:
-- **{{filename}}**: 2-3 sentence summary, flagging anything that needs attention
+## External Intel
+- **[Company]** — what happened — why it matters (only include genuinely significant moves)
 
-### Risk & Escalation Flags
-- Any customer complaints, churn risks, escalations, deadline pressures
+## Risks
+- {{unresolved risk with specific customer/deal name}}
 ```
 
 CRITICAL:
-- Be SPECIFIC. Use names, dates, numbers from the content.
-- Do NOT write vague summaries like "discussed various topics".
-- If a transcript mentions action items, extract EVERY one with the assignee name.
-- If nothing needs attention, say so explicitly — don't invent urgency.
-- Use `log_action` to log each file you analyze.
-- Use `write_output` to save the final digest. Filename: `digests/{date_str}.md`
+- Be SPECIFIC (names, dates, amounts). No vague summaries.
+- FILTER OUT everything already dealt with. This is the whole point.
+- If everything is handled, say "Nothing outstanding" — don't pad it.
+- Use `log_action` to log your work.
 """
 
 
-def _log_event(event):
-    """Log streaming events from the agent to terminal."""
-    event_type = getattr(event, "type", None)
-
-    if event_type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
-        data = getattr(event, "data", None)
-        if data and data.delta_content:
-            text = data.delta_content.encode("ascii", "replace").decode("ascii")
-            print(text, end="", flush=True)
-
-    elif event_type == SessionEventType.ASSISTANT_MESSAGE:
-        print(flush=True)
-
-    elif event_type == SessionEventType.TOOL_EXECUTION_START:
-        data = getattr(event, "data", None)
-        tool_name = data.tool_name if data and data.tool_name else "unknown"
-        mcp = f" ({data.mcp_server_name})" if data and data.mcp_server_name else ""
-        _print(f"\n>> [TOOL] {tool_name}{mcp}")
-
-    elif event_type == SessionEventType.TOOL_EXECUTION_COMPLETE:
-        data = getattr(event, "data", None)
-        if data and data.result:
-            preview = str(data.result)[:300]
-            _print(f"<< [RESULT] {preview}")

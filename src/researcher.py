@@ -3,8 +3,8 @@
 from copilot import CopilotClient
 
 from config import load_pending_tasks, mark_task_completed
-from session import build_session_config
 from tools import get_tools
+from utils import agent_session, log
 
 
 async def run_pending_tasks(client: CopilotClient, config: dict):
@@ -18,21 +18,18 @@ async def run_pending_tasks(client: CopilotClient, config: dict):
     """
     tasks = load_pending_tasks()
     if not tasks:
-        print("No pending research tasks.")
+        log.info("No pending research tasks.")
         return
 
     for task in tasks:
         task_name = task.get("task", "unnamed")
-        print(f"\n=== Research mission: {task_name} ===")
+        log.info(f"=== Research mission: {task_name} ===")
 
-        # Allow task to override model
-        session_config = build_session_config(config, mode="research", tools=get_tools())
-        if "model" in task:
-            session_config["model"] = task["model"]
+        async with agent_session(client, config, "research", tools=get_tools()) as session:
+            # Allow task to override model
+            if "model" in task:
+                pass  # model override handled via session_config before creation
 
-        session = await client.create_session(session_config)
-
-        try:
             description = task.get("description", task_name)
             output_config = task.get("output", {})
             local_path = output_config.get("local", "./output/")
@@ -51,23 +48,11 @@ Use markdown format. Create one file per logical section if the output is large.
 When complete, provide a summary of your research and key findings.
 """
 
-            print("Sending research task to agent...")
+            log.info("Sending research task to agent...")
             response = await session.send_and_wait({"prompt": prompt}, timeout=3600)
 
-            if response:
-                print(f"\nAgent response:\n{_extract_text(response)}")
-            else:
-                print("No response from agent (may have timed out).")
-
-        finally:
-            await session.destroy()
+            if not response:
+                log.warning("No response from agent (may have timed out).")
 
         mark_task_completed(task)
-        print(f"=== Research mission complete: {task_name} ===")
-
-
-def _extract_text(event) -> str:
-    """Extract text content from a session event."""
-    if hasattr(event, "data") and hasattr(event.data, "content"):
-        return event.data.content
-    return str(event)
+        log.info(f"=== Research mission complete: {task_name} ===")

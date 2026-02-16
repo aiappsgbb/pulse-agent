@@ -125,7 +125,7 @@ async def run_transcript_collection(client, config: dict):
         context = await p.chromium.launch_persistent_context(
             user_data_dir,
             channel="msedge",
-            headless=False,  # TEMP: headful for debugging
+            headless=True,
             viewport={"width": 1280, "height": 900},
         )
         # Use first restored page or create one (creating after closing all can fail)
@@ -140,10 +140,13 @@ async def run_transcript_collection(client, config: dict):
             # Step 1: Navigate to Teams — fresh page, no stale SPA state
             _print("  Opening Teams...")
             await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
-            await page.wait_for_timeout(8000)
+            await page.wait_for_timeout(10000)
 
-            title = await page.title()
-            _print(f"  Page loaded: {title}")
+            try:
+                title = await page.title()
+                _print(f"  Page loaded: {title}")
+            except Exception:
+                _print("  Page navigated during load (Teams SPA redirect) — continuing.")
 
             # Step 2: Click Calendar in the left nav bar (works from any view)
             _print("  Clicking Calendar nav button...")
@@ -213,8 +216,9 @@ async def run_transcript_collection(client, config: dict):
                     continue
 
                 _print(f"\n  Processing: {meeting_name[:60]}...")
+                opened_recap = False
                 try:
-                    transcript = await _extract_meeting_transcript(page, iframe, meeting_name)
+                    transcript, opened_recap = await _extract_meeting_transcript(page, iframe, meeting_name)
                     if transcript:
                         date_str = datetime.now().strftime("%Y-%m-%d")
                         filename = f"{date_str}_{slug}.txt"
@@ -231,8 +235,11 @@ async def run_transcript_collection(client, config: dict):
                     errors.append(err_msg)
 
                 # Navigate back to calendar for next meeting
-                await page.keyboard.press("Escape")
-                await page.wait_for_timeout(2000)
+                try:
+                    await _return_to_calendar(page, iframe, force=opened_recap)
+                except Exception:
+                    _print("  FATAL: Cannot return to calendar, stopping collection.")
+                    break
 
         finally:
             await context.close()
@@ -244,6 +251,50 @@ async def run_transcript_collection(client, config: dict):
     _print(f"  Errors: {len(errors)}")
     for err in errors:
         _print(f"    - {err}")
+
+
+async def _return_to_calendar(page: Page, iframe, force: bool = False):
+    """Return to calendar view after processing a meeting.
+
+    Two cases:
+    1. Simple popup (no recap) — Escape closes it, still on calendar
+    2. Recap view (force=True) — navigated away, must go back via Calendar button
+    """
+    if not force:
+        # Simple popup — just Escape to close it
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        return
+
+    # We opened a recap page — always navigate back to Calendar
+    _print("  Returning to calendar from recap view...")
+    try:
+        cal_btn = page.get_by_role("button", name="Calendar")
+        await cal_btn.click()
+        await page.wait_for_timeout(5000)
+    except Exception:
+        await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
+        await page.wait_for_timeout(8000)
+        try:
+            cal_btn = page.get_by_role("button", name="Calendar")
+            await cal_btn.click()
+            await page.wait_for_timeout(5000)
+        except Exception:
+            raise RuntimeError("Cannot navigate back to Calendar")
+
+    # Go to previous week (calendar defaults to current week)
+    try:
+        iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
+        await iframe_loc.get_by_role("button").first.wait_for(state="visible", timeout=15000)
+        prev_btn = iframe_loc.get_by_role("button", name=re.compile(r"Go to previous week"))
+        await prev_btn.click()
+        await page.wait_for_timeout(5000)
+        _print("  Calendar restored (previous week).")
+    except Exception as e:
+        _print(f"  WARNING: Could not navigate to previous week: {e}")
 
 
 async def _get_iframe_text(page: Page) -> str:
@@ -284,7 +335,7 @@ async def _find_meeting_buttons(page: Page, iframe) -> list[str]:
                      "show navigation", "join with an id",
                      "meet now", "filter", "copilot chat",
                      "summary:", "holiday", "paid leave",
-                     "canceled:", "declined:", "more options", "+1 more",
+                     "canceled:", "more options", "+1 more",
                      "date selector", "skip to main"]
 
     meetings = []
@@ -307,10 +358,11 @@ async def _find_meeting_buttons(page: Page, iframe) -> list[str]:
     return meetings
 
 
-async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> str | None:
+async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> tuple[str | None, bool]:
     """Click into a meeting, find transcript, extract text.
 
-    Returns transcript text or None if not available.
+    Returns (transcript_text, opened_recap) tuple.
+    opened_recap=True means we navigated to a recap page and need to go back.
     """
     # Click the meeting
     try:
@@ -319,7 +371,7 @@ async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> 
         await page.wait_for_timeout(2000)
     except Exception as e:
         _print(f"    Could not click meeting: {e}")
-        return None
+        return None, False
 
     # Look for "View recap" button — ONLY recap, not "View event"
     # "View event" is just event details, no transcript there
@@ -327,12 +379,12 @@ async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> 
         recap_btn = iframe.get_by_role("button", name="View recap")
         if await recap_btn.count() == 0:
             _print("    No 'View recap' button — skipping (no recording).")
-            return None
+            return None, False
         await recap_btn.click()
         await page.wait_for_timeout(4000)
     except Exception as e:
         _print(f"    Could not click recap: {e}")
-        return None
+        return None, False
 
     # Find and click Transcript tab — may be hidden behind overflow menu
     transcript_clicked = False
@@ -381,7 +433,7 @@ async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> 
 
     if not transcript_clicked:
         _print("    Transcript tab not found.")
-        return None
+        return None, True  # opened recap but no transcript tab
 
     await page.wait_for_timeout(3000)
 
@@ -389,17 +441,17 @@ async def _extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> 
     transcript_frame = await _find_transcript_frame(page)
     if not transcript_frame:
         _print("    Transcript frame not found.")
-        return None
+        return None, True
 
     try:
         transcript = await _scroll_and_extract(transcript_frame)
         if not transcript:
             _print("    No transcript entries found.")
-            return None
-        return transcript
+            return None, True
+        return transcript, True
     except Exception as e:
         _print(f"    Extraction failed: {e}")
-        return None
+        return None, True
 
 
 async def _scroll_and_extract(frame: Frame) -> str | None:
@@ -478,11 +530,55 @@ async def _scroll_and_extract(frame: Frame) -> str | None:
     if not entries:
         return None
 
-    # Build transcript text
+    return _clean_transcript(list(entries.values()))
+
+
+def _clean_transcript(raw_entries: list[str]) -> str:
+    """Convert raw listitem texts into clean speaker-attributed transcript.
+
+    Raw entries from the DOM are either:
+      - Speaker header: "Name\\nN minutes N seconds\\nM:SS" (or "Name\\nN SS\\nM:SS")
+      - Text entry: just the spoken text
+
+    Output format:
+      [0:13] Esther Dediashvili: Good morning. Nice to meet you.
+      [0:15] Dorota Zimnoch: Oh, I'm industry advisor...
+    """
+    timestamp_re = re.compile(r'^\d+:\d+$')
+
+    # Parse entries into (speaker, timestamp, text) tuples
+    current_speaker = None
+    current_timestamp = None
     lines = []
-    for i, text in enumerate(entries.values(), 1):
-        lines.append(f"{i}\n{text}\n")
-    return "\n".join(lines)
+
+    for raw in raw_entries:
+        parts = raw.strip().split('\n')
+
+        # Check if this is a speaker header (has a visual timestamp like "0:13" as last line)
+        if len(parts) >= 2 and timestamp_re.match(parts[-1].strip()):
+            current_speaker = parts[0].strip()
+            current_timestamp = parts[-1].strip()
+        elif len(parts) == 1 and not timestamp_re.match(parts[0].strip()):
+            # Single line — could be a standalone speaker name or actual text
+            text = parts[0].strip()
+            if not text:
+                continue
+            # If this looks like a name (no punctuation except apostrophes/hyphens,
+            # title case) AND we don't have a current speaker yet, treat as speaker intro
+            if (current_speaker is None
+                    and text.replace("'", "").replace("-", "").replace(" ", "").isalpha()
+                    and text[0].isupper()):
+                current_speaker = text
+            else:
+                # It's actual transcript text
+                speaker = current_speaker or "Unknown"
+                ts = f"[{current_timestamp}] " if current_timestamp else ""
+                lines.append(f"{ts}{speaker}: {text}")
+
+    if not lines:
+        return None
+
+    return "\n".join(lines) + "\n"
 
 
 async def _find_transcript_frame(page: Page) -> Frame | None:

@@ -1,2 +1,13 @@
-github-copilot-sdk
-pyyaml
+# Core — required for all modes
+github-copilot-sdk>=0.1.23
+pyyaml>=6.0
+feedparser>=6.0
+
+# Document extraction — required for digest mode
+python-docx>=1.1
+python-pptx>=1.0
+PyPDF2>=3.0
+openpyxl>=3.1
+
+# Browser automation — required for transcript collection mode
+playwright>=1.50

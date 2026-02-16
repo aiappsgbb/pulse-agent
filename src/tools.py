@@ -33,6 +33,16 @@ class QueueTaskParams(BaseModel):
     model: str = "claude-opus"
 
 
+class DismissItemParams(BaseModel):
+    item: str
+    reason: str = ""
+
+
+class AddNoteParams(BaseModel):
+    item: str
+    note: str
+
+
 # --- Tool handlers ---
 
 @define_tool(
@@ -64,7 +74,10 @@ def log_action(params: LogActionParams, invocation: ToolInvocation) -> str:
 )
 def write_output(params: WriteOutputParams, invocation: ToolInvocation) -> str:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / params.filename
+    output_path = (OUTPUT_DIR / params.filename).resolve()
+    # Prevent path traversal — output must stay inside OUTPUT_DIR
+    if not str(output_path).startswith(str(OUTPUT_DIR.resolve())):
+        return f"ERROR: Path traversal blocked — '{params.filename}' resolves outside output/"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(params.content, encoding="utf-8")
     return f"Written to {output_path}"
@@ -97,6 +110,48 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
     return f"Task queued: {task_file}"
 
 
+ACTIONS_FILE = OUTPUT_DIR / ".digest-actions.json"
+
+
+def _load_actions() -> dict:
+    if ACTIONS_FILE.exists():
+        return json.loads(ACTIONS_FILE.read_text(encoding="utf-8"))
+    return {"dismissed": [], "notes": {}}
+
+
+def _save_actions(actions: dict):
+    ACTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACTIONS_FILE.write_text(json.dumps(actions, indent=2), encoding="utf-8")
+
+
+@define_tool(
+    name="dismiss_item",
+    description="Mark a digest item as handled/done so it won't appear in future digests. Use when the user says they've dealt with something.",
+)
+def dismiss_item(params: DismissItemParams, invocation: ToolInvocation) -> str:
+    actions = _load_actions()
+    entry = {"item": params.item, "dismissed_at": datetime.now().isoformat()}
+    if params.reason:
+        entry["reason"] = params.reason
+    actions["dismissed"].append(entry)
+    _save_actions(actions)
+    return f"Dismissed: {params.item}"
+
+
+@define_tool(
+    name="add_note",
+    description="Add a note to a digest item for future reference. Use when the user wants to annotate something.",
+)
+def add_note(params: AddNoteParams, invocation: ToolInvocation) -> str:
+    actions = _load_actions()
+    actions["notes"][params.item] = {
+        "note": params.note,
+        "added_at": datetime.now().isoformat(),
+    }
+    _save_actions(actions)
+    return f"Note added to: {params.item}"
+
+
 def get_tools() -> list[Tool]:
     """Return all custom tools for registration on a session."""
-    return [log_action, write_output, queue_task]
+    return [log_action, write_output, queue_task, dismiss_item, add_note]
