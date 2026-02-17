@@ -47,7 +47,8 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
     Args:
         config: Parsed standing-instructions.yaml
         mode: 'triage' for monitoring, 'digest' for content summarization,
-              'research' for deep research, 'transcripts' for transcript collection
+              'research' for deep research, 'transcripts' for transcript collection,
+              'chat' for conversational queries via Telegram
         tools: Custom tools to register on the session
     """
     models = config.get("models", {})
@@ -147,6 +148,31 @@ Autonomy settings:
         base += "\n" + _load_instruction("research", config) + "\n"
     elif mode == "transcripts":
         base += _build_transcript_prompt(config)
+    elif mode == "chat":
+        onedrive_path = config.get("onedrive", {}).get("path", str(OUTPUT_DIR))
+        base += f"""
+## Chat Mode
+
+You are responding to a conversational message from the user via Telegram.
+
+### Memory — MANDATORY
+1. FIRST, read `{onedrive_path}/chat-history.md` for conversation context.
+   If the file doesn't exist yet, that's fine — start fresh.
+2. AFTER composing your response, APPEND to that same file:
+   - A line with the timestamp and "User:" followed by their message
+   - A line with "Pulse:" followed by your response (keep it brief)
+3. If the file is getting long (over 100 lines), rewrite it:
+   - Summarize everything older than the last 20 exchanges into a "Context Summary" section at the top
+   - Keep the last 20 exchanges verbatim below it
+
+### Response Rules
+- Keep answers concise — Telegram messages should be short and actionable.
+- Use WorkIQ to look up real data (emails, calendar, Teams) when the user asks.
+- If the user asks about meetings, emails, or people, query WorkIQ rather than guessing.
+- You can read local files in `{onedrive_path}/` for recent digests, intel, and reports.
+- Do NOT use markdown headers or formatting that doesn't render in Telegram.
+- Use plain text, bullet points (- ), and bold (*text*) only.
+"""
 
     return base
 

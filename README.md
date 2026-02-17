@@ -61,10 +61,21 @@ Edit `config/standing-instructions.yaml` to customize priorities, RSS feeds, and
 
 The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all string fields.
 
+### Telegram Setup (optional)
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, create a new bot, copy the token
+2. Edit `config/standing-instructions.yaml`:
+   ```yaml
+   telegram:
+     enabled: true
+     bot_token: "your-token-here"
+   ```
+3. Start the daemon — your bot is live
+
 ### Run
 
 ```bash
-# Start the daemon — triage + pending jobs every 30 minutes
+# Start the daemon — Telegram + triage heartbeat + job queue
 python src/main.py
 
 # Single cycle then exit (triage + jobs + sync)
@@ -77,23 +88,33 @@ python src/main.py --mode transcripts --once
 python src/main.py --mode intel --once
 ```
 
-### Job Queue
+### Interacting via Telegram
 
-Drop a YAML file into `tasks/pending/` (or the OneDrive `Digests/Jobs/` folder) to trigger work:
+Just talk to the bot naturally:
+
+- "What's new?" — queries WorkIQ for recent activity
+- "Did I miss anything in meetings yesterday?" — checks calendar + transcripts
+- "Run a digest" — triggers a full digest immediately
+- "Analyze Parloa vs 11Labs" — deep research task
+- "Grab transcripts" — collects meeting transcripts from Teams
+
+The bot also sends you proactive notifications when jobs complete.
+
+### Job Files
+
+You can also drop YAML files into `tasks/pending/` or OneDrive `Pulse/Jobs/`:
 
 ```yaml
-# Run a digest
 type: digest
 ```
 
 ```yaml
-# Research task
 type: research
 task: "Compare AWS Bedrock pricing vs Azure OpenAI"
-description: "Pull latest public pricing, summarize differences, flag changes in last 30 days"
+description: "Pull latest public pricing, summarize differences"
 ```
 
-The daemon picks up jobs automatically on the next cycle. Completed jobs move to `tasks/completed/` and are cleaned up from OneDrive.
+Jobs are picked up immediately (or on next heartbeat if from OneDrive).
 
 ## Architecture
 
@@ -126,18 +147,21 @@ Input Sources
   └── logs/2026-02-16.jsonl            Structured audit trail
         │
         ▼
-  M365 Copilot (reads OneDrive natively)
-  └── "Summarize my latest Pulse digest"
-  └── "What escalations need my attention?"
+  Telegram Bot (conversational interface)
+  └── "What's new?" → queries WorkIQ, responds instantly
+  └── "Run a digest" → triggers job, notifies when done
+  └── Proactive morning digest delivery
 ```
 
 ## How It Works
 
-The daemon runs on a 30-minute heartbeat (configurable). Each cycle:
+The daemon runs three things concurrently on one async event loop:
 
-1. **Triage** — queries WorkIQ for recent emails, calendar, Teams activity, and follow-ups. Writes a monitoring report.
-2. **Jobs** — processes any pending jobs from `tasks/pending/` (synced from OneDrive `Digests/Jobs/`).
-3. **Sync** — copies all output to OneDrive for M365 Copilot access.
+1. **Telegram bot** — listens for messages, puts jobs on an `asyncio.Queue`
+2. **Heartbeat** (every 30min, office hours only) — puts a triage job on the same queue + pulls OneDrive job files
+3. **Worker** — processes jobs from the queue one at a time (GHCP SDK sessions)
+
+Jobs execute immediately when queued — no waiting for the next cycle.
 
 ### Job Types
 
@@ -156,7 +180,8 @@ The daemon runs on a 30-minute heartbeat (configurable). Each cycle:
 ├── .mcp.json                          MCP server config (WorkIQ)
 ├── requirements.txt                   Python dependencies (pinned)
 ├── src/
-│   ├── main.py                        Daemon entrypoint — triage + job queue + OneDrive sync
+│   ├── main.py                        Daemon — event loop, job worker, heartbeat
+│   ├── telegram_bot.py                Telegram interface — chat, notifications, state
 │   ├── utils.py                       Shared logging, event streaming, session context manager
 │   ├── config.py                      YAML config loader with env var expansion + validation
 │   ├── session.py                     GHCP SDK session builder (prompts, MCP, tools, permissions)
@@ -253,7 +278,8 @@ models:
 - **Transcript collection:** Playwright Python (Edge browser automation)
 - **External intel:** feedparser (RSS)
 - **Document extraction:** python-docx, python-pptx, PyPDF2, openpyxl
-- **Output consumption:** M365 Copilot reads digest files from OneDrive natively
+- **User interface:** Telegram bot (python-telegram-bot, conversational + proactive notifications)
+- **Output sync:** OneDrive (local folder sync)
 - **Logging:** Python `logging` module → structured JSON lines
 - **Config:** YAML with env var expansion
 

@@ -1,5 +1,9 @@
 monitoring:
   interval: "30m"
+  office_hours:
+    start: "08:00"
+    end: "18:00"
+    days: [1, 2, 3, 4, 5]  # Mon-Fri (1=Mon, 7=Sun)
   priorities:
     - "Flag urgent emails"
     - "Draft responses to emails that need a reply"
@@ -82,7 +86,12 @@ intelligence:
 
 onedrive:
   sync_enabled: true
-  path: "$USERPROFILE/OneDrive - Microsoft/Documents/Digests"
+  path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse"
+
+telegram:
+  enabled: false
+  bot_token: ""       # Get from @BotFather on Telegram
+  allowed_users: []   # Telegram user IDs that can interact (empty = anyone)
 
 models:
   triage: "gpt-4.1"
@@ -90,4 +99,5 @@ models:
   intel: "claude-sonnet"
   research: "claude-opus"
   transcripts: "claude-sonnet"
+  chat: "gpt-4.1"
   default: "claude-sonnet"

@@ -1,10 +1,12 @@
 """Pulse Agent — Autonomous Digital Employee
 
-Always-on daemon that runs on a heartbeat (default 30min).
-Each cycle: triage (WorkIQ) + process pending jobs + sync to OneDrive.
+Always-on daemon with Telegram interface.
+Architecture: asyncio.Queue → worker processes jobs immediately.
 
-Jobs are YAML files in tasks/pending/ (synced to OneDrive).
-Drop a job file to trigger digest, research, transcripts, or intel.
+- Telegram messages land on the queue instantly
+- Heartbeat puts triage on the queue every 30 minutes
+- OneDrive job files are pulled each cycle
+- Worker executes jobs one at a time (no SDK concurrency issues)
 """
 
 import asyncio
@@ -47,7 +49,7 @@ async def run_stage(client, config: dict, stage: str):
 
 
 async def run_single_research(client, config: dict, task: dict):
-    """Run a single research task (not the whole queue)."""
+    """Run a single research task."""
     from tools import get_tools
     from utils import agent_session
 
@@ -77,40 +79,98 @@ When complete, provide a summary of your research and key findings.
             log.warning("  No response from agent (may have timed out).")
 
 
-async def process_jobs(client, config: dict):
-    """Process all pending jobs from the queue.
+async def run_chat_query(client, config: dict, prompt: str) -> str:
+    """Run a conversational query via GHCP SDK. Returns the response text."""
+    from tools import get_tools
+    from utils import agent_session
 
-    Job types: digest, research, transcripts, intel.
-    Each job is a YAML file in tasks/pending/.
-    """
-    jobs = load_pending_tasks()
-    if not jobs:
-        return
+    log.info(f"  Chat query: {prompt[:80]}...")
 
-    log.info(f"Found {len(jobs)} pending job(s)")
+    async with agent_session(client, config, "chat", tools=get_tools()) as session:
+        response = await session.send_and_wait({"prompt": prompt}, timeout=120)
+        if response and response.data and response.data.content:
+            return response.data.content
+        return "No response from agent."
 
-    for job in jobs:
-        job_type = job.get("type", "research")
-        job_name = job.get("task", job.get("type", "unnamed"))
-        log.info(f"  Processing job: [{job_type}] {job_name}")
+
+async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_app):
+    """Process jobs from the queue as they arrive."""
+    from telegram_bot import notify
+
+    while True:
+        job = await job_queue.get()
+        job_type = job.get("type", "unknown")
+        chat_id = job.get("_chat_id")
+        job_name = job.get("task", job_type)
+
+        log.info(f"=== Job: [{job_type}] {job_name} ===")
 
         try:
-            if job_type == "research":
-                await run_single_research(client, config, job)
-            elif job_type in ("digest", "transcripts", "intel"):
-                await run_stage(client, config, job_type)
-            else:
-                log.warning(f"  Unknown job type: {job_type} — skipping")
-                continue
+            if job_type == "chat":
+                # Conversational query — respond directly
+                prompt = job.get("prompt", "")
+                reply = await run_chat_query(client, config, prompt)
+                if chat_id:
+                    await notify(telegram_app, chat_id, reply)
 
-            mark_task_completed(job)
-            log.info(f"  Job complete: {job_name}")
+            elif job_type == "research":
+                await run_single_research(client, config, job)
+                # If it came from a file-based job, mark completed
+                if "_file" in job:
+                    mark_task_completed(job)
+                if chat_id:
+                    await notify(telegram_app, chat_id, f"Research complete: {job_name}")
+
+            elif job_type in ("digest", "monitor", "transcripts", "intel"):
+                await run_stage(client, config, job_type)
+                if "_file" in job:
+                    mark_task_completed(job)
+                if chat_id:
+                    if job_type == "digest":
+                        from telegram_bot import send_latest_digest
+                        await notify(telegram_app, chat_id, "Digest complete:")
+                        await send_latest_digest(chat_id, telegram_app)
+                    elif job_type == "monitor":
+                        # Send the latest monitoring report
+                        report = _get_latest_monitoring_report()
+                        if report:
+                            await notify(telegram_app, chat_id, report)
+                    else:
+                        label = {"intel": "Intel brief", "transcripts": "Transcripts"}
+                        await notify(telegram_app, chat_id, f"{label.get(job_type, job_type)} complete.")
+
+            else:
+                log.warning(f"  Unknown job type: {job_type}")
+
         except Exception as e:
             log.error(f"  Job failed: {job_name} — {e}")
+            if chat_id:
+                await notify(telegram_app, chat_id, f"Failed: {job_name}\n{e}")
+
+        finally:
+            job_queue.task_done()
+            sync_to_onedrive(config)
+
+        log.info(f"=== Job done: [{job_type}] {job_name} ===")
 
 
-def sync_jobs_from_onedrive(config: dict):
-    """Pull new job files from OneDrive Jobs/ into local tasks/pending/."""
+def _get_latest_monitoring_report() -> str | None:
+    """Read the most recent monitoring report."""
+    reports = sorted(OUTPUT_DIR.glob("monitoring-*.md"), reverse=True)
+    if not reports:
+        return None
+    try:
+        content = reports[0].read_text(encoding="utf-8")
+        # Truncate for Telegram (keep it useful, not overwhelming)
+        if len(content) > 3500:
+            content = content[:3500] + "\n\n... (truncated)"
+        return content
+    except Exception:
+        return None
+
+
+def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
+    """Pull new job files from OneDrive Jobs/ into tasks/pending/ and enqueue them."""
     onedrive_cfg = config.get("onedrive", {})
     if not onedrive_cfg.get("sync_enabled", False):
         return
@@ -136,6 +196,10 @@ def sync_jobs_from_onedrive(config: dict):
 
     if pulled:
         log.info(f"Pulled {pulled} new job(s) from OneDrive")
+
+    # Enqueue any pending file-based jobs
+    for job in load_pending_tasks():
+        job_queue.put_nowait(job)
 
 
 def sync_to_onedrive(config: dict):
@@ -196,6 +260,58 @@ def sync_to_onedrive(config: dict):
         log.info(f"Synced {synced} file(s) to OneDrive: {dest_root}")
 
 
+def _is_office_hours(config: dict) -> bool:
+    """Check if current time is within configured office hours."""
+    from datetime import datetime
+    office = config.get("monitoring", {}).get("office_hours", {})
+    if not office:
+        return True  # No office hours configured = always on
+
+    now = datetime.now()
+    allowed_days = office.get("days", [1, 2, 3, 4, 5])
+    if now.isoweekday() not in allowed_days:
+        return False
+
+    start = office.get("start", "08:00")
+    end = office.get("end", "18:00")
+    start_h, start_m = map(int, start.split(":"))
+    end_h, end_m = map(int, end.split(":"))
+
+    now_mins = now.hour * 60 + now.minute
+    return (start_h * 60 + start_m) <= now_mins < (end_h * 60 + end_m)
+
+
+async def heartbeat(config: dict, job_queue: asyncio.Queue, shutdown_event: asyncio.Event):
+    """Periodic heartbeat — enqueues triage during office hours + pulls OneDrive jobs."""
+    from telegram_bot import get_proactive_chat_id
+
+    interval = config["monitoring"].get("interval", "30m")
+    seconds = _parse_interval(interval)
+
+    while not shutdown_event.is_set():
+        # Pull file-based jobs from OneDrive (always, even outside office hours)
+        sync_jobs_from_onedrive(config, job_queue)
+
+        # Triage only during office hours
+        if _is_office_hours(config):
+            chat_id = get_proactive_chat_id()
+            job_queue.put_nowait({
+                "type": "monitor",
+                "_source": "heartbeat",
+                "_chat_id": chat_id,
+            })
+            log.info(f"Heartbeat: triage queued (office hours)")
+        else:
+            log.info(f"Heartbeat: outside office hours, skipping triage")
+
+        # Sleep until next cycle
+        log.info(f"Next heartbeat in {interval}")
+        for _ in range(seconds):
+            if shutdown_event.is_set():
+                return
+            await asyncio.sleep(1)
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Pulse Agent")
     parser.add_argument(
@@ -240,11 +356,40 @@ async def main():
 
     log.info(f"Connected. State: {client.get_state()}")
 
-    # Graceful shutdown
+    # --once --mode X: run a single stage and exit (dev/debugging)
+    if args.once and args.mode:
+        await run_stage(client, config, args.mode)
+        sync_to_onedrive(config)
+        await client.stop()
+        return
+
+    # --once (no mode): run one triage + pending jobs and exit
+    if args.once:
+        job_queue = asyncio.Queue()
+        job_queue.put_nowait({"type": "monitor", "_source": "cli"})
+        sync_jobs_from_onedrive(config, job_queue)
+        while not job_queue.empty():
+            job = job_queue.get_nowait()
+            job_type = job.get("type", "unknown")
+            job_name = job.get("task", job_type)
+            log.info(f"Running: [{job_type}] {job_name}")
+            if job_type == "research":
+                await run_single_research(client, config, job)
+                if "_file" in job:
+                    mark_task_completed(job)
+            elif job_type in ("digest", "monitor", "transcripts", "intel"):
+                await run_stage(client, config, job_type)
+                if "_file" in job:
+                    mark_task_completed(job)
+        sync_to_onedrive(config)
+        await client.stop()
+        return
+
+    # --- Daemon mode ---
     shutdown_event = asyncio.Event()
 
     def _signal_handler():
-        log.info("Shutdown signal received — finishing current cycle...")
+        log.info("Shutdown signal received — finishing current job...")
         shutdown_event.set()
 
     loop = asyncio.get_running_loop()
@@ -254,41 +399,27 @@ async def main():
         except NotImplementedError:
             pass  # Windows
 
-    try:
-        # --once --mode X: run a single stage and exit (dev/debugging)
-        if args.once and args.mode:
-            await run_stage(client, config, args.mode)
-            sync_to_onedrive(config)
-            return
+    job_queue = asyncio.Queue()
 
-        # --once (no mode): run one daemon cycle and exit
-        if args.once:
-            sync_jobs_from_onedrive(config)
-            await run_stage(client, config, "monitor")
-            await process_jobs(client, config)
-            sync_to_onedrive(config)
-            return
+    # Start Telegram bot
+    from telegram_bot import start_telegram_bot, stop_telegram_bot
+    telegram_app = await start_telegram_bot(config, job_queue)
 
-        # Default: daemon mode — triage + jobs every interval
-        interval = config["monitoring"].get("interval", "30m")
-        seconds = _parse_interval(interval)
-        log.info(f"Daemon mode — cycle every {interval} (triage + pending jobs)")
+    # Start worker and heartbeat
+    worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
+    heartbeat_task = asyncio.create_task(heartbeat(config, job_queue, shutdown_event))
 
-        while not shutdown_event.is_set():
-            sync_jobs_from_onedrive(config)
-            await run_stage(client, config, "monitor")
-            await process_jobs(client, config)
-            sync_to_onedrive(config)
+    log.info("Daemon running — Telegram + heartbeat active. Ctrl+C to stop.")
 
-            log.info(f"Sleeping {interval} until next cycle...")
-            for _ in range(seconds):
-                if shutdown_event.is_set():
-                    break
-                await asyncio.sleep(1)
+    # Wait for shutdown
+    await shutdown_event.wait()
 
-    finally:
-        log.info("Shutting down Pulse Agent...")
-        await client.stop()
+    # Cleanup
+    heartbeat_task.cancel()
+    worker_task.cancel()
+    await stop_telegram_bot(telegram_app)
+    await client.stop()
+    log.info("Pulse Agent stopped.")
 
 
 def _parse_interval(interval: str) -> int:
