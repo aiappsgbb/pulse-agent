@@ -109,7 +109,12 @@ def log_event(event) -> None:
         data = getattr(event, "data", None)
         tool_name = data.tool_name if data and data.tool_name else "unknown"
         mcp = f" ({data.mcp_server_name})" if data and data.mcp_server_name else ""
-        print(_safe_encode(f"\n>> [TOOL] {tool_name}{mcp}"), flush=True)
+        args = ""
+        if data and hasattr(data, "arguments") and data.arguments:
+            args = f" {_safe_encode(str(data.arguments)[:200])}"
+        elif data and hasattr(data, "input") and data.input:
+            args = f" {_safe_encode(str(data.input)[:200])}"
+        print(_safe_encode(f"\n>> [TOOL] {tool_name}{mcp}{args}"), flush=True)
 
     elif event_type == SessionEventType.TOOL_EXECUTION_COMPLETE:
         data = getattr(event, "data", None)

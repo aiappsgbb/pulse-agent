@@ -6,7 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
     {
@@ -15,7 +15,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
       "args": ["--once"],
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
     {
@@ -24,7 +24,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
       "args": ["--mode", "digest", "--once"],
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
     {
@@ -33,7 +33,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
       "args": ["--mode", "monitor", "--once"],
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
     {
@@ -42,7 +42,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
       "args": ["--mode", "transcripts", "--once"],
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     },
     {
@@ -51,7 +51,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/src/main.py",
       "args": ["--mode", "intel", "--once"],
-      "cwd": "${workspaceFolder}/src",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
     }
   ]

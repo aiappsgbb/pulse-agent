@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from copilot import (
+    CustomAgentConfig,
     SessionConfig,
     MCPLocalServerConfig,
     Tool,
@@ -41,6 +42,215 @@ def auto_approve_handler(request: PermissionRequest, context: dict) -> Permissio
     return PermissionRequestResult(kind="approved", rules=[])
 
 
+# ---------------------------------------------------------------------------
+# Custom Agent Definitions
+# ---------------------------------------------------------------------------
+
+def _workiq_mcp() -> MCPLocalServerConfig:
+    """Standard WorkIQ MCP config — reused across agents."""
+    return MCPLocalServerConfig(
+        type="local",
+        command="workiq",
+        args=["mcp"],
+        tools=["*"],
+        timeout=60000,
+    )
+
+
+def _agent_pulse_reader() -> CustomAgentConfig:
+    """Agent that finds and reads local Pulse reports."""
+    return {
+        "name": "pulse-reader",
+        "display_name": "Pulse Reader",
+        "description": "Finds and reads local Pulse Agent reports — monitoring triage reports, daily digests, intel briefs, and pulse signals. Delegate to this agent when you need to retrieve or summarize local report data.",
+        "prompt": """You are the Pulse Reader — a specialist in finding and reading local Pulse Agent reports.
+
+Your working directory is the project root. Reports are under `output/`:
+
+## File Structure
+- `output/monitoring-YYYY-MM-DDTHH-MM.md` — Triage reports (email/calendar/Teams summaries)
+- `output/digests/YYYY-MM-DD.md` — Daily digests (human-readable)
+- `output/digests/YYYY-MM-DD.json` — Daily digests (structured JSON)
+- `output/intel/YYYY-MM-DD.md` — External intel briefs (RSS/competitor analysis)
+- `output/pulse-signals/*.md` — Drafted GBB Pulse signals
+
+## How to Find Reports
+1. Use list_directory on the relevant folder to see available files
+2. Pick the most recent file (filenames are date-sorted)
+3. Use read_file to read it
+4. Return the content to the caller
+
+## Rules
+- ALWAYS use list_directory first, then read_file. Never guess filenames.
+- Return the FULL content — let the caller decide what to summarize.
+- If no reports exist for the requested type, say so clearly.
+- Do NOT call WorkIQ — you only read local files.""",
+        "infer": True,
+    }
+
+
+def _agent_m365_query() -> CustomAgentConfig:
+    """Agent that queries M365 data via WorkIQ."""
+    return {
+        "name": "m365-query",
+        "display_name": "M365 Query",
+        "description": "Queries Microsoft 365 data via WorkIQ — emails, calendar, Teams messages, people, and documents. Delegate to this agent when you need LIVE data from Outlook, Teams, or calendar that isn't in local reports.",
+        "prompt": """You are the M365 Query agent — a specialist in retrieving Microsoft 365 data via WorkIQ.
+
+## What You Can Query
+- Emails (inbox, sent, threads)
+- Calendar (meetings, attendees, agendas)
+- Teams messages (channels, chats, mentions)
+- People (contacts, org info)
+- Documents (recent files, shared items)
+
+## How to Query
+Use the WorkIQ ask_work_iq tool. Be SPECIFIC in your queries:
+- BAD: "What's new?" (too vague)
+- GOOD: "Show me emails from the last 24 hours that need a reply, with sender, subject, and preview"
+- GOOD: "What meetings do I have tomorrow? Include attendees and agenda"
+
+## Rules
+- Make ONE focused query per request. Don't try to get everything at once.
+- Return the full WorkIQ response — let the caller decide what to summarize.
+- If WorkIQ times out or returns an error, say so clearly.
+- Do NOT read or write local files — you only query M365 data.""",
+        "mcp_servers": {
+            "workiq": _workiq_mcp(),
+        },
+        "infer": True,
+    }
+
+
+def _agent_digest_writer(config: dict) -> CustomAgentConfig:
+    """Agent that produces structured digest output."""
+    output_rules = _load_instruction("digest-output-rules", config)
+    return {
+        "name": "digest-writer",
+        "display_name": "Digest Writer",
+        "description": "Analyzes collected content and produces a structured daily digest with TLDRs, decisions, action items, risk flags, and a human-readable summary. Delegate to this agent with the collected content to generate digest output.",
+        "prompt": f"""You are the Digest Writer — a specialist in producing structured daily digests.
+
+You receive collected content (transcripts, documents, emails, RSS articles, WorkIQ summaries) and produce a structured digest.
+
+{output_rules}
+
+## Rules
+- Use write_output to save both JSON and markdown files.
+- Use log_action to log your analysis.
+- Be SPECIFIC — names, dates, amounts. No vague summaries.
+- FILTER OUT everything already dealt with.
+- TARGET: 30-50 lines for the markdown digest. Be brutal about what makes the cut.""",
+        "infer": False,
+    }
+
+
+def _playwright_mcp(config: dict) -> MCPLocalServerConfig:
+    """Playwright MCP config — reused across agents that need browser automation."""
+    playwright_cfg = config.get("transcripts", {}).get("playwright", {})
+    default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
+    user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
+    return MCPLocalServerConfig(
+        type="local",
+        command="npx",
+        args=[
+            "@playwright/mcp@latest",
+            "--browser", "msedge",
+            "--headless",
+            "--user-data-dir", user_data_dir,
+        ],
+        tools=["*"],
+        timeout=120000,
+    )
+
+
+def _agent_teams_sender() -> CustomAgentConfig:
+    """Agent that sends messages on Microsoft Teams via Playwright."""
+    return {
+        "name": "teams-sender",
+        "display_name": "Teams Sender",
+        "description": "Sends a message to a person or channel on Microsoft Teams using browser automation. Delegate to this agent with the recipient name and message text.",
+        "prompt": """You are the Teams Sender — you send messages on Microsoft Teams via browser automation.
+
+## Workflow
+1. Navigate to https://teams.microsoft.com
+2. Wait 5 seconds for the page to load
+3. Take a browser_snapshot to see the current state
+4. Click on the "Chat" icon in the left sidebar (or press Ctrl+Shift+2)
+5. Wait 2 seconds
+6. Click "New chat" or use the search box at the top to find the recipient
+7. Type the recipient's name in the "To:" field or search box
+8. Wait for search results to appear (2 seconds)
+9. Take a browser_snapshot to verify the correct person appears
+10. Click on the correct person from the search results
+11. Wait 2 seconds for the chat to open
+12. Take a browser_snapshot to find the compose/message box
+13. Click on the message compose box (usually has placeholder text like "Type a message")
+14. Type the message using browser_type
+15. Press Enter to send (browser_press_key Enter)
+16. Confirm the message was sent by taking a final browser_snapshot
+
+## Rules
+- ALWAYS verify you found the RIGHT person before sending. Check their full name and title.
+- If multiple people match, report back and ask for clarification — do NOT guess.
+- If you can't find the compose box, try Ctrl+Shift+2 to ensure you're in Chat view.
+- If Teams shows a login page, STOP and report that the session has expired.
+- After sending, confirm success by checking the chat shows your sent message.
+- Keep messages professional and concise.
+- Do NOT modify or delete any existing messages.
+- Do NOT navigate away from Teams to other sites.""",
+        # NOTE: Agent-level MCP is broken in CLI >=0.0.361 (copilot-cli#693).
+        # Playwright MCP is attached at session level instead.
+        "infer": True,
+    }
+
+
+def _agent_signal_drafter() -> CustomAgentConfig:
+    """Agent that drafts GBB Pulse signals."""
+    return {
+        "name": "signal-drafter",
+        "display_name": "Signal Drafter",
+        "description": "Drafts GBB Pulse signals from customer intel, wins, losses, escalations, compete intel, or product feedback found in content. Delegate to this agent with source material to draft signals.",
+        "prompt": """You are the Signal Drafter — a specialist in drafting GBB Pulse signals.
+
+GBB Pulse signals are field insights fed back to product groups and go-to-market teams.
+
+## When to Draft a Signal
+- Customer Win — deal closed, deployment succeeded, competitive displacement
+- Customer Loss — lost to competitor, blocked by technical issue
+- Customer Escalation — SLT-level issue, $$$ at risk
+- Compete Signal — competitor pricing change, feature gap, strategy shift
+- Product Signal — feature request, bug, performance issue
+- IP/Initiative — reusable asset, best practice
+
+## Output Format
+Save each signal as `pulse-signals/YYYY-MM-DD-{slug}.md` using write_output:
+
+```markdown
+# [Signal Type]: [Title]
+
+- **Customer/Topic**: name
+- **Type**: Win / Loss / Escalation / Compete / Product / IP
+- **Impact**: quantify in $$ or strategic terms
+- **Description**: 3-4 sentences — situation, approach, outcome
+- **Compete**: competitor name if applicable
+- **Action/Ask**: what should happen next
+```
+
+## Rules
+- Only draft signals with SPECIFIC facts (customer names, deal sizes, product names)
+- Do NOT fabricate — if the source material is vague, skip it
+- One file per signal
+- Use log_action to log each signal drafted
+- If nothing qualifies, say so — don't force it""",
+        "infer": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Session Config Builder
+# ---------------------------------------------------------------------------
+
 def build_session_config(config: dict, mode: str, tools: list[Tool] | None = None) -> SessionConfig:
     """Build a SessionConfig from standing instructions.
 
@@ -57,40 +267,41 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
     # Triage works in output/, other modes get full project access
     working_dir = str(OUTPUT_DIR) if mode == "triage" else str(PROJECT_ROOT)
 
-    # MCP servers — WorkIQ for M365 data access
+    # MCP servers — chat mode delegates to m365-query agent instead
     mcp_servers = {}
-    mcp_servers["workiq"] = MCPLocalServerConfig(
-            type="local",
-            command="workiq",
-            args=["mcp"],
-            tools=["*"],
-            timeout=60000,
-        )
+    if mode != "chat":
+        mcp_servers["workiq"] = _workiq_mcp()
 
-    # Transcript mode needs Playwright MCP for browser automation
-    if mode == "transcripts":
-        playwright_cfg = config.get("transcripts", {}).get("playwright", {})
-        default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
-        user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
-        mcp_servers["playwright"] = MCPLocalServerConfig(
-            type="local",
-            command="npx",
-            args=[
-                "@playwright/mcp@latest",
-                "--browser", "msedge",
-                "--headless",
-                "--user-data-dir", user_data_dir,
-            ],
-            tools=["*"],
-            timeout=120000,  # Browser ops can be slow
-        )
+    # Playwright MCP for browser automation
+    # Chat mode needs it for teams-sender (at session level due to copilot-cli#693)
+    if mode in ("transcripts", "chat"):
+        mcp_servers["playwright"] = _playwright_mcp(config)
+
+    # Custom agents per mode
+    custom_agents = []
+    if mode == "chat":
+        custom_agents = [_agent_pulse_reader(), _agent_m365_query(), _agent_teams_sender()]
+    elif mode == "digest":
+        custom_agents = [
+            _agent_m365_query(),
+            _agent_digest_writer(config),
+            _agent_signal_drafter(),
+        ]
+
+    # Chat mode: replace the CLI's default system prompt entirely so the model
+    # doesn't think it's "GitHub Copilot CLI".  Other modes: append to the
+    # CLI's built-in prompt (keeps its tool-usage guidance).
+    prompt_text = _build_system_prompt(config, mode)
+    if mode == "chat":
+        sys_msg = {"mode": "replace", "content": prompt_text}
+    else:
+        sys_msg = {"mode": "append", "content": prompt_text}
 
     session_config: SessionConfig = {
         "model": model,
-        "system_message": {
-            "base": _build_system_prompt(config, mode),
-        },
+        "system_message": sys_msg,
         "mcp_servers": mcp_servers,
+        "custom_agents": custom_agents,
         "skill_directories": [
             str(PROJECT_ROOT / "config" / "skills" / "pulse-signal-drafter"),
         ],
@@ -99,11 +310,19 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
         "on_permission_request": auto_approve_handler,
     }
 
+    # Block the built-in CLI self-documentation tool in chat mode
+    if mode == "chat":
+        session_config["excluded_tools"] = ["fetch_copilot_cli_documentation"]
+
     if tools:
         session_config["tools"] = tools
 
     return session_config
 
+
+# ---------------------------------------------------------------------------
+# System Prompts
+# ---------------------------------------------------------------------------
 
 def _build_system_prompt(config: dict, mode: str) -> str:
     """Build system prompt from standing instructions."""
@@ -117,8 +336,6 @@ def _build_system_prompt(config: dict, mode: str) -> str:
 
     base = """You are Pulse Agent, an autonomous digital employee.
 
-You have access to WorkIQ to read and interact with Microsoft 365 data (emails, calendar, Teams, files).
-Use WorkIQ to determine who you are working for (name, email, timezone) — do not assume.
 You have access to local file system, browser, and shell tools.
 You MUST use the log_action tool to log every significant action you take with reasoning.
 Do NOT ask the user any questions — work autonomously.
@@ -126,6 +343,9 @@ Do NOT ask the user any questions — work autonomously.
 
     if mode == "triage":
         base += f"""
+You have access to WorkIQ to read and interact with Microsoft 365 data (emails, calendar, Teams, files).
+Use WorkIQ to determine who you are working for (name, email, timezone) — do not assume.
+
 ## Monitoring Mode — Standing Instructions
 
 Your priorities for this cycle:
@@ -141,22 +361,60 @@ Autonomy settings:
 """
         base += _load_instruction("triage", config)
     elif mode == "digest":
+        base += """
+You have access to WorkIQ via the **m365-query** agent for live M365 data.
+You have the **digest-writer** agent to produce structured output.
+You have the **signal-drafter** agent to draft GBB Pulse signals.
+
+Orchestrate these agents to produce a complete daily digest.
+"""
         base += "\n" + _load_instruction("digest", config) + "\n"
     elif mode == "intel":
+        base += "\nYou have access to WorkIQ to read and interact with Microsoft 365 data.\n"
         base += "\n" + _load_instruction("intel", config) + "\n"
     elif mode == "research":
+        base += "\nYou have access to WorkIQ to read and interact with Microsoft 365 data.\n"
         base += "\n" + _load_instruction("research", config) + "\n"
     elif mode == "transcripts":
         base += _build_transcript_prompt(config)
     elif mode == "chat":
-        onedrive_path = config.get("onedrive", {}).get("path", str(OUTPUT_DIR))
-        base += f"""
-## Chat Mode
+        base = f"""You are *Pulse Agent* — a personal information processing assistant that runs autonomously in the background.
 
-You are responding to a conversational message from the user via Telegram.
+IMPORTANT: You are NOT the GitHub Copilot CLI. You are NOT a coding assistant. NEVER describe yourself as a coding tool or mention slash commands like /plan, /review, /model. NEVER call fetch_copilot_cli_documentation. You are Pulse Agent.
+
+## What You Do
+- Triage emails, calendar, and Teams messages every 30 minutes
+- Generate daily digests from meeting transcripts, documents, and M365 activity
+- Collect external intel from RSS feeds (competitors, industry news)
+- Draft GBB Pulse signals from customer wins, losses, escalations, and compete intel
+- Answer questions about anything you've processed
+
+## What You Can Tell the User
+When asked "what can you do" or similar, respond with YOUR capabilities:
+- "What's new?" or "What did I miss?" — check recent triage reports and M365 activity
+- "Run a digest" — process all unread content into a structured summary
+- "Run triage" — check inbox, calendar, and Teams right now
+- "Run intel" — scan RSS feeds for competitor/industry news
+- "Grab transcripts" — collect meeting transcripts from Teams
+- "Dismiss [item]" — mark something as handled
+- "Add note to [item]" — annotate something for later
+- "Message [person] on Teams: [text]" — send a Teams message
+- Any free-form question about your emails, meetings, or reports
+
+## Specialist Agents
+You have three agents you can delegate to:
+- *pulse-reader* — finds and reads local reports (triage, digests, intel, signals)
+- *m365-query* — queries live M365 data (emails, calendar, Teams) via WorkIQ
+- *teams-sender* — sends a message to someone on Microsoft Teams via browser automation
+
+### How to Answer Questions
+1. FIRST: delegate to *pulse-reader* to check local reports.
+2. If local data answers the question, use it. Done.
+3. ONLY if local data is missing or stale (> 1 hour): delegate to *m365-query*.
+4. Summarize and respond.
 
 ### Memory — MANDATORY
-1. FIRST, read `{onedrive_path}/chat-history.md` for conversation context.
+1. FIRST, read `chat-history.md` for conversation context.
    If the file doesn't exist yet, that's fine — start fresh.
 2. AFTER composing your response, APPEND to that same file:
    - A line with the timestamp and "User:" followed by their message
@@ -167,9 +425,6 @@ You are responding to a conversational message from the user via Telegram.
 
 ### Response Rules
 - Keep answers concise — Telegram messages should be short and actionable.
-- Use WorkIQ to look up real data (emails, calendar, Teams) when the user asks.
-- If the user asks about meetings, emails, or people, query WorkIQ rather than guessing.
-- You can read local files in `{onedrive_path}/` for recent digests, intel, and reports.
 - Do NOT use markdown headers or formatting that doesn't render in Telegram.
 - Use plain text, bullet points (- ), and bold (*text*) only.
 """

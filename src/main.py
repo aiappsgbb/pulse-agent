@@ -27,7 +27,7 @@ TASKS_DIR = PROJECT_ROOT / "tasks"
 async def create_client():
     """Create and start a GHCP SDK CopilotClient."""
     from copilot import CopilotClient
-    client = CopilotClient()
+    client = CopilotClient({"cwd": str(PROJECT_ROOT)})
     await client.start()
     return client
 
@@ -287,6 +287,13 @@ async def heartbeat(config: dict, job_queue: asyncio.Queue, shutdown_event: asyn
 
     interval = config["monitoring"].get("interval", "30m")
     seconds = _parse_interval(interval)
+
+    # Delay first heartbeat so chat messages aren't blocked on startup
+    log.info(f"First heartbeat in {interval} (chat messages processed immediately)")
+    for _ in range(seconds):
+        if shutdown_event.is_set():
+            return
+        await asyncio.sleep(1)
 
     while not shutdown_event.is_set():
         # Pull file-based jobs from OneDrive (always, even outside office hours)

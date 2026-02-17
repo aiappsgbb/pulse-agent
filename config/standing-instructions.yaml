@@ -89,8 +89,8 @@ onedrive:
   path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse"
 
 telegram:
-  enabled: false
-  bot_token: ""       # Get from @BotFather on Telegram
+  enabled: true
+  bot_token: "8587432460:AAEfhRw3QdvFKrcK19KYvNGYv4EBeEnWAS0"
   allowed_users: []   # Telegram user IDs that can interact (empty = anyone)
 
 models:
