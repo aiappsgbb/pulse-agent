@@ -27,8 +27,9 @@ class WriteOutputParams(BaseModel):
 
 
 class QueueTaskParams(BaseModel):
-    task: str
-    description: str
+    type: str = "research"  # research, digest, transcripts, intel
+    task: str = ""
+    description: str = ""
     priority: str = "normal"
     model: str = "claude-opus"
 
@@ -85,7 +86,7 @@ def write_output(params: WriteOutputParams, invocation: ToolInvocation) -> str:
 
 @define_tool(
     name="queue_task",
-    description="Add a new deep research task to the queue. The agent will pick it up in the next research cycle.",
+    description="Add a job to the queue. The daemon picks it up next cycle. Set type to 'research', 'digest', 'transcripts', or 'intel'.",
 )
 def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
@@ -95,6 +96,7 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
 
     import yaml
     task_data = {
+        "type": params.type,
         "task": params.task,
         "description": params.description,
         "priority": params.priority,
