@@ -7,52 +7,100 @@ Local daemon entrypoint. Two primary pipelines:
 
 import asyncio
 import argparse
+import shutil
 import signal
 import sys
-
-from copilot import CopilotClient
+from pathlib import Path
 
 from config import load_config, validate_config
-from digest import run_digest
-from intel import run_intel
-from monitor import run_monitoring_cycle
-from researcher import run_pending_tasks
-from transcripts import run_transcript_collection
 from utils import setup_logging, new_run_id, log
 
+PROJECT_ROOT = Path(__file__).parent.parent
+OUTPUT_DIR = PROJECT_ROOT / "output"
 
-async def create_client() -> CopilotClient:
+
+async def create_client():
     """Create and start a GHCP SDK CopilotClient."""
+    from copilot import CopilotClient
     client = CopilotClient()
     await client.start()
     return client
 
 
-async def run_cycle(client: CopilotClient, config: dict, mode: str):
-    """Run a single cycle for the given mode.
-
-    Pipelines:
-      overnight  — transcripts → digest (includes RSS + WorkIQ) → research
-      monitor    — lightweight WorkIQ triage (daytime quick-check)
-      digest     — digest only (skip transcript collection)
-      research   — pending task queue only
-      transcripts — transcript collection only
-      intel      — standalone RSS intel brief
-    """
+async def run_cycle(client, config: dict, mode: str):
+    """Run a single cycle for the given mode."""
     if mode == "overnight":
+        from transcripts import run_transcript_collection
+        from digest import run_digest
+        from researcher import run_pending_tasks
         await run_transcript_collection(client, config)
         await run_digest(client, config)
         await run_pending_tasks(client, config)
     elif mode == "monitor":
+        from monitor import run_monitoring_cycle
         await run_monitoring_cycle(client, config)
     elif mode == "digest":
+        from digest import run_digest
         await run_digest(client, config)
     elif mode == "research":
+        from researcher import run_pending_tasks
         await run_pending_tasks(client, config)
     elif mode == "transcripts":
+        from transcripts import run_transcript_collection
         await run_transcript_collection(client, config)
     elif mode == "intel":
+        from intel import run_intel
         await run_intel(client, config)
+
+
+def sync_to_onedrive(config: dict):
+    """Copy output files to OneDrive so M365 Copilot can read them."""
+    onedrive_cfg = config.get("onedrive", {})
+    if not onedrive_cfg.get("sync_enabled", False):
+        return
+
+    dest_root = Path(onedrive_cfg.get("path", ""))
+    if not dest_root or str(dest_root) == ".":
+        log.warning("OneDrive sync enabled but no path configured")
+        return
+
+    # Sync each output subdirectory
+    synced = 0
+    for subdir in ("digests", "intel", "pulse-signals"):
+        src = OUTPUT_DIR / subdir
+        if not src.exists():
+            continue
+        dest = dest_root / subdir
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in src.iterdir():
+            if f.is_file() and not f.name.startswith("."):
+                dest_file = dest / f.name
+                # Only copy if newer or missing
+                if not dest_file.exists() or f.stat().st_mtime > dest_file.stat().st_mtime:
+                    shutil.copy2(f, dest_file)
+                    synced += 1
+
+    # Also sync monitoring reports from output/ root
+    for f in OUTPUT_DIR.glob("monitoring-*.md"):
+        dest_file = dest_root / f.name
+        if not dest_file.exists() or f.stat().st_mtime > dest_file.stat().st_mtime:
+            shutil.copy2(f, dest_file)
+            synced += 1
+
+    # Seed Agent Instructions to OneDrive (local defaults → OneDrive, never overwrite)
+    instructions_src = PROJECT_ROOT / "config" / "instructions"
+    instructions_dest = dest_root / "Agent Instructions"
+    if instructions_src.exists():
+        instructions_dest.mkdir(parents=True, exist_ok=True)
+        for f in instructions_src.glob("*.md"):
+            dest_file = instructions_dest / f.name
+            if not dest_file.exists():
+                # Only seed defaults — never overwrite user edits
+                shutil.copy2(f, dest_file)
+                synced += 1
+
+    if synced:
+        log.info(f"Synced {synced} file(s) to OneDrive: {dest_root}")
 
 
 async def main():
@@ -62,7 +110,7 @@ async def main():
         choices=["overnight", "monitor", "digest", "research", "transcripts", "intel"],
         default="overnight",
         help=(
-            "overnight: full pipeline (transcripts → digest → research). "
+            "overnight: full pipeline (transcripts, digest, research). "
             "monitor: lightweight daytime triage. "
             "digest/research/transcripts/intel: run a single stage."
         ),
@@ -94,8 +142,7 @@ async def main():
     for w in warnings:
         log.warning(f"CONFIG: {w}")
 
-    owner = config["owner"]["name"]
-    log.info(f"Pulse Agent starting — mode: {args.mode}, owner: {owner}, run: {run_id}")
+    log.info(f"Pulse Agent starting — mode: {args.mode}, run: {run_id}")
 
     # Start GHCP SDK client
     log.info("Connecting to GitHub Copilot SDK...")
@@ -126,11 +173,13 @@ async def main():
     try:
         if args.once:
             await run_cycle(client, config, args.mode)
+            sync_to_onedrive(config)
             return
 
         # Continuous daemon loop
         while not shutdown_event.is_set():
             await run_cycle(client, config, args.mode)
+            sync_to_onedrive(config)
 
             interval = config["monitoring"].get("interval", "30m")
             seconds = _parse_interval(interval)

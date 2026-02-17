@@ -13,6 +13,27 @@ from copilot import (
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 INPUT_DIR = PROJECT_ROOT / "input"
+LOCAL_INSTRUCTIONS = PROJECT_ROOT / "config" / "instructions"
+
+
+def _load_instruction(name: str, config: dict) -> str:
+    """Load an instruction file — checks OneDrive first, then local defaults.
+
+    Users can edit instructions from OneDrive; changes are picked up next run.
+    """
+    onedrive_cfg = config.get("onedrive", {})
+    if onedrive_cfg.get("sync_enabled", False):
+        onedrive_path = Path(onedrive_cfg.get("path", ""))
+        if onedrive_path and str(onedrive_path) != ".":
+            onedrive_file = onedrive_path / "Agent Instructions" / f"{name}.md"
+            if onedrive_file.exists():
+                return onedrive_file.read_text(encoding="utf-8")
+
+    local_file = LOCAL_INSTRUCTIONS / f"{name}.md"
+    if local_file.exists():
+        return local_file.read_text(encoding="utf-8")
+
+    return ""
 
 
 def auto_approve_handler(request: PermissionRequest, context: dict) -> PermissionRequestResult:
@@ -32,19 +53,18 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
     models = config.get("models", {})
     model = models.get(mode, models.get("default", "claude-sonnet"))
 
-    # Monitoring works in output/, research gets full project access
+    # Triage works in output/, other modes get full project access
     working_dir = str(OUTPUT_DIR) if mode == "triage" else str(PROJECT_ROOT)
 
-    # Base MCP servers — WorkIQ always available
-    mcp_servers = {
-        "workiq": MCPLocalServerConfig(
+    # MCP servers — WorkIQ for M365 data access
+    mcp_servers = {}
+    mcp_servers["workiq"] = MCPLocalServerConfig(
             type="local",
             command="workiq",
             args=["mcp"],
             tools=["*"],
             timeout=60000,
-        ),
-    }
+        )
 
     # Transcript mode needs Playwright MCP for browser automation
     if mode == "transcripts":
@@ -86,7 +106,6 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
 
 def _build_system_prompt(config: dict, mode: str) -> str:
     """Build system prompt from standing instructions."""
-    owner = config.get("owner", {})
     monitoring = config.get("monitoring", {})
     priorities = monitoring.get("priorities", [])
     autonomy = monitoring.get("autonomy", {})
@@ -95,11 +114,10 @@ def _build_system_prompt(config: dict, mode: str) -> str:
     priorities_str = "\n".join(f"- {p}" for p in priorities)
     vips_str = ", ".join(vips) if vips else "None configured"
 
-    base = f"""You are Pulse Agent, an autonomous digital employee working on behalf of {owner.get('name', 'the user')}.
-Email: {owner.get('email', 'unknown')}
-Timezone: {owner.get('timezone', 'UTC')}
+    base = """You are Pulse Agent, an autonomous digital employee.
 
 You have access to WorkIQ to read and interact with Microsoft 365 data (emails, calendar, Teams, files).
+Use WorkIQ to determine who you are working for (name, email, timezone) — do not assume.
 You have access to local file system, browser, and shell tools.
 You MUST use the log_action tool to log every significant action you take with reasoning.
 Do NOT ask the user any questions — work autonomously.
@@ -119,85 +137,14 @@ Autonomy settings:
 - Auto-send low-risk (meeting accepts, simple acks): {autonomy.get('auto_send_low_risk', True)}
 - Max nudges per follow-up: {autonomy.get('max_nudges', 2)}
 
-## CRITICAL: You MUST make MULTIPLE WorkIQ queries. One broad query is NOT enough.
-
-Follow this multi-step workflow. Each numbered step requires at least one separate WorkIQ query:
-
-### Step 1 — Email Triage
-- Ask WorkIQ: "Show me all unread/recent emails from the last 24 hours with sender, subject, and preview"
-- For any email from a VIP or marked urgent, ask WorkIQ for the FULL content of that specific email
-- For emails that need a reply, draft a response and save it using write_output
-- Log each email you triaged with log_action
-
-### Step 2 — Calendar & Meeting Prep
-- Ask WorkIQ: "What meetings do I have in the next 12 hours? Include attendees and agenda"
-- For each upcoming meeting, ask WorkIQ for CONTEXT: recent emails with those attendees, related documents, previous meeting notes
-- Write a meeting brief for each meeting (who, what, prep notes, talking points) using write_output
-- Log each brief with log_action
-
-### Step 3 — Teams Activity
-- Ask WorkIQ: "What are the most active or important Teams messages and threads from the last 24 hours?"
-- For any thread that mentions the owner or has action items, ask WorkIQ for the full thread
-- Identify any action items, blockers, or things that need attention
-- Log findings with log_action
-
-### Step 4 — Follow-ups & Action Items
-- Ask WorkIQ: "What tasks, action items, or follow-ups are overdue or coming due?"
-- For items overdue by more than 3 days, draft a nudge message
-- Log each follow-up with log_action
-
-### Step 5 — Final Summary
-- Write a comprehensive monitoring report using write_output with filename format: monitoring-YYYY-MM-DDTHH-MM.md
-- The report MUST include specific details: email subjects, sender names, meeting titles, action items
-- Do NOT write vague summaries like "no urgent emails found" — list what you actually saw
-- End with a "Needs Your Attention" section for anything the owner should act on personally
-
-REMEMBER: Shallow one-query summaries are useless. Dig deep. Make 5-10+ WorkIQ queries per cycle.
 """
+        base += _load_instruction("triage", config)
     elif mode == "digest":
-        base += """
-## Digest Mode — Content Summarization + Inbox Triage + Signal Drafting
-
-You have TWO sources of information:
-1. **Local files** — meeting transcripts, documents, emails provided in the user prompt
-2. **WorkIQ** — live access to M365 inbox, Teams messages, and calendar via the `ask_work_iq` tool
-
-Your job:
-1. Analyze all local file content (transcripts, docs) provided in the prompt
-2. Query WorkIQ for recent emails and Teams messages (see instructions in prompt)
-3. Extract TLDRs, decisions, action items, risk flags from ALL sources
-4. Generate a structured daily digest combining everything
-5. Draft GBB Pulse signals for any customer wins, losses, escalations, compete intel, or product feedback found in the content
-6. Use `write_output` to save the digest AND each signal as separate markdown files
-7. Use `log_action` to log each source you analyze
-
-Be SPECIFIC — use names, dates, numbers. Do NOT write vague summaries.
-"""
+        base += "\n" + _load_instruction("digest", config) + "\n"
     elif mode == "intel":
-        base += """
-## Intel Mode — External Intelligence Brief
-
-You are analyzing RSS feed articles to generate a concise intelligence brief.
-Articles are provided in the prompt. Your job:
-1. Filter for relevance — skip generic hype, keep substantive moves
-2. Group by competitor/topic
-3. Flag anything that affects our competitive positioning
-4. Write a SHORT brief (max 40 lines) using write_output
-5. Log your analysis with log_action
-
-Be specific — names, products, pricing, dates. Skip fluff.
-"""
+        base += "\n" + _load_instruction("intel", config) + "\n"
     elif mode == "research":
-        base += f"""
-## Deep Research Mode
-
-You are executing a research mission. Work autonomously and thoroughly.
-Use WorkIQ to pull data from M365. Use local tools to write output files.
-Be thorough — this task may take a long time and that's expected.
-Write your findings as markdown files using the write_output tool.
-Log each significant step with the log_action tool.
-When complete, provide a summary of your research and key findings.
-"""
+        base += "\n" + _load_instruction("research", config) + "\n"
     elif mode == "transcripts":
         base += _build_transcript_prompt(config)
 

@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/
+output/
+input/
+tasks/completed/
+*.egg-info/
+dist/
+build/
+.claude/
+nul
+src/diagnose_transcript.py
+CLAUDE.md
+Contestant - GitHub Copilot SDK Enterprise Challenge.pdf

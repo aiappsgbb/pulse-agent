@@ -27,7 +27,6 @@ You are **Pulse Agent**, an autonomous digital employee that works on behalf of 
 ## Standing Instructions
 
 Loaded from `config/standing-instructions.yaml`. Define:
-- Owner identity, timezone
 - Monitoring priorities (what to watch for)
 - Autonomy levels (what to auto-act on vs. queue for review)
 - VIP contacts

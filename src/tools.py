@@ -152,6 +152,8 @@ def add_note(params: AddNoteParams, invocation: ToolInvocation) -> str:
     return f"Note added to: {params.item}"
 
 
+# --- Tool set builder ---
+
 def get_tools() -> list[Tool]:
-    """Return all custom tools for registration on a session."""
+    """Return custom tools for registration on a session."""
     return [log_action, write_output, queue_task, dismiss_item, add_note]

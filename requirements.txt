@@ -11,3 +11,4 @@ openpyxl>=3.1
 
 # Browser automation — required for transcript collection mode
 playwright>=1.50
+

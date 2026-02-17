@@ -1,0 +1,50 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Digest",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "digest", "--once"],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Monitor",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "monitor", "--once"],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Transcripts",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "transcripts", "--once"],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Intel",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "intel", "--once"],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Research",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": ["--mode", "research", "--once"],
+      "cwd": "${workspaceFolder}/src",
+      "console": "integratedTerminal"
+    }
+  ]
+}

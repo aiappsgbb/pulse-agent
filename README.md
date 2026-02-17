@@ -4,7 +4,7 @@
 
 You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email threads you'll never read. Competitors announce changes at 2 AM. Pulse Agent runs when you don't — it consumes everything you can't and tells you only what matters.
 
-Not a copilot. Not a chatbot. A local daemon with standing instructions, full M365 visibility, and structured output.
+Not a copilot. Not a chatbot. A local daemon with standing instructions, full M365 visibility, and structured output. The output lands in a OneDrive-synced folder so M365 Copilot can read and summarize it natively — no custom bot required.
 
 ## What It Does
 
@@ -57,20 +57,7 @@ Copy and edit the config file:
 cp config/standing-instructions.yaml config/standing-instructions.yaml.bak
 ```
 
-Edit `config/standing-instructions.yaml`:
-
-```yaml
-owner:
-  name: "Your Name"              # <- change this
-  email: "you@company.com"       # <- change this
-  timezone: "Europe/London"      # <- your timezone
-
-transcripts:
-  playwright:
-    # Uses $LOCALAPPDATA env var — usually resolves automatically on Windows.
-    # Override if your Edge profile is elsewhere.
-    user_data_dir: "$LOCALAPPDATA/ms-playwright/mcp-msedge-profile"
-```
+Edit `config/standing-instructions.yaml` to customize priorities, RSS feeds, and model preferences. The agent identifies you automatically via WorkIQ — no manual identity config needed.
 
 The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all string fields.
 
@@ -118,11 +105,18 @@ Input Sources
   └── Multi-model routing ── gpt-4.1, claude-sonnet, claude-opus
         │
         ▼
-  Output
-  ├── output/digests/2026-02-16.md     Daily digest (30-50 lines)
+  Output → OneDrive-synced folder
+  ├── output/digests/2026-02-16.json   Structured digest
+  ├── output/digests/2026-02-16.md     Human-readable digest
   ├── output/intel/2026-02-16.md       External intel brief
+  ├── output/pulse-signals/*.md        Drafted GBB Pulse signals
   ├── output/monitoring-*.md           Triage reports
   └── logs/2026-02-16.jsonl            Structured audit trail
+        │
+        ▼
+  M365 Copilot (reads OneDrive natively)
+  └── "Summarize my latest Pulse digest"
+  └── "What escalations need my attention?"
 ```
 
 ## Pipelines
@@ -173,7 +167,7 @@ You can run any stage standalone:
 │   ├── transcripts.py                 Transcript collection — Playwright DOM scraping
 │   └── tools.py                       Custom GHCP SDK tools (log, write, queue, dismiss, note)
 ├── config/
-│   ├── standing-instructions.yaml     All behavior config (owner, priorities, models, feeds)
+│   ├── standing-instructions.yaml     All behavior config (priorities, models, feeds)
 │   └── skills/                        GHCP SDK skill definitions
 ├── input/                             User content (gitignored)
 │   ├── transcripts/                   Meeting transcripts (.txt)
@@ -184,6 +178,7 @@ You can run any stage standalone:
 │   ├── intel/                         Intel briefs
 │   ├── pulse-signals/                 Drafted GBB Pulse signals
 │   ├── .digest-state.json             Incremental processing state
+│   ├── .digest-actions.json           Dismiss/note state (shared with API)
 │   └── .intel-state.json              RSS deduplication state
 ├── tasks/
 │   ├── pending/                       Queued research tasks (.yaml)
@@ -218,11 +213,6 @@ The agent has 5 custom tools registered via the GHCP SDK:
 `config/standing-instructions.yaml` controls all behavior:
 
 ```yaml
-owner:
-  name: "..."                   # Your display name
-  email: "...@company.com"      # Your email
-  timezone: "Europe/London"     # Used for scheduling context
-
 monitoring:
   interval: "30m"               # Daemon loop interval (supports h/m/s)
   priorities: [...]             # What to watch for (list of strings)
@@ -263,6 +253,7 @@ models:
 - **Transcript collection:** Playwright Python (Edge browser automation)
 - **External intel:** feedparser (RSS)
 - **Document extraction:** python-docx, python-pptx, PyPDF2, openpyxl
+- **Output consumption:** M365 Copilot reads digest files from OneDrive natively
 - **Logging:** Python `logging` module → structured JSON lines
 - **Config:** YAML with env var expansion
 
@@ -272,7 +263,6 @@ models:
 
 **"Failed to connect to GitHub Copilot SDK"** — The Copilot CLI must be installed and authenticated. Run `github-copilot-cli auth` first.
 
-**"CONFIG: still has placeholder value"** — Edit `config/standing-instructions.yaml` and replace `"Your Name"` and `"your.email@microsoft.com"` with your real details.
 
 **Transcript collection fails** — The browser needs a logged-in Teams session. Open Edge manually, navigate to `teams.microsoft.com`, sign in, then try again. The `user_data_dir` in config must point to a valid Edge profile.
 

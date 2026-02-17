@@ -15,7 +15,7 @@ from pathlib import Path
 from copilot import CopilotClient
 
 from intel import collect_feeds
-from session import PROJECT_ROOT, OUTPUT_DIR
+from session import PROJECT_ROOT, OUTPUT_DIR, _load_instruction
 from tools import get_tools, _load_actions
 from utils import agent_session, log
 
@@ -258,6 +258,34 @@ async def run_digest(client: CopilotClient, config: dict):
     log.info("=== Digest cycle end ===")
 
 
+def _load_previous_digest() -> str | None:
+    """Load the most recent existing digest JSON to provide continuity."""
+    digests_dir = OUTPUT_DIR / "digests"
+    if not digests_dir.exists():
+        return None
+    json_files = sorted(digests_dir.glob("*.json"), reverse=True)
+    if not json_files:
+        return None
+    try:
+        data = json.loads(json_files[0].read_text(encoding="utf-8"))
+        items = data.get("items", [])
+        if not items:
+            return None
+        date = data.get("date", json_files[0].stem)
+        lines = [f"## Previous Digest ({date}) — {len(items)} items were outstanding\n"]
+        for item in items:
+            priority = item.get("priority", "?")
+            title = item.get("title", "?")
+            item_type = item.get("type", "?")
+            item_id = item.get("id", "?")
+            lines.append(f"- [{priority.upper()}] **[{item_type}]** {title} (id: {item_id})")
+        lines.append("\nCarry forward any items that are STILL outstanding. Drop items that have been resolved since then.")
+        return "\n".join(lines)
+    except Exception as e:
+        log.warning(f"Could not load previous digest: {e}")
+        return None
+
+
 def _build_digest_prompt(items: list[dict], config: dict, articles: list[dict] | None = None) -> str:
     """Build the analysis prompt containing all collected content + RSS articles."""
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -312,112 +340,24 @@ def _build_digest_prompt(items: list[dict], config: dict, articles: list[dict] |
 {note_items}
 """
 
+    # Load previous digest for continuity
+    prev_digest = _load_previous_digest()
+    prev_block = f"\n{prev_digest}\n" if prev_digest else ""
+
+    # Load output rules from editable instruction file
+    output_rules = _load_instruction("digest-output-rules", config)
+    # Replace DATE placeholder with actual date
+    output_rules = output_rules.replace("DATE", date_str)
+
     return f"""Generate a SHORT daily digest for {date_str}. This should be MAX 50 lines — only things I haven't dealt with yet.
 
 ## Your Priorities
 {priorities_str}
-{dismissed_block}{notes_block}
-
+{dismissed_block}{notes_block}{prev_block}
 ## Part A — Local Content (already collected)
 {content_block}
 {articles_block}
-## Part B — Inbox & Messages (query WorkIQ)
-
-Make these WorkIQ queries IN ORDER:
-
-### Step 1: Get emails and messages
-Ask WorkIQ: "Show me emails I received in the last 7 days that look like they need action or a reply. Include sender, subject, and what they need."
-
-### Step 2: Check what's already handled
-Ask WorkIQ: "Which of my recent emails have I already replied to? Which meetings have I already attended or prepared for? Which action items have I already completed?"
-
-### Step 3: Get Teams messages
-Ask WorkIQ: "What Teams messages from the last 7 days mention me or need my input?"
-
-### Step 4: FILTER
-Cross-reference Steps 1-3. REMOVE anything I've already replied to, already attended, or already dealt with. Only keep genuinely outstanding items.
-
-## Output Rules
-
-**TARGET: 30-50 lines. Not 400. Be brutal about what makes the cut.**
-
-The ONLY things that belong in the digest:
-- Things I haven't responded to yet that need a response
-- Deadlines coming up that I haven't acted on
-- Risks/escalations that are still unresolved
-- Key decisions from meetings (1 line each, not paragraphs)
-- Commitments I made that I haven't delivered on yet
-- Significant competitor/industry moves from RSS articles (max 5 lines)
-
-Things that do NOT belong:
-- Emails I already replied to
-- Meetings I already attended with no outstanding actions
-- FYI emails, newsletters, community digests
-- Anything that's clearly already handled
-- Detailed per-meeting breakdowns (just the key takeaway + any open action items)
-- Generic AI hype articles with no substance
-
-Use `write_output` to save as `digests/{date_str}.md`. Format:
-
-```markdown
-# Digest — {date_str}
-
-## Still Outstanding
-- **[REPLY]** {{sender}} — {{subject}} — {{what they need}} ({{date}})
-- **[ACTION]** {{what}} — {{deadline}} — {{context}}
-- **[DECISION]** {{what needs deciding}} — {{by when}}
-
-## Key Takeaways This Week
-- {{1-line meeting insight or decision that matters}}
-- {{1-line meeting insight or decision that matters}}
-
-## External Intel
-- **[Company]** — what happened — why it matters (only include genuinely significant moves)
-
-## Risks
-- {{unresolved risk with specific customer/deal name}}
-
-## Pulse Signals
-- **[Type]** {{customer/topic}} — {{1-line summary}} → `pulse-signals/YYYY-MM-DD-slug.md`
-```
-
-## Part D — GBB Pulse Signal Drafting
-
-After generating the digest, review ALL sources (transcripts, emails, Teams messages, RSS articles) for items that should be drafted as **GBB Pulse signals**. These are field insights fed back to product groups and go-to-market teams.
-
-Draft a signal if you find ANY of these:
-- **Customer Win** — deal closed, deployment succeeded, competitive displacement
-- **Customer Loss** — lost to competitor, blocked by technical issue, deal fell through
-- **Customer Escalation** — SLT-level issue, $$$ at risk, deadline pressure
-- **Compete Signal** — competitor pricing change, feature gap, strategy shift, customer feedback
-- **Product Signal** — feature request, bug, performance issue, integration gap
-- **IP/Initiative** — reusable asset, best practice, program update
-
-For each signal, use `write_output` to save a SEPARATE file as `pulse-signals/{date_str}-{{slug}}.md` using this template structure:
-
-```markdown
-# [Signal Type]: [Title]
-
-- **Customer/Topic**: name
-- **Type**: Win / Loss / Escalation / Compete / Product / IP
-- **Impact**: quantify in $$ or strategic terms
-- **Description**: 3-4 sentences — situation, approach, outcome
-- **Compete**: competitor name if applicable
-- **Action/Ask**: what should happen next
-```
-
-Rules for signal drafting:
-- Only draft signals where you have SPECIFIC facts (customer names, deal sizes, product names)
-- Do NOT fabricate — if the source material is vague, skip it
-- One file per signal
-- List all drafted signals in the digest under "## Pulse Signals" with their filenames
-- If nothing qualifies, omit the section entirely — don't force it
-
-CRITICAL:
-- Be SPECIFIC (names, dates, amounts). No vague summaries.
-- FILTER OUT everything already dealt with. This is the whole point.
-- If everything is handled, say "Nothing outstanding" — don't pad it.
-- Use `log_action` to log your work.
+{output_rules}
 """
 
 
