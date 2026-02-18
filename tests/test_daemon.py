@@ -2,14 +2,16 @@
 
 import asyncio
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from daemon.heartbeat import parse_interval, is_office_hours
+from daemon.heartbeat import parse_interval, is_office_hours, check_missed_digest
 
 
 # --- parse_interval ---
@@ -68,3 +70,54 @@ def test_office_hours_with_config():
     }
     result = is_office_hours(config)
     assert isinstance(result, bool)
+
+
+# --- check_missed_digest ---
+
+
+def test_check_missed_digest_today_exists(tmp_dir):
+    """If today's digest exists, no job is queued."""
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    today = datetime.now().strftime("%Y-%m-%d")
+    (digests_dir / f"{today}.md").write_text("digest")
+    queue = asyncio.Queue()
+    with patch("daemon.heartbeat.OUTPUT_DIR", tmp_dir), \
+         patch("tg.bot.get_proactive_chat_id", return_value=12345):
+        check_missed_digest(queue)
+    assert queue.empty()
+
+
+def test_check_missed_digest_yesterday_exists(tmp_dir):
+    """If yesterday's digest exists, no job is queued."""
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    (digests_dir / f"{yesterday}.md").write_text("digest")
+    queue = asyncio.Queue()
+    with patch("daemon.heartbeat.OUTPUT_DIR", tmp_dir), \
+         patch("tg.bot.get_proactive_chat_id", return_value=12345):
+        check_missed_digest(queue)
+    assert queue.empty()
+
+
+def test_check_missed_digest_neither_exists_queues(tmp_dir):
+    """If neither today nor yesterday has a digest, a catch-up is queued."""
+    (tmp_dir / "digests").mkdir()
+    queue = asyncio.Queue()
+    with patch("daemon.heartbeat.OUTPUT_DIR", tmp_dir), \
+         patch("tg.bot.get_proactive_chat_id", return_value=12345):
+        check_missed_digest(queue)
+    assert not queue.empty()
+    job = queue.get_nowait()
+    assert job["type"] == "digest"
+    assert job["_source"] == "catch-up"
+
+
+def test_check_missed_digest_no_dir_queues(tmp_dir):
+    """If digests/ directory doesn't exist, queue catch-up."""
+    queue = asyncio.Queue()
+    with patch("daemon.heartbeat.OUTPUT_DIR", tmp_dir), \
+         patch("tg.bot.get_proactive_chat_id", return_value=12345):
+        check_missed_digest(queue)
+    assert not queue.empty()

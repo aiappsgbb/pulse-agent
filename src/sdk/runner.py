@@ -59,6 +59,8 @@ async def run_job(
         context.update(_pre_process_digest(config))
     elif pre_process == "collect_feeds":
         context.update(_pre_process_intel(config))
+    elif pre_process == "scan_teams_inbox":
+        context.update(await _pre_process_monitor(config))
 
     # Build trigger prompt
     prompt = _build_trigger_prompt(mode_key, mode_cfg, config, context)
@@ -172,6 +174,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
             )
         variables["articles"] = "\n\n".join(article_lines)
 
+    elif mode == "monitor":
+        variables["teams_inbox"] = context.get("teams_inbox", "No Teams inbox data available.")
+
     elif mode == "research":
         task = context.get("task", {})
         variables["task"] = task.get("task", "unnamed")
@@ -220,6 +225,21 @@ def _build_carry_forward(prev: dict | None) -> str:
             f"(id: {item_id}, source: {source}, date: {date})"
         )
     return "\n".join(lines)
+
+
+async def _pre_process_monitor(config: dict) -> dict:
+    """Scan Teams inbox for unread messages before monitor agent call."""
+    from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
+
+    log.info("Phase 0: Scanning Teams inbox for unread messages...")
+    items = await scan_teams_inbox(config)
+
+    if items:
+        log.info(f"  Found {len(items)} unread Teams messages")
+    else:
+        log.info("  No unread Teams messages detected.")
+
+    return {"teams_inbox": format_inbox_for_prompt(items)}
 
 
 def _pre_process_digest(config: dict) -> dict:

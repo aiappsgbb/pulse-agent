@@ -9,7 +9,7 @@ monitor:
   system_prompt: config/prompts/system/monitor.md
   system_prompt_mode: append
   trigger_prompt: config/prompts/triggers/monitor.md
-  pre_process: null
+  pre_process: scan_teams_inbox
 
 digest:
   model_key: digest

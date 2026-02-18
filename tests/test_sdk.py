@@ -124,3 +124,35 @@ def test_build_session_config_standalone_rejected():
     config = load_config()
     with pytest.raises(ValueError, match="standalone"):
         build_session_config(config, "transcripts")
+
+
+def test_build_session_config_digest():
+    """Digest mode has WorkIQ MCP and agents."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    sc = build_session_config(config, "digest")
+    assert "model" in sc
+    assert sc["system_message"]["mode"] == "append"
+    assert "workiq" in sc.get("mcp_servers", {})
+    agent_names = [a["name"] for a in sc.get("custom_agents", [])]
+    assert "digest-writer" in agent_names
+
+
+def test_build_session_config_intel():
+    """Intel mode builds correctly."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    sc = build_session_config(config, "intel")
+    assert sc["system_message"]["mode"] == "append"
+    assert "workiq" in sc.get("mcp_servers", {})
+
+
+def test_build_session_config_research():
+    """Research mode builds correctly."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    sc = build_session_config(config, "research")
+    assert sc["system_message"]["mode"] == "append"
