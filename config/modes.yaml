@@ -44,12 +44,18 @@ research:
 chat:
   model_key: chat
   working_dir: root
-  mcp_servers: [playwright]
+  mcp_servers: [workiq, playwright]
   agents: [pulse-reader, m365-query]
   system_prompt: config/prompts/system/chat.md
   system_prompt_mode: replace
   trigger_prompt: null
-  excluded_tools: [fetch_copilot_cli_documentation]
+  excluded_tools:
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
   user_input_handler: telegram
 
 transcripts:

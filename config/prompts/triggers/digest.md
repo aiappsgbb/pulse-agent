@@ -16,25 +16,35 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 
 Make these WorkIQ queries IN ORDER. The query window is **{{workiq_window}}** — only look for NEW activity in this period.
 
-### Step 1: Get NEW emails and messages
-Ask WorkIQ: "Show me emails I received {{workiq_window}} that look like they need action or a reply. Include sender, subject, and what they need."
+### Step 1: Get emails addressed TO ME
+Ask WorkIQ: "Show me emails {{workiq_window}} where I am in the TO field (not just CC) and someone is directly asking ME to do something or reply. For each one, tell me: sender, subject, and exactly what they're asking ME to do."
 
-### Step 2: Check what's been handled
-Ask WorkIQ: "Which of my recent emails have I already replied to? Have I responded to or dealt with any of the Known Outstanding Items listed above?"
+### Step 2: Get Teams messages addressed TO ME (make 2 queries)
+Ask WorkIQ: "Show me my unread Teams 1:1 and group chat messages {{workiq_window}}. For each: who sent it, what did they say, and are they waiting for MY reply?"
+Then ask: "What Teams channel messages {{workiq_window}} directly @mention me or ask me a specific question by name? Include channel name and the exact question."
 
-### Step 3: Get NEW Teams messages (make 2 queries)
-Ask WorkIQ: "What Teams 1:1 and group chat messages {{workiq_window}} am I yet to reply to? Show sender, preview, and time sent."
-Then ask: "What Teams channel messages {{workiq_window}} mention me, ask me a question, or are in threads I replied to before? Include channel name."
+### Step 3: Check what I've already handled
+Ask WorkIQ: "Which of my recent emails and Teams messages have I already replied to or acted on?"
 
 ### Step 4: MERGE with Known Outstanding Items
 - For each **Known Outstanding Item** from the previous digest:
   - **KEEP** it if WorkIQ shows no reply/action was taken
   - **DROP** it if WorkIQ confirms it's been handled (reply sent, meeting attended, task done)
   - **UPDATE** it if there's new activity on the same thread
-- For each **NEW** WorkIQ result (Steps 1 & 3):
+- For each **NEW** WorkIQ result (Steps 1 & 2):
   - **ADD** only if it's not already covered by a Known Outstanding Item
   - Skip FYI emails, newsletters, no-reply senders, and things clearly already handled
 - The final digest = carried-forward items + genuinely new items = complete snapshot of what's outstanding
+
+## CRITICAL FILTER: Is this actually MY responsibility?
+
+Before adding ANY item to the digest, ask yourself:
+- Is someone DIRECTLY asking ME (by name or as the TO recipient) to do something?
+- Or am I just CC'd / in a group thread where someone ELSE needs to act?
+- If the action is on someone else, DO NOT include it. I don't care about other people's tasks.
+- If I'm just "looped in" or "FYI'd", it does NOT belong in the digest.
+- Community Hub draft reviews, surveys, newsletters = SKIP unless I specifically committed to them.
+- If in doubt, leave it OUT. False positives waste my time.
 
 ## Output Rules
 
@@ -52,7 +62,11 @@ The ONLY things that belong in the digest:
 Things that do NOT belong:
 - Emails I already replied to
 - Meetings I already attended with no outstanding actions
-- FYI emails, newsletters, community digests
+- FYI emails, newsletters, community digests, surveys, bookmark reminders
+- Emails where I'm only CC'd and the action is on someone else
+- Teams threads where someone else (not me) is being asked to act
+- Items where I'm "looped in" but have no specific ask
+- Microsoft Community Hub draft reviews (unless I specifically committed)
 - Anything that's clearly already handled
 - Detailed per-meeting breakdowns (just the key takeaway + any open action items)
 - Generic AI hype articles with no substance
