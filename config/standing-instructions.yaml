@@ -94,10 +94,10 @@ telegram:
   allowed_users: []   # Telegram user IDs that can interact (empty = anyone)
 
 models:
-  triage: "gpt-4.1"
+  triage: "claude-sonnet"
   digest: "claude-sonnet"
   intel: "claude-sonnet"
   research: "claude-opus"
   transcripts: "claude-sonnet"
-  chat: "gpt-4.1"
+  chat: "claude-opus"
   default: "claude-sonnet"

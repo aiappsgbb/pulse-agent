@@ -263,6 +263,35 @@ def sync_to_onedrive(config: dict):
         log.info(f"Synced {synced} file(s) to OneDrive: {dest_root}")
 
 
+def _check_missed_digest(job_queue: asyncio.Queue):
+    """Queue a digest if today's or yesterday's digest is missing (catch-up on startup)."""
+    from datetime import datetime, timedelta
+
+    digests_dir = OUTPUT_DIR / "digests"
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    today_exists = (digests_dir / f"{today}.md").exists()
+    yesterday_exists = (digests_dir / f"{yesterday}.md").exists()
+
+    if not today_exists or not yesterday_exists:
+        from telegram_bot import get_proactive_chat_id
+        chat_id = get_proactive_chat_id()
+        job_queue.put_nowait({
+            "type": "digest",
+            "_source": "catch-up",
+            "_chat_id": chat_id,
+        })
+        missing = []
+        if not yesterday_exists:
+            missing.append(yesterday)
+        if not today_exists:
+            missing.append(today)
+        log.info(f"Catch-up: digest missing for {', '.join(missing)} — queued")
+    else:
+        log.info("Digest up to date (today + yesterday exist)")
+
+
 def _is_office_hours(config: dict) -> bool:
     """Check if current time is within configured office hours."""
     from datetime import datetime
@@ -414,6 +443,9 @@ async def main():
     # Start Telegram bot
     from telegram_bot import start_telegram_bot, stop_telegram_bot
     telegram_app = await start_telegram_bot(config, job_queue)
+
+    # Check for missed digests (runs before worker starts processing)
+    _check_missed_digest(job_queue)
 
     # Start worker and heartbeat
     worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
