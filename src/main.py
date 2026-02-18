@@ -79,15 +79,17 @@ When complete, provide a summary of your research and key findings.
             log.warning("  No response from agent (may have timed out).")
 
 
-async def run_chat_query(client, config: dict, prompt: str) -> str:
+async def run_chat_query(client, config: dict, prompt: str,
+                        telegram_app=None, chat_id: int | None = None) -> str:
     """Run a conversational query via GHCP SDK. Returns the response text."""
     from tools import get_tools
     from utils import agent_session
 
     log.info(f"  Chat query: {prompt[:80]}...")
 
-    async with agent_session(client, config, "chat", tools=get_tools()) as session:
-        response = await session.send_and_wait({"prompt": prompt}, timeout=120)
+    async with agent_session(client, config, "chat", tools=get_tools(),
+                             telegram_app=telegram_app, chat_id=chat_id) as session:
+        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         if response and response.data and response.data.content:
             return response.data.content
         return "No response from agent."
@@ -109,7 +111,8 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
             if job_type == "chat":
                 # Conversational query — respond directly
                 prompt = job.get("prompt", "")
-                reply = await run_chat_query(client, config, prompt)
+                reply = await run_chat_query(client, config, prompt,
+                                             telegram_app=telegram_app, chat_id=chat_id)
                 if chat_id:
                     await notify(telegram_app, chat_id, reply)
 

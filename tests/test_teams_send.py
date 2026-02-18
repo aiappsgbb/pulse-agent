@@ -1,10 +1,14 @@
-"""Quick test: send a Teams message directly via Playwright MCP at session level.
+"""Test: Teams message with ask_user confirmation flow.
 
-Bypasses custom agent delegation — just gives the model Playwright tools
-and instructions to message someone on Teams.
+Simulates the full flow:
+1. Agent searches for recipient on Teams
+2. Agent calls ask_user with recipient details
+3. We auto-confirm with "yes" (or "no" to test abort)
 
 Usage:
-    python tests/test_teams_send.py
+    python tests/test_teams_send.py          # auto-confirms YES
+    python tests/test_teams_send.py --deny   # auto-denies NO
+    python tests/test_teams_send.py --manual # waits for manual input in terminal
 """
 
 import asyncio
@@ -15,8 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from copilot import CopilotClient, MCPLocalServerConfig, PermissionRequest, PermissionRequestResult
 from copilot.generated.session_events import SessionEventType
+from config import load_config
+from session import PROJECT_ROOT, _playwright_mcp, auto_approve_handler
 
-PROJECT_ROOT = Path(__file__).parent.parent
+MANUAL = "--manual" in sys.argv
+DENY = "--deny" in sys.argv
 
 
 def _safe(text: str) -> str:
@@ -46,58 +53,75 @@ def _log_event(event):
             print(_safe(f"<< [RESULT] {str(d.result)[:500]}"), flush=True)
     elif t and "subagent" in str(t).lower():
         agent = getattr(d, "agent_name", "") if d else ""
-        print(f"\n== [SUBAGENT] {t} — {agent}", flush=True)
+        print(f"\n== [SUBAGENT] {t} - {agent}", flush=True)
 
 
-def auto_approve(request: PermissionRequest, context: dict) -> PermissionRequestResult:
-    return PermissionRequestResult(kind="approved", rules=[])
+async def user_input_handler(request, context):
+    """Simulates user confirmation — auto-yes, auto-no, or manual."""
+    question = request.get("question", "")
+    choices = request.get("choices", [])
+
+    print(f"\n{'='*60}")
+    print(f"ASK_USER: {question}")
+    if choices:
+        print(f"Choices: {choices}")
+    print(f"{'='*60}")
+
+    if MANUAL:
+        answer = input("Your answer: ").strip()
+    elif DENY:
+        answer = "no"
+        print(f">> Auto-denying: {answer}")
+    else:
+        answer = "yes"
+        print(f">> Auto-confirming: {answer}")
+
+    return {"answer": answer, "wasFreeform": True}
 
 
-TEAMS_PROMPT = """You are a Teams messaging assistant. You have Playwright browser automation tools.
+TEAMS_PROMPT = """You are a Teams messaging assistant with Playwright browser automation.
 
 ## Your Task
 Send a message to the specified person on Microsoft Teams.
 
 ## Steps
 1. Use browser_navigate to go to https://teams.microsoft.com
-2. Use browser_wait_for — wait 5 seconds for the page to load
-3. Use browser_snapshot to see the current state of the page
-4. Look for the Chat section or search box
-5. Use browser_click or browser_type to search for the recipient
-6. Once you find the right chat, type the message and send it
+2. Wait 5 seconds for the page to load
+3. Take a browser_snapshot to see the current state
+4. Use the search box to search for the recipient by name
+5. Wait for results, take a browser_snapshot
+6. Read the search results — get the person's full name, email, and title
+7. **MANDATORY**: Call ask_user to confirm before sending:
+   "Confirm Teams message:
+    To: [Full Name] ([email])
+    Message: [exact message text]
 
-## Important
-- Use browser_snapshot frequently to see what's on the page
-- Wait after each action for the page to update
-- If Teams shows a login page, STOP and report that auth is expired
+    Reply YES to send, or NO to cancel."
+8. If user says NO → abort immediately, do NOT send
+9. If user says YES → click on the person, open the chat, type the message, click Send
+10. Confirm the message was sent
+
+## CRITICAL RULES
+- NEVER send without ask_user confirmation
+- If multiple people match, list ALL in ask_user and let user pick
+- If user says anything other than YES → abort
 """
 
 
 async def main():
-    print("=== Teams Send Test (direct Playwright) ===")
+    mode = "MANUAL" if MANUAL else ("DENY" if DENY else "AUTO-YES")
+    print(f"=== Teams Send Test (confirmation flow, mode={mode}) ===")
 
-    # Minimal session: just Playwright MCP + Teams instructions
-    playwright_cfg = MCPLocalServerConfig(
-        type="local",
-        command="npx",
-        args=[
-            "@playwright/mcp@latest",
-            "--browser", "msedge",
-            "--headless",
-            "--user-data-dir",
-            str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile"),
-        ],
-        tools=["*"],
-        timeout=120000,
-    )
+    config = load_config()
 
     session_config = {
         "model": "gpt-4.1",
         "system_message": {"mode": "replace", "content": TEAMS_PROMPT},
-        "mcp_servers": {"playwright": playwright_cfg},
+        "mcp_servers": {"playwright": _playwright_mcp(config)},
         "working_directory": str(PROJECT_ROOT),
         "streaming": True,
-        "on_permission_request": auto_approve,
+        "on_permission_request": auto_approve_handler,
+        "on_user_input_request": user_input_handler,
         "excluded_tools": ["fetch_copilot_cli_documentation"],
     }
 
@@ -106,17 +130,15 @@ async def main():
     await client.start()
     print(f"Connected: {client.get_state()}")
 
-    print("Creating session with Playwright MCP...")
     session = await client.create_session(session_config)
     session.on(lambda event: _log_event(event))
 
     prompt = (
         'Send a message to "Artur Zielinski" on Microsoft Teams saying: '
-        '"Testing Pulse Agent - please ignore this message."'
+        '"Testing confirmation flow - please ignore."'
     )
 
-    print(f"\nPrompt: {prompt}")
-    print("=" * 60)
+    print(f"\nPrompt: {prompt}\n")
 
     try:
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)

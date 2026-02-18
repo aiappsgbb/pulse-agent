@@ -11,6 +11,7 @@ Also sends proactive notifications when jobs complete.
 Chat history is managed by the GHCP SDK agent itself (reads/writes Pulse/chat-history.md).
 """
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -25,6 +26,34 @@ OUTPUT_DIR = Path(__file__).parent.parent / "output"
 _job_queue = None
 _config: dict = {}
 _state_file: Path | None = None
+
+# Pending confirmations — keyed by chat_id, value is an asyncio.Future
+# Used by ask_user handler to pause agent execution until user replies
+_pending_confirmations: dict[int, asyncio.Future] = {}
+
+
+def has_pending_confirmation(chat_id: int) -> bool:
+    """Check if there's a confirmation waiting for this chat."""
+    return chat_id in _pending_confirmations
+
+
+def resolve_confirmation(chat_id: int, answer: str):
+    """Resolve a pending confirmation with the user's answer."""
+    fut = _pending_confirmations.pop(chat_id, None)
+    if fut and not fut.done():
+        fut.get_loop().call_soon_threadsafe(fut.set_result, answer)
+
+
+async def wait_for_confirmation(chat_id: int, timeout: float = 120) -> str:
+    """Block until the user replies to a confirmation prompt. Raises TimeoutError."""
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    _pending_confirmations[chat_id] = fut
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except asyncio.TimeoutError:
+        _pending_confirmations.pop(chat_id, None)
+        raise
 
 
 def _get_pulse_dir() -> Path | None:
@@ -108,6 +137,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Persist chat_id for proactive messages
     _save_chat_id(chat_id)
+
+    # If there's a pending confirmation (e.g., Teams send), resolve it
+    if has_pending_confirmation(chat_id):
+        resolve_confirmation(chat_id, text)
+        return
 
     # Check for quick actions first
     action = _match_quick_action(text)

@@ -134,6 +134,8 @@ async def agent_session(
     mode: str,
     tools: list[Tool] | None = None,
     timeout: int = 600,
+    telegram_app=None,
+    chat_id: int | None = None,
 ):
     """Async context manager for GHCP SDK sessions.
 
@@ -143,7 +145,10 @@ async def agent_session(
 
     Handles session creation, event streaming, and cleanup automatically.
     """
-    session_config = build_session_config(config, mode=mode, tools=tools)
+    session_config = build_session_config(
+        config, mode=mode, tools=tools,
+        telegram_app=telegram_app, chat_id=chat_id,
+    )
     session = await client.create_session(session_config)
     session.on(lambda event: log_event(event))
 

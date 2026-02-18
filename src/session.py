@@ -42,6 +42,31 @@ def auto_approve_handler(request: PermissionRequest, context: dict) -> Permissio
     return PermissionRequestResult(kind="approved", rules=[])
 
 
+def make_user_input_handler(telegram_app, chat_id: int):
+    """Create an async UserInputHandler that relays ask_user calls to Telegram.
+
+    When the agent calls ask_user (e.g., to confirm a Teams message), this
+    handler sends the question to the user's Telegram chat and waits for
+    their reply. Timeout after 120s → returns "no".
+    """
+    async def handler(request, context):
+        from telegram_bot import notify, wait_for_confirmation
+        import asyncio
+
+        question = request.get("question", "")
+        await notify(telegram_app, chat_id, question)
+
+        try:
+            answer = await wait_for_confirmation(chat_id, timeout=120)
+        except asyncio.TimeoutError:
+            await notify(telegram_app, chat_id, "(Timed out — action cancelled)")
+            answer = "no"
+
+        return {"answer": answer, "wasFreeform": True}
+
+    return handler
+
+
 # ---------------------------------------------------------------------------
 # Custom Agent Definitions
 # ---------------------------------------------------------------------------
@@ -178,21 +203,31 @@ def _agent_teams_sender() -> CustomAgentConfig:
 3. Take a browser_snapshot to see the current state
 4. Click on the "Chat" icon in the left sidebar (or press Ctrl+Shift+2)
 5. Wait 2 seconds
-6. Click "New chat" or use the search box at the top to find the recipient
-7. Type the recipient's name in the "To:" field or search box
-8. Wait for search results to appear (2 seconds)
-9. Take a browser_snapshot to verify the correct person appears
-10. Click on the correct person from the search results
-11. Wait 2 seconds for the chat to open
-12. Take a browser_snapshot to find the compose/message box
-13. Click on the message compose box (usually has placeholder text like "Type a message")
+6. Use the search box at the top to find the recipient by name
+7. Wait for search results to appear (2 seconds)
+8. Take a browser_snapshot — read the search results carefully
+9. **MANDATORY CONFIRMATION** — call ask_user with:
+   - The recipient's full name, email, and job title from the search results
+   - The exact message text you will send
+   - If MULTIPLE people match, list ALL of them and ask the user to pick
+   - Format:
+     "Confirm Teams message:
+      To: [Full Name] ([email])
+      Message: [exact message text]
+
+      Reply YES to send, or NO to cancel."
+10. WAIT for the user's response. If they say NO or anything other than YES → abort immediately.
+11. Only after YES: click on the correct person from the search results
+12. Wait 2 seconds for the chat to open
+13. Take a browser_snapshot to find the compose/message box
 14. Type the message using browser_type
-15. Press Enter to send (browser_press_key Enter)
+15. Click the Send button (browser_click on Send)
 16. Confirm the message was sent by taking a final browser_snapshot
 
-## Rules
-- ALWAYS verify you found the RIGHT person before sending. Check their full name and title.
-- If multiple people match, report back and ask for clarification — do NOT guess.
+## CRITICAL RULES
+- NEVER send a message without calling ask_user first and getting YES.
+- NEVER guess which person to message if multiple results appear.
+- If only one result appears, still confirm with ask_user — include their full name and email.
 - If you can't find the compose box, try Ctrl+Shift+2 to ensure you're in Chat view.
 - If Teams shows a login page, STOP and report that the session has expired.
 - After sending, confirm success by checking the chat shows your sent message.
@@ -251,7 +286,13 @@ Save each signal as `pulse-signals/YYYY-MM-DD-{slug}.md` using write_output:
 # Session Config Builder
 # ---------------------------------------------------------------------------
 
-def build_session_config(config: dict, mode: str, tools: list[Tool] | None = None) -> SessionConfig:
+def build_session_config(
+    config: dict,
+    mode: str,
+    tools: list[Tool] | None = None,
+    telegram_app=None,
+    chat_id: int | None = None,
+) -> SessionConfig:
     """Build a SessionConfig from standing instructions.
 
     Args:
@@ -260,6 +301,8 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
               'research' for deep research, 'transcripts' for transcript collection,
               'chat' for conversational queries via Telegram
         tools: Custom tools to register on the session
+        telegram_app: Telegram Application (for ask_user → Telegram relay)
+        chat_id: Telegram chat ID (for ask_user → Telegram relay)
     """
     models = config.get("models", {})
     model = models.get(mode, models.get("default", "claude-sonnet"))
@@ -310,9 +353,13 @@ def build_session_config(config: dict, mode: str, tools: list[Tool] | None = Non
         "on_permission_request": auto_approve_handler,
     }
 
-    # Block the built-in CLI self-documentation tool in chat mode
+    # Chat mode: block CLI self-docs + enable ask_user for confirmations
     if mode == "chat":
         session_config["excluded_tools"] = ["fetch_copilot_cli_documentation"]
+        if telegram_app and chat_id:
+            session_config["on_user_input_request"] = make_user_input_handler(
+                telegram_app, chat_id
+            )
 
     if tools:
         session_config["tools"] = tools
@@ -406,6 +453,8 @@ You have three agents you can delegate to:
 - *pulse-reader* — finds and reads local reports (triage, digests, intel, signals)
 - *m365-query* — queries live M365 data (emails, calendar, Teams) via WorkIQ
 - *teams-sender* — sends a message to someone on Microsoft Teams via browser automation
+  IMPORTANT: Teams messaging ALWAYS requires user confirmation via ask_user before sending.
+  The teams-sender agent will search for the recipient, show their details, and ask for YES/NO.
 
 ### How to Answer Questions
 1. FIRST: delegate to *pulse-reader* to check local reports.
