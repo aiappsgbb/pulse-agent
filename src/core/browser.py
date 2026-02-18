@@ -3,7 +3,7 @@
 Avoids user-data-dir profile locking by launching ONE browser with
 --remote-debugging-port, then sharing it via CDP endpoint.
 
-- Direct Python code (transcripts.py) uses the context/page objects directly.
+- Direct Python code (transcripts) uses the context/page objects directly.
 - MCP Playwright servers (SDK sessions) connect via --cdp-endpoint.
 """
 

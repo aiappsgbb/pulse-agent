@@ -19,8 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from copilot import CopilotClient, MCPLocalServerConfig, PermissionRequest, PermissionRequestResult
 from copilot.generated.session_events import SessionEventType
-from config import load_config
-from session import PROJECT_ROOT, _playwright_mcp, auto_approve_handler
+from core.config import load_config
+from core.constants import PROJECT_ROOT
+from sdk.session import auto_approve_handler
+from sdk.agents import playwright_mcp_config as _playwright_mcp
 
 MANUAL = "--manual" in sys.argv
 DENY = "--deny" in sys.argv

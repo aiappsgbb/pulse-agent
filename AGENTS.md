@@ -35,11 +35,11 @@ Loaded from `config/standing-instructions.yaml`. Define:
 ## Tools
 
 Agent can use built-in GHCP SDK tools (file system, browser, shell) plus custom tools:
-- `send_email` — draft or send via M365
-- `create_task` — create in To Do / Planner
-- `log_action` — write action + reasoning to M365
-- `queue_task` — add deep research task
-- `write_output` — write research results locally + M365
+- `log_action` — write action + reasoning to local audit log
+- `write_output` — write files to the output/ directory
+- `queue_task` — add a job to tasks/pending/ (digest, research, transcripts, intel)
+- `dismiss_item` — mark a digest item as handled (won't appear in future digests)
+- `add_note` — attach a note to a digest item for future reference
 
 ## Skills
 

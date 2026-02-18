@@ -1,0 +1,57 @@
+# Each mode defines how to build an SDK session.
+# Python code loads this and assembles SessionConfig — no business logic in Python.
+
+monitor:
+  model_key: triage
+  working_dir: output
+  mcp_servers: [workiq]
+  agents: []
+  system_prompt: config/prompts/system/monitor.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/monitor.md
+  pre_process: null
+
+digest:
+  model_key: digest
+  working_dir: root
+  mcp_servers: [workiq]
+  agents: [m365-query, digest-writer, signal-drafter]
+  system_prompt: config/prompts/system/digest.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/digest.md
+  pre_process: collect_content_and_feeds
+
+intel:
+  model_key: intel
+  working_dir: root
+  mcp_servers: [workiq]
+  agents: []
+  system_prompt: config/prompts/system/intel.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/intel.md
+  pre_process: collect_feeds
+
+research:
+  model_key: research
+  working_dir: root
+  mcp_servers: [workiq]
+  agents: []
+  system_prompt: config/prompts/system/research.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/research.md
+  pre_process: null
+
+chat:
+  model_key: chat
+  working_dir: root
+  mcp_servers: [playwright]
+  agents: [pulse-reader, m365-query]
+  system_prompt: config/prompts/system/chat.md
+  system_prompt_mode: replace
+  trigger_prompt: null
+  excluded_tools: [fetch_copilot_cli_documentation]
+  user_input_handler: telegram
+
+transcripts:
+  standalone: true
+  handler: collectors.transcripts

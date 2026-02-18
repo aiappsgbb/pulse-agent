@@ -5,9 +5,7 @@ from pathlib import Path
 
 import yaml
 
-CONFIG_DIR = Path(__file__).parent.parent / "config"
-TASKS_DIR = Path(__file__).parent.parent / "tasks"
-
+from core.constants import CONFIG_DIR, TASKS_DIR
 
 
 def _expand_env_vars(obj):
@@ -38,6 +36,10 @@ def validate_config(config: dict) -> list[str]:
     for path_cfg in config.get("digest", {}).get("input_paths", []):
         if not path_cfg.get("path"):
             warnings.append("Digest input_paths entry missing 'path' field")
+
+    allowed = config.get("telegram", {}).get("allowed_users", [])
+    if not allowed:
+        warnings.append("telegram.allowed_users is empty — anyone can interact with the bot")
 
     return warnings
 

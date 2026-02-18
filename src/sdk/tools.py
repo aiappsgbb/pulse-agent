@@ -7,10 +7,8 @@ from pathlib import Path
 from pydantic import BaseModel
 from copilot import define_tool, Tool, ToolInvocation
 
-PROJECT_ROOT = Path(__file__).parent.parent
-LOGS_DIR = PROJECT_ROOT / "logs"
-OUTPUT_DIR = PROJECT_ROOT / "output"
-TASKS_DIR = PROJECT_ROOT / "tasks" / "pending"
+from core.constants import LOGS_DIR, OUTPUT_DIR, TASKS_DIR
+from core.state import load_json_state, save_json_state
 
 
 # --- Tool parameter schemas ---
@@ -89,10 +87,11 @@ def write_output(params: WriteOutputParams, invocation: ToolInvocation) -> str:
     description="Add a job to the queue. The daemon picks it up next cycle. Set type to 'research', 'digest', 'transcripts', or 'intel'.",
 )
 def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
-    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    pending_dir = TASKS_DIR / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d")
     slug = params.task.lower().replace(" ", "-")[:50]
-    task_file = TASKS_DIR / f"{date_str}-{slug}.yaml"
+    task_file = pending_dir / f"{date_str}-{slug}.yaml"
 
     import yaml
     task_data = {
@@ -112,18 +111,18 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
     return f"Task queued: {task_file}"
 
 
+# --- Digest actions (dismiss/note) ---
+
 ACTIONS_FILE = OUTPUT_DIR / ".digest-actions.json"
 
 
-def _load_actions() -> dict:
-    if ACTIONS_FILE.exists():
-        return json.loads(ACTIONS_FILE.read_text(encoding="utf-8"))
-    return {"dismissed": [], "notes": {}}
+def load_actions() -> dict:
+    """Load digest actions (dismissed items, notes). Public for digest module."""
+    return load_json_state(ACTIONS_FILE, {"dismissed": [], "notes": {}})
 
 
 def _save_actions(actions: dict):
-    ACTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ACTIONS_FILE.write_text(json.dumps(actions, indent=2), encoding="utf-8")
+    save_json_state(ACTIONS_FILE, actions)
 
 
 @define_tool(
@@ -131,7 +130,7 @@ def _save_actions(actions: dict):
     description="Mark a digest item as handled/done so it won't appear in future digests. Use when the user says they've dealt with something.",
 )
 def dismiss_item(params: DismissItemParams, invocation: ToolInvocation) -> str:
-    actions = _load_actions()
+    actions = load_actions()
     entry = {"item": params.item, "dismissed_at": datetime.now().isoformat()}
     if params.reason:
         entry["reason"] = params.reason
@@ -145,7 +144,7 @@ def dismiss_item(params: DismissItemParams, invocation: ToolInvocation) -> str:
     description="Add a note to a digest item for future reference. Use when the user wants to annotate something.",
 )
 def add_note(params: AddNoteParams, invocation: ToolInvocation) -> str:
-    actions = _load_actions()
+    actions = load_actions()
     actions["notes"][params.item] = {
         "note": params.note,
         "added_at": datetime.now().isoformat(),

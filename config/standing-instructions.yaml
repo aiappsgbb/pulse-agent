@@ -90,8 +90,8 @@ onedrive:
 
 telegram:
   enabled: true
-  bot_token: "8587432460:AAEfhRw3QdvFKrcK19KYvNGYv4EBeEnWAS0"
-  allowed_users: []   # Telegram user IDs that can interact (empty = anyone)
+  bot_token: "$TELEGRAM_BOT_TOKEN"
+  allowed_users: [8323565336]   # Telegram user IDs that can interact (empty = anyone)
 
 models:
   triage: "claude-sonnet"
