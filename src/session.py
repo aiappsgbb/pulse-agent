@@ -170,8 +170,25 @@ You receive collected content (transcripts, documents, emails, RSS articles, Wor
     }
 
 
-def _playwright_mcp(config: dict) -> MCPLocalServerConfig:
-    """Playwright MCP config — reused across agents that need browser automation."""
+def _playwright_mcp(config: dict, cdp_endpoint: str | None = None) -> MCPLocalServerConfig:
+    """Playwright MCP config — reused across agents that need browser automation.
+
+    When cdp_endpoint is provided, connects to an existing shared browser
+    instead of launching a new one (avoids user-data-dir profile locking).
+    """
+    if cdp_endpoint:
+        return MCPLocalServerConfig(
+            type="local",
+            command="npx",
+            args=[
+                "@playwright/mcp@latest",
+                "--cdp-endpoint", cdp_endpoint,
+            ],
+            tools=["*"],
+            timeout=120000,
+        )
+
+    # Fallback: launch own browser (CLI --once mode, no shared browser)
     playwright_cfg = config.get("transcripts", {}).get("playwright", {})
     default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
     user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
@@ -242,6 +259,7 @@ def build_session_config(
     tools: list[Tool] | None = None,
     telegram_app=None,
     chat_id: int | None = None,
+    cdp_endpoint: str | None = None,
 ) -> SessionConfig:
     """Build a SessionConfig from standing instructions.
 
@@ -253,6 +271,7 @@ def build_session_config(
         tools: Custom tools to register on the session
         telegram_app: Telegram Application (for ask_user → Telegram relay)
         chat_id: Telegram chat ID (for ask_user → Telegram relay)
+        cdp_endpoint: CDP endpoint for shared browser (avoids profile locking)
     """
     models = config.get("models", {})
     model = models.get(mode, models.get("default", "claude-sonnet"))
@@ -268,7 +287,7 @@ def build_session_config(
     # Playwright MCP for browser automation
     # Chat mode needs it for teams-sender (at session level due to copilot-cli#693)
     if mode in ("transcripts", "chat"):
-        mcp_servers["playwright"] = _playwright_mcp(config)
+        mcp_servers["playwright"] = _playwright_mcp(config, cdp_endpoint=cdp_endpoint)
 
     # Custom agents per mode
     custom_agents = []

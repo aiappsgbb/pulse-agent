@@ -145,9 +145,15 @@ async def agent_session(
 
     Handles session creation, event streaming, and cleanup automatically.
     """
+    # Use shared browser CDP endpoint if available
+    from browser import get_browser_manager
+    mgr = get_browser_manager()
+    cdp_endpoint = mgr.cdp_endpoint if mgr else None
+
     session_config = build_session_config(
         config, mode=mode, tools=tools,
         telegram_app=telegram_app, chat_id=chat_id,
+        cdp_endpoint=cdp_endpoint,
     )
     session = await client.create_session(session_config)
     session.on(lambda event: log_event(event))

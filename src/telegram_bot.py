@@ -12,15 +12,42 @@ Chat history is managed by the GHCP SDK agent itself (reads/writes Pulse/chat-hi
 """
 
 import asyncio
+import html
 import json
+import re
 from pathlib import Path
 
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 from utils import log
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
+
+
+def md_to_telegram_html(md_text: str) -> str:
+    """Convert Markdown to Telegram-safe HTML.
+
+    Handles the subset the agent actually produces: bold, italic,
+    inline code, code blocks, and headers.  Everything else passes
+    through as escaped plain text.
+    """
+    text = html.escape(md_text)
+
+    # Code blocks (``` ... ```) -> <pre>
+    text = re.sub(r"```(?:\w*)\n?(.*?)```", r"<pre>\1</pre>", text, flags=re.S)
+    # Inline code (`...`) -> <code>
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    # Bold (**...**) -> <b>
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # Italic (*...*) -> <i>  (only single *, after bold is already replaced)
+    text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+    # Markdown headers (## Foo) -> bold line
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.M)
+
+    return text
+
 
 # Set by start_telegram_bot() — shared with main.py
 _job_queue = None
@@ -152,7 +179,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "_chat_id": chat_id,
         })
         labels = {"digest": "Digest", "monitor": "Triage", "intel": "Intel brief", "transcripts": "Transcript collection"}
-        await update.message.reply_text(f"{labels.get(action, action)} started.")
+        await update.message.reply_text(f"{html.escape(labels.get(action, action))} started.", parse_mode=ParseMode.HTML)
         return
 
     # Everything else -> conversational query via GHCP SDK
@@ -169,12 +196,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     _save_chat_id(update.effective_chat.id)
     await update.message.reply_text(
-        "Pulse Agent here. Just talk to me:\n\n"
-        "\"What's new?\" - quick triage of your inbox\n"
-        "\"Run a digest\" - full digest\n"
-        "\"Analyze X vs Y\" - deep research task\n"
-        "\"Did I miss anything yesterday?\" - check recent activity\n\n"
-        "I'll also send you proactive updates during office hours."
+        "<b>Pulse Agent</b> here. Just talk to me:\n\n"
+        "<code>What's new?</code> — quick triage of your inbox\n"
+        "<code>Run a digest</code> — full digest\n"
+        "<code>Analyze X vs Y</code> — deep research task\n"
+        "<code>Did I miss anything yesterday?</code> — check recent activity\n\n"
+        "I'll also send you proactive updates during office hours.",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -199,26 +227,38 @@ async def send_latest_digest(chat_id: int, app: Application):
         return
 
     content = md_files[0].read_text(encoding="utf-8")
-    # Telegram has a 4096 char limit per message
-    if len(content) > 4000:
-        chunks = [content[i:i + 4000] for i in range(0, len(content), 4000)]
+    formatted = md_to_telegram_html(content)
+    await _send_chunked(app.bot, chat_id, formatted, ParseMode.HTML)
+
+
+async def _send(bot, chat_id: int, text: str, parse_mode=None):
+    """Send a single message, falling back to plain text on parse errors."""
+    try:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+    except Exception:
+        if parse_mode is not None:
+            await bot.send_message(chat_id=chat_id, text=text)
+        else:
+            raise
+
+
+async def _send_chunked(bot, chat_id: int, text: str, parse_mode=None):
+    """Send text, splitting into 4000-char chunks if needed."""
+    if len(text) > 4000:
+        chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
-            await app.bot.send_message(chat_id=chat_id, text=chunk)
+            await _send(bot, chat_id, chunk, parse_mode)
     else:
-        await app.bot.send_message(chat_id=chat_id, text=content)
+        await _send(bot, chat_id, text, parse_mode)
 
 
 async def notify(app: Application | None, chat_id: int, text: str):
-    """Send a notification message to a Telegram chat."""
+    """Send a notification message to a Telegram chat (HTML formatted)."""
     if app is None:
         return
     try:
-        if len(text) > 4000:
-            chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
-            for chunk in chunks:
-                await app.bot.send_message(chat_id=chat_id, text=chunk)
-        else:
-            await app.bot.send_message(chat_id=chat_id, text=text)
+        formatted = md_to_telegram_html(text)
+        await _send_chunked(app.bot, chat_id, formatted, ParseMode.HTML)
     except Exception as e:
         log.warning(f"Telegram notify failed: {e}")
 

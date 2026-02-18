@@ -395,10 +395,24 @@ async def main():
 
     log.info(f"Connected. State: {client.get_state()}")
 
+    # Start shared browser (single Edge instance for all Playwright consumers)
+    from browser import BrowserManager
+    playwright_cfg = config.get("transcripts", {}).get("playwright", {})
+    default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
+    user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
+    browser = BrowserManager(user_data_dir)
+    try:
+        await browser.start()
+    except Exception as e:
+        log.warning(f"Shared browser failed to start: {e} — Playwright will launch per-session")
+        browser = None
+
     # --once --mode X: run a single stage and exit (dev/debugging)
     if args.once and args.mode:
         await run_stage(client, config, args.mode)
         sync_to_onedrive(config)
+        if browser:
+            await browser.stop()
         await client.stop()
         return
 
@@ -421,6 +435,8 @@ async def main():
                 if "_file" in job:
                     mark_task_completed(job)
         sync_to_onedrive(config)
+        if browser:
+            await browser.stop()
         await client.stop()
         return
 
@@ -460,6 +476,8 @@ async def main():
     heartbeat_task.cancel()
     worker_task.cancel()
     await stop_telegram_bot(telegram_app)
+    if browser:
+        await browser.stop()
     await client.stop()
     log.info("Pulse Agent stopped.")
 
