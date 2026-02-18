@@ -22,8 +22,9 @@ Ask WorkIQ: "Show me emails I received {{workiq_window}} that look like they nee
 ### Step 2: Check what's been handled
 Ask WorkIQ: "Which of my recent emails have I already replied to? Have I responded to or dealt with any of the Known Outstanding Items listed above?"
 
-### Step 3: Get NEW Teams messages
-Ask WorkIQ: "What Teams messages {{workiq_window}} mention me or need my input?"
+### Step 3: Get NEW Teams messages (make 2 queries)
+Ask WorkIQ: "What Teams 1:1 and group chat messages {{workiq_window}} am I yet to reply to? Show sender, preview, and time sent."
+Then ask: "What Teams channel messages {{workiq_window}} mention me, ask me a question, or are in threads I replied to before? Include channel name."
 
 ### Step 4: MERGE with Known Outstanding Items
 - For each **Known Outstanding Item** from the previous digest:
@@ -41,6 +42,7 @@ Ask WorkIQ: "What Teams messages {{workiq_window}} mention me or need my input?"
 
 The ONLY things that belong in the digest:
 - Things I haven't responded to yet that need a response
+- **Unreplied Teams messages** — 1:1 chats, group chats, and channel threads where someone is waiting for me
 - Deadlines coming up that I haven't acted on
 - Risks/escalations that are still unresolved
 - Key decisions from meetings (1 line each, not paragraphs)

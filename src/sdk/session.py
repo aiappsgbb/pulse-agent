@@ -86,14 +86,10 @@ def _build_prompt_variables(config: dict, mode: str) -> dict:
     if mode == "monitor" or mode == "triage":
         monitoring = config.get("monitoring", {})
         priorities = monitoring.get("priorities", [])
-        autonomy = monitoring.get("autonomy", {})
         vips = monitoring.get("vip_contacts", [])
 
         variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
         variables["vips"] = ", ".join(vips) if vips else "None configured"
-        variables["auto_send"] = str(autonomy.get("auto_send", False))
-        variables["auto_send_low_risk"] = str(autonomy.get("auto_send_low_risk", True))
-        variables["max_nudges"] = str(autonomy.get("max_nudges", 2))
 
     return variables
 

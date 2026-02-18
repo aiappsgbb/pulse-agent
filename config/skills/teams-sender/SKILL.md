@@ -9,31 +9,21 @@ Send a message to a person on Microsoft Teams using Playwright browser automatio
 
 ## Workflow
 
-1. Navigate to https://teams.microsoft.com
-2. Wait 5 seconds for the page to load
-3. Take a browser_snapshot to see the current state
-4. Click on the "Chat" icon in the left sidebar (or press Ctrl+Shift+2)
-5. Wait 2 seconds
-6. Use the search box at the top to find the recipient by name
-7. Wait for search results to appear (2 seconds)
-8. Take a browser_snapshot — read the search results carefully
-9. **MANDATORY CONFIRMATION** — call ask_user with:
-   - The recipient's full name, email address, and job title from the search results
-   - The exact message text you will send
-   - If MULTIPLE people match, list ALL of them and ask the user to pick
-   - Format:
-     "Confirm Teams message:
-      To: [Full Name] ([email@domain.com]) — [Job Title]
-      Message: [exact message text]
+1. Navigate to https://teams.microsoft.com and wait 3 seconds
+2. Use the search box at the top to find the recipient by name — type then wait 2 seconds
+3. Take a browser_snapshot — read the search results (name, email, title)
+4. **MANDATORY CONFIRMATION** — call ask_user:
+   "Confirm Teams message:
+    To: [Full Name] ([email@domain.com]) — [Job Title]
+    Message: [exact message text]
 
-      Reply YES to send, or NO to cancel."
-10. WAIT for the user's response. If they say NO or anything other than YES, abort immediately.
-11. Only after YES: click on the correct person from the search results
-12. Wait 2 seconds for the chat to open
-13. Take a browser_snapshot to find the compose/message box
-14. Type the message using browser_type
-15. Click the Send button (browser_click on Send)
-16. Confirm the message was sent by taking a final browser_snapshot
+    Reply YES to send, or NO to cancel."
+   If MULTIPLE people match, list ALL and ask user to pick.
+5. WAIT for user response. If anything other than YES → abort immediately.
+6. Click on the correct person from search results, wait 2 seconds
+7. Take a browser_snapshot to find the compose box
+8. Type the message using browser_type
+9. Press Ctrl+Enter to send (do NOT search for the Send button — Ctrl+Enter is faster)
 
 ## Rules
 
