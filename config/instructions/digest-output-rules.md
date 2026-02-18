@@ -2,19 +2,26 @@
 
 ## WorkIQ Queries
 
-Make these WorkIQ queries IN ORDER:
+Make these WorkIQ queries IN ORDER. The query window is **{WINDOW}** — only look for NEW activity in this period.
 
-### Step 1: Get emails and messages
-Ask WorkIQ: "Show me emails I received in the last 7 days that look like they need action or a reply. Include sender, subject, and what they need."
+### Step 1: Get NEW emails and messages
+Ask WorkIQ: "Show me emails I received {WINDOW} that look like they need action or a reply. Include sender, subject, and what they need."
 
-### Step 2: Check what's already handled
-Ask WorkIQ: "Which of my recent emails have I already replied to? Which meetings have I already attended or prepared for? Which action items have I already completed?"
+### Step 2: Check what's been handled
+Ask WorkIQ: "Which of my recent emails have I already replied to? Have I responded to or dealt with any of the Known Outstanding Items listed above?"
 
-### Step 3: Get Teams messages
-Ask WorkIQ: "What Teams messages from the last 7 days mention me or need my input?"
+### Step 3: Get NEW Teams messages
+Ask WorkIQ: "What Teams messages {WINDOW} mention me or need my input?"
 
-### Step 4: FILTER
-Cross-reference Steps 1-3. REMOVE anything I've already replied to, already attended, or already dealt with. Only keep genuinely outstanding items.
+### Step 4: MERGE with Known Outstanding Items
+- For each **Known Outstanding Item** from the previous digest:
+  - **KEEP** it if WorkIQ shows no reply/action was taken
+  - **DROP** it if WorkIQ confirms it's been handled (reply sent, meeting attended, task done)
+  - **UPDATE** it if there's new activity on the same thread
+- For each **NEW** WorkIQ result (Steps 1 & 3):
+  - **ADD** only if it's not already covered by a Known Outstanding Item
+  - Skip FYI emails, newsletters, no-reply senders, and things clearly already handled
+- The final digest = carried-forward items + genuinely new items = complete snapshot of what's outstanding
 
 ## Output Rules
 

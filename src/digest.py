@@ -258,8 +258,13 @@ async def run_digest(client: CopilotClient, config: dict):
     log.info("=== Digest cycle end ===")
 
 
-def _load_previous_digest() -> str | None:
-    """Load the most recent existing digest JSON to provide continuity."""
+def _load_previous_digest() -> dict | None:
+    """Load the most recent digest JSON for carry-forward.
+
+    Returns the full parsed dict ({date, items, signals, stats}) so callers
+    can extract the date for dynamic WorkIQ windowing and the items list for
+    carry-forward context.
+    """
     digests_dir = OUTPUT_DIR / "digests"
     if not digests_dir.exists():
         return None
@@ -267,20 +272,7 @@ def _load_previous_digest() -> str | None:
     if not json_files:
         return None
     try:
-        data = json.loads(json_files[0].read_text(encoding="utf-8"))
-        items = data.get("items", [])
-        if not items:
-            return None
-        date = data.get("date", json_files[0].stem)
-        lines = [f"## Previous Digest ({date}) — {len(items)} items were outstanding\n"]
-        for item in items:
-            priority = item.get("priority", "?")
-            title = item.get("title", "?")
-            item_type = item.get("type", "?")
-            item_id = item.get("id", "?")
-            lines.append(f"- [{priority.upper()}] **[{item_type}]** {title} (id: {item_id})")
-        lines.append("\nCarry forward any items that are STILL outstanding. Drop items that have been resolved since then.")
-        return "\n".join(lines)
+        return json.loads(json_files[0].read_text(encoding="utf-8"))
     except Exception as e:
         log.warning(f"Could not load previous digest: {e}")
         return None
@@ -292,6 +284,36 @@ def _build_digest_prompt(items: list[dict], config: dict, articles: list[dict] |
     digest_cfg = config.get("digest", {})
     priorities = digest_cfg.get("priorities", [])
     priorities_str = "\n".join(f"- {p}" for p in priorities)
+
+    # --- Dynamic WorkIQ window based on previous digest date ---
+    prev = _load_previous_digest()
+    if prev and prev.get("date"):
+        since_date = prev["date"]
+        workiq_window = f"since {since_date}"
+    else:
+        workiq_window = "in the last 7 days"
+
+    # --- Carry-forward block from previous digest items ---
+    carry_forward = ""
+    if prev and prev.get("items"):
+        cf_lines = [
+            "## Known Outstanding Items (from previous digest)\n",
+            "These items were flagged previously. For each one:",
+            "- **KEEP** if still unresolved (no reply sent, no action taken)",
+            "- **DROP** if WorkIQ confirms it's been handled (reply sent, meeting attended, etc.)",
+            "- **UPDATE** if there's new activity on the same thread\n",
+        ]
+        for item in prev["items"]:
+            priority = item.get("priority", "?")
+            title = item.get("title", "?")
+            item_id = item.get("id", "?")
+            source = item.get("source", "?")
+            date = item.get("date", "?")
+            cf_lines.append(
+                f"- [{priority.upper()}] **{title}** "
+                f"(id: {item_id}, source: {source}, date: {date})"
+            )
+        carry_forward = "\n".join(cf_lines)
 
     # Group items by type
     by_type: dict[str, list[dict]] = {}
@@ -340,20 +362,20 @@ def _build_digest_prompt(items: list[dict], config: dict, articles: list[dict] |
 {note_items}
 """
 
-    # Load previous digest for continuity
-    prev_digest = _load_previous_digest()
-    prev_block = f"\n{prev_digest}\n" if prev_digest else ""
-
     # Load output rules from editable instruction file
     output_rules = _load_instruction("digest-output-rules", config)
-    # Replace DATE placeholder with actual date
     output_rules = output_rules.replace("DATE", date_str)
+    output_rules = output_rules.replace("{WINDOW}", workiq_window)
 
     return f"""Generate a SHORT daily digest for {date_str}. This should be MAX 50 lines — only things I haven't dealt with yet.
 
+WorkIQ query window: **{workiq_window}** (only query for NEW activity in this window).
+
 ## Your Priorities
 {priorities_str}
-{dismissed_block}{notes_block}{prev_block}
+{dismissed_block}{notes_block}
+{carry_forward}
+
 ## Part A — Local Content (already collected)
 {content_block}
 {articles_block}
