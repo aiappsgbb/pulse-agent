@@ -3,6 +3,7 @@ github-copilot-sdk>=0.1.23
 pyyaml>=6.0
 feedparser>=6.0
 python-telegram-bot>=21
+python-dotenv>=1.0
 
 # Document extraction — required for digest mode
 python-docx>=1.1

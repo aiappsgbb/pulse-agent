@@ -32,6 +32,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
         job_type = job.get("type", "unknown")
         chat_id = job.get("_chat_id")
         job_name = job.get("task", job_type)
+        job_file = job.get("_file")
 
         log.info(f"=== Job: [{job_type}] {job_name} ===")
 
@@ -73,12 +74,16 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                 log.warning(f"  Unknown job type: {job_type}")
 
         except Exception as e:
-            log.error(f"  Job failed: {job_name} — {e}")
+            log.exception(f"  Job failed: {job_name} — {e}")
             if chat_id:
                 await _notify(telegram_app, chat_id, f"Failed: {job_name}\n{e}")
 
         finally:
             job_queue.task_done()
+            if job_file:
+                enqueued_files = getattr(job_queue, "_enqueued_files", None)
+                if isinstance(enqueued_files, set):
+                    enqueued_files.discard(job_file)
             from daemon.sync import sync_to_onedrive
             sync_to_onedrive(config)
 
@@ -117,4 +122,5 @@ def get_latest_monitoring_report() -> str | None:
             content = content[:3500] + "\n\n... (truncated)"
         return content
     except Exception:
+        log.warning("Failed reading latest monitoring report", exc_info=True)
         return None

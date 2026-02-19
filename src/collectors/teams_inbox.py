@@ -101,18 +101,27 @@ async def _do_scan(page) -> list[dict]:
 
     # Navigate to Teams Chat view
     await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
-    await page.wait_for_timeout(3000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=7000)
+    except Exception:
+        await page.wait_for_timeout(1200)
 
     # Click Chat in the left sidebar
     try:
         chat_btn = page.get_by_role("button", name="Chat")
         await chat_btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(600)
     except Exception:
         log.warning("Could not click Chat button — may already be on chat view")
 
     # Wait for chat list to render
-    await page.wait_for_timeout(2000)
+    try:
+        await page.wait_for_selector(
+            '[data-tid="chat-list-item"], [role="listitem"][data-is-focusable="true"]',
+            timeout=6000,
+        )
+    except Exception:
+        await page.wait_for_timeout(1200)
 
     # Try structured extraction first
     items = await page.evaluate(EXTRACT_CHAT_LIST_JS)

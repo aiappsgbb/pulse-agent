@@ -9,6 +9,15 @@ from core.config import load_pending_tasks
 from core.logging import log
 
 
+def _get_enqueued_files(job_queue: asyncio.Queue) -> set[str]:
+    """Get/create in-memory tracking set for file-based jobs already enqueued."""
+    enqueued = getattr(job_queue, "_enqueued_files", None)
+    if enqueued is None:
+        enqueued = set()
+        setattr(job_queue, "_enqueued_files", enqueued)
+    return enqueued
+
+
 def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
     """Pull new job files from OneDrive Jobs/ into tasks/pending/ and enqueue them."""
     onedrive_cfg = config.get("onedrive", {})
@@ -38,8 +47,15 @@ def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
         log.info(f"Pulled {pulled} new job(s) from OneDrive")
 
     # Enqueue any pending file-based jobs
+    enqueued_files = _get_enqueued_files(job_queue)
     for job in load_pending_tasks():
+        job_file = job.get("_file")
+        if not job_file:
+            continue
+        if job_file in enqueued_files:
+            continue
         job_queue.put_nowait(job)
+        enqueued_files.add(job_file)
 
 
 def sync_to_onedrive(config: dict):

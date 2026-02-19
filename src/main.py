@@ -54,7 +54,7 @@ async def main():
         log.error("Config not found: config/standing-instructions.yaml")
         sys.exit(1)
     except Exception as e:
-        log.error(f"Failed to load config: {e}")
+        log.exception(f"Failed to load config: {e}")
         sys.exit(1)
 
     warnings = validate_config(config)
@@ -68,7 +68,7 @@ async def main():
     try:
         client = await create_client()
     except Exception as e:
-        log.error(f"Failed to connect to GitHub Copilot SDK: {e}")
+        log.exception(f"Failed to connect to GitHub Copilot SDK: {e}")
         log.error("Make sure the Copilot CLI is installed and you have a valid subscription.")
         sys.exit(1)
 
@@ -84,7 +84,7 @@ async def main():
     try:
         await browser.start()
     except Exception as e:
-        log.warning(f"Shared browser failed to start: {e} — Playwright will launch per-session")
+        log.warning(f"Shared browser failed to start: {e} — Playwright will launch per-session", exc_info=True)
         browser = None
 
     # --once --mode X: run a single stage and exit (dev/debugging)
