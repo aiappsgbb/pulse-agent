@@ -273,15 +273,19 @@ async def _navigate_to_teams(page) -> bool:
             log.error("  Teams session expired — login page detected")
             return False
 
-        ready = await page.evaluate("""
-        () => {
-            const hasTree = !!document.querySelector('[role="treeitem"]');
-            const hasNewChat = !!document.querySelector(
-                'button[aria-label*="New message" i], button[aria-label*="New chat" i]'
-            );
-            return { hasTree, hasNewChat, ready: hasTree || hasNewChat };
-        }
-        """)
+        try:
+            ready = await page.evaluate("""
+            () => {
+                const hasTree = !!document.querySelector('[role="treeitem"]');
+                const hasNewChat = !!document.querySelector(
+                    'button[aria-label*="New message" i], button[aria-label*="New chat" i]'
+                );
+                return { hasTree, hasNewChat, ready: hasTree || hasNewChat };
+            }
+            """)
+        except Exception:
+            # Page is mid-navigation (redirect) — context destroyed, just retry
+            ready = None
 
         if ready and ready.get("ready"):
             log.info(
