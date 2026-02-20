@@ -219,6 +219,9 @@ async def process_pending_actions(telegram_app, chat_id: int | None = None):
                 log.warning(f"  Unknown action type: {action_type}")
                 result = {"success": False, "detail": f"Unknown action: {action_type}"}
 
+            status = "OK" if result.get("success") else "FAILED"
+            log.info(f"  Action {action_type} {status}: {result.get('detail', '')}")
+
             # Notify via Telegram
             notify_chat = chat_id
             if notify_chat:

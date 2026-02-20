@@ -248,7 +248,11 @@ async def reply_to_chat(chat_name: str, message: str) -> dict:
 
 
 async def _navigate_to_teams(page) -> bool:
-    """Navigate to Teams Chat view and wait for it to load."""
+    """Navigate to Teams Chat view and wait until it fully loads.
+
+    Polls for strong UI indicators (chat tree, new-chat button) rather than
+    proceeding on a timer.  Teams SPA can take 30s+ to hydrate.
+    """
     log.info("  Navigating to Teams Chat...")
     await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
 
@@ -257,24 +261,43 @@ async def _navigate_to_teams(page) -> bool:
     except Exception:
         pass  # networkidle can be flaky on SPAs
 
-    # Wait for the chat tree or main UI to render
-    try:
-        await page.wait_for_selector(
-            '[role="treeitem"], [role="main"], [data-tid="app-layout"]',
-            timeout=15000,
-        )
-    except Exception:
-        log.warning("  Teams main UI not detected — page may still be loading")
+    # Poll until Teams is actually ready — don't proceed on a half-loaded page
+    max_wait = 120  # seconds
+    poll_interval = 3  # seconds
+    waited = 0
 
-    # Extra settling time for SPA hydration
-    await page.wait_for_timeout(2000)
+    while waited < max_wait:
+        # Check for login redirect first
+        url = page.url.lower()
+        if "login" in url or "oauth" in url or "microsoftonline" in url:
+            log.error("  Teams session expired — login page detected")
+            return False
 
-    # Check for login page
-    url = page.url.lower()
-    if "login" in url or "oauth" in url or "microsoftonline" in url:
-        return False
+        ready = await page.evaluate("""
+        () => {
+            const hasTree = !!document.querySelector('[role="treeitem"]');
+            const hasNewChat = !!document.querySelector(
+                'button[aria-label*="New message" i], button[aria-label*="New chat" i]'
+            );
+            return { hasTree, hasNewChat, ready: hasTree || hasNewChat };
+        }
+        """)
 
-    return True
+        if ready and ready.get("ready"):
+            log.info(
+                f"  Teams loaded after {waited}s "
+                f"(tree={ready['hasTree']}, newChat={ready['hasNewChat']})"
+            )
+            await page.wait_for_timeout(1000)  # brief settling
+            return True
+
+        await page.wait_for_timeout(poll_interval * 1000)
+        waited += poll_interval
+        if waited % 15 == 0:
+            log.info(f"  Waiting for Teams to load... ({waited}s)")
+
+    log.error(f"  Teams did not load after {max_wait}s")
+    return False
 
 
 async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
@@ -292,12 +315,23 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
         result = "keyboard Alt+Shift+N"
 
     log.info(f"  New chat: {result}")
-    await page.wait_for_timeout(1500)
 
-    # Step 2: Find and focus the "To:" field
-    to_found = await page.evaluate(FIND_TO_FIELD_JS)
+    # Step 2: Wait for "To:" field to appear — verifies new-chat dialog opened
+    to_found = None
+    for attempt in range(10):
+        await page.wait_for_timeout(1500)
+        to_found = await page.evaluate(FIND_TO_FIELD_JS)
+        if to_found:
+            break
+        # Retry clicking the button every few attempts
+        if attempt in (3, 6):
+            log.info(f"  'To:' field not found — retrying new-chat (attempt {attempt + 1})")
+            retry = await page.evaluate(FIND_NEW_CHAT_BUTTON_JS)
+            if not retry:
+                await page.keyboard.press("Alt+Shift+n")
+
     if not to_found:
-        return {"success": False, "detail": "Could not find 'To:' field in new chat view"}
+        return {"success": False, "detail": "Could not find 'To:' field after 10 attempts"}
 
     log.info(f"  'To:' field found: {to_found}")
     await page.wait_for_timeout(500)
