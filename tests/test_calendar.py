@@ -87,8 +87,14 @@ def test_parse_no_time_range():
 # --- format_calendar_for_prompt ---
 
 
+def test_format_unavailable():
+    result = format_calendar_for_prompt(None)
+    assert "SCAN UNAVAILABLE" in result
+    assert "DO NOT assume" in result
+
+
 def test_format_no_events():
-    assert format_calendar_for_prompt([]) == "No calendar events found for today."
+    assert format_calendar_for_prompt([]) == "No calendar events found for the work week."
 
 
 def test_format_active_events():
@@ -124,6 +130,7 @@ def test_format_active_events():
     assert "1:1 with Bob" in result
     assert "[Tentative]" in result
     assert "(by Alice)" in result
+    assert "Thursday, February 20 2026" in result
 
 
 def test_format_with_declined():
@@ -157,6 +164,7 @@ def test_format_with_declined():
     assert "Active Meeting" in result
     assert "Declined (1)" in result
     assert "Declined One" in result
+    assert "Unknown day" in result
 
 
 def test_format_all_day_event():
@@ -181,18 +189,18 @@ def test_format_all_day_event():
 # --- scan_calendar (async, needs browser mock) ---
 
 
-async def test_scan_no_browser_returns_empty():
+async def test_scan_no_browser_returns_none():
     with patch("core.browser.get_browser_manager", return_value=None):
         result = await scan_calendar({})
-    assert result == []
+    assert result is None
 
 
-async def test_scan_browser_no_context_returns_empty():
+async def test_scan_browser_no_context_returns_none():
     mock_mgr = MagicMock()
     mock_mgr.context = None
     with patch("core.browser.get_browser_manager", return_value=mock_mgr):
         result = await scan_calendar({})
-    assert result == []
+    assert result is None
 
 
 async def test_scan_exception_returns_empty():

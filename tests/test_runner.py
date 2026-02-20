@@ -231,6 +231,22 @@ async def test_pre_process_monitor_returns_outlook_and_calendar():
     assert result["calendar_block"] == "## 1 Event"
 
 
+async def test_pre_process_monitor_browser_unavailable():
+    """When browser is unavailable, scanners return None and format shows UNAVAILABLE."""
+    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=None), \
+         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="**SCAN UNAVAILABLE**"), \
+         patch("collectors.outlook_inbox.scan_outlook_inbox", new_callable=AsyncMock, return_value=None), \
+         patch("collectors.outlook_inbox.format_outlook_for_prompt", return_value="**SCAN UNAVAILABLE**"), \
+         patch("collectors.calendar.scan_calendar", new_callable=AsyncMock, return_value=None), \
+         patch("collectors.calendar.format_calendar_for_prompt", return_value="**SCAN UNAVAILABLE**"):
+        result = await _pre_process_monitor({})
+    assert "UNAVAILABLE" in result["teams_inbox"]
+    # When browser unavailable, no timestamp prepended
+    assert "*(Scanned at" not in result["teams_inbox"]
+    assert "UNAVAILABLE" in result["outlook_inbox_block"]
+    assert "UNAVAILABLE" in result["calendar_block"]
+
+
 def test_trigger_variables_monitor_outlook_and_calendar(sample_config):
     """Monitor trigger variables include Outlook and Calendar blocks."""
     context = {

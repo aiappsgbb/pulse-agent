@@ -156,3 +156,17 @@ def test_build_session_config_research():
     config = load_config()
     sc = build_session_config(config, "research")
     assert sc["system_message"]["mode"] == "append"
+
+
+def test_build_session_config_has_all_skills():
+    """All 4 skills are registered in every session config."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    sc = build_session_config(config, "monitor")
+    skill_dirs = sc.get("skill_directories", [])
+    skill_names = [d.split("\\")[-1].split("/")[-1] for d in skill_dirs]
+    assert "pulse-signal-drafter" in skill_names
+    assert "teams-sender" in skill_names
+    assert "meeting-scheduler" in skill_names
+    assert "email-reply" in skill_names

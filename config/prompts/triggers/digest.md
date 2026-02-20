@@ -12,9 +12,10 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 {{content_sections}}
 {{articles_block}}
 
-## Part B — Inbox Scans (GROUND TRUTH — live Playwright scans)
+## Part B — Inbox & Calendar Scans (live Playwright scans)
 
-These come from real-time browser scans. They show what is ACTUALLY unread right now.
+These come from real-time browser scans. They show what is ACTUALLY happening right now.
+**If any scan says "SCAN UNAVAILABLE", treat that data as UNKNOWN — not zero.**
 
 ### Teams Inbox
 {{teams_inbox_block}}
@@ -22,20 +23,23 @@ These come from real-time browser scans. They show what is ACTUALLY unread right
 ### Outlook Inbox
 {{outlook_inbox_block}}
 
-### Today's Calendar
+### This Week's Calendar
 {{calendar_block}}
 
 ## WorkIQ Queries
 
 Try these WorkIQ queries. The query window is **{{workiq_window}}**.
 
-### Step 1: Get emails addressed TO ME
+### Step 1: Get upcoming meetings and calendar
+Ask WorkIQ: "What meetings do I have coming up this week? Include the meeting title, time, attendees, and any agenda or prep materials."
+
+### Step 2: Get emails addressed TO ME
 Ask WorkIQ: "Show me emails {{workiq_window}} where I am in the TO field (not just CC) and someone is directly asking ME to do something or reply. For each one, tell me: sender, subject, and exactly what they're asking ME to do."
 
-### Step 2: Get Teams messages addressed TO ME
+### Step 3: Get Teams messages addressed TO ME
 Ask WorkIQ: "What Teams channel messages {{workiq_window}} directly @mention me or ask me a specific question by name? Include channel name and the exact question."
 
-### Step 3: Check what I've already handled
+### Step 4: Check what I've already handled
 Ask WorkIQ: "Which of my recent emails and Teams messages have I already replied to or acted on?"
 
 ### IF WORKIQ FAILS:
@@ -46,7 +50,16 @@ If ANY WorkIQ query returns an error (e.g. "Failed to create conversation"), you
 4. Only keep carry-forward items that are CORROBORATED by the inbox scans (the person still shows as unread in Teams or Outlook)
 5. For email-sourced items: check the Outlook scan first. If the sender appears as unread, keep. If not in the Outlook scan and >3 days old, DROP with note.
 
-### Step 4: MERGE with Known Outstanding Items
+### IF BOTH WORKIQ AND BROWSER SCANS ARE UNAVAILABLE:
+If WorkIQ fails AND any inbox/calendar scan says "SCAN UNAVAILABLE", you MUST:
+1. **State clearly at the top**: "Data limited — WorkIQ unavailable and browser scans failed. Inbox/calendar status unknown."
+2. **DO NOT claim 0 unread** — you simply don't know. Say "Unable to verify inbox status."
+3. **KEEP carry-forward action items** that have deadlines approaching — you can't verify them, so err on the side of keeping important items
+4. **DROP only** carry-forward items that are >5 days old (staleness cutoff still applies)
+5. **Focus the digest on**: upcoming deadlines from carry-forward, action items from transcripts, and anything with a concrete due date
+6. **DO NOT add an "Inbox Status" summary line** — since you have no data, omit it entirely rather than showing misleading zeros
+
+### Step 5: MERGE with Known Outstanding Items
 - For each **Known Outstanding Item** from the previous digest:
   - **DROP** if the person does NOT appear as unread in the Teams inbox scan (they've been replied to)
   - **DROP** if WorkIQ confirms it's been handled (reply sent, meeting attended, task done)
@@ -71,14 +84,16 @@ Before adding ANY item to the digest, ask yourself:
 
 **TARGET: 30-50 lines. Not 400. Be brutal about what makes the cut.**
 
-The ONLY things that belong in the digest:
-- Things I haven't responded to yet that need a response
-- **Unreplied Teams messages** — 1:1 chats, group chats, and channel threads where someone is waiting for me
-- Deadlines coming up that I haven't acted on
-- Risks/escalations that are still unresolved
-- Key decisions from meetings (1 line each, not paragraphs)
-- Commitments I made that I haven't delivered on yet
-- RSS articles ONLY if they directly name one of your active customers, a competitor in a live deal, or a product you're actively selling — max 3 lines. Generic industry news belongs in the separate intel mode, not here.
+**PRIORITIZE FORWARD-LOOKING CONTENT. The digest should answer: "What do I need to do next?" not "What happened last week?"**
+
+The ONLY things that belong in the digest (in priority order):
+1. **Upcoming meetings this week** that need prep or have important context — what's on my calendar, who's attending, what should I prepare
+2. **Unreplied messages** — Teams chats, emails where someone is waiting for MY response
+3. **Deadlines coming up** that I haven't acted on
+4. **Action items I committed to** that I haven't delivered yet
+5. **Risks/escalations** that are still unresolved
+6. Key decisions from meetings (1 line each, not paragraphs) — ONLY if they change what I need to do next
+7. RSS articles ONLY if they directly name one of your active customers, a competitor in a live deal, or a product you're actively selling — max 3 lines. Generic industry news belongs in the separate intel mode, not here.
 
 Things that do NOT belong:
 - Emails I already replied to
@@ -136,12 +151,16 @@ Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g
 ```markdown
 # Digest — {{date}}
 
+## Coming Up (meetings & deadlines this week)
+- **{day, time}**: {meeting title} — {who's attending} — {what to prep}
+- **{deadline}**: {what's due} — {current status}
+
 ## Still Outstanding
 - **[REPLY]** {sender} — {subject} — {what they need} ({date})
 - **[ACTION]** {what} — {deadline} — {context}
 - **[DECISION]** {what needs deciding} — {by when}
 
-## Key Takeaways This Week
+## Key Takeaways (only if they affect what you do next)
 - {1-line meeting insight or decision that matters}
 
 ## External Intel (only if directly relevant to your deals/customers — omit section if nothing qualifies)

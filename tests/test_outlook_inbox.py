@@ -100,6 +100,12 @@ def test_parse_inner_text_single_char_lines_filtered():
 # --- format_outlook_for_prompt ---
 
 
+def test_format_unavailable():
+    result = format_outlook_for_prompt(None)
+    assert "SCAN UNAVAILABLE" in result
+    assert "DO NOT assume" in result
+
+
 def test_format_empty():
     assert format_outlook_for_prompt([]) == "No unread emails detected (Outlook scan)."
 
@@ -163,18 +169,18 @@ def test_format_missing_optional_fields():
 # --- scan_outlook_inbox (async, needs browser mock) ---
 
 
-async def test_scan_no_browser_returns_empty():
+async def test_scan_no_browser_returns_none():
     with patch("core.browser.get_browser_manager", return_value=None):
         result = await scan_outlook_inbox({})
-    assert result == []
+    assert result is None
 
 
-async def test_scan_browser_no_context_returns_empty():
+async def test_scan_browser_no_context_returns_none():
     mock_mgr = MagicMock()
     mock_mgr.context = None
     with patch("core.browser.get_browser_manager", return_value=mock_mgr):
         result = await scan_outlook_inbox({})
-    assert result == []
+    assert result is None
 
 
 async def test_scan_exception_returns_empty():

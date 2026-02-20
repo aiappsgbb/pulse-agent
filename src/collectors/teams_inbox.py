@@ -67,18 +67,19 @@ EXTRACT_CHAT_PANE_TEXT_JS = """
 """
 
 
-async def scan_teams_inbox(config: dict) -> list[dict]:
+async def scan_teams_inbox(config: dict) -> list[dict] | None:
     """Scan Teams for unread chat messages using the shared browser.
 
     Returns a list of dicts: [{name, preview, time, unread, raw}, ...]
     Only returns items with unread=True.
+    Returns None if the browser is unavailable (distinct from [] = scanned, nothing found).
     """
     from core.browser import get_browser_manager
 
     browser_mgr = get_browser_manager()
     if not browser_mgr or not browser_mgr.context:
         log.warning("Teams inbox scan skipped — no shared browser available")
-        return []
+        return None
 
     page = None
     try:
@@ -152,8 +153,13 @@ async def _do_scan(page) -> list[dict]:
     return []
 
 
-def format_inbox_for_prompt(items: list[dict]) -> str:
+def format_inbox_for_prompt(items: list[dict] | None) -> str:
     """Format scanned inbox items as text for injection into monitor prompt."""
+    if items is None:
+        return (
+            "**SCAN UNAVAILABLE** — Browser was not running. Cannot determine "
+            "Teams unread status. DO NOT assume zero unread."
+        )
     if not items:
         return "No unread Teams messages detected."
 

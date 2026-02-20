@@ -577,7 +577,7 @@ class TelegramBot:
             )
 
         elif data.startswith("send:"):
-            # User approved — queue the send action
+            # User approved — queue the action based on action_type
             parts = data.split(":")
             if len(parts) < 3:
                 return
@@ -592,12 +592,19 @@ class TelegramBot:
                 await self.app.bot.send_message(chat_id=chat_id, text="Draft not found.")
                 return
 
-            # Queue as a chat job — the agent will execute via teams-sender skill
             target = draft_info.get("target", "")
             draft = draft_info.get("draft", "")
+            action_type = draft_info.get("action_type", "draft_teams_reply")
+            metadata = draft_info.get("metadata", "")
+
+            # Route to the right skill based on action_type
+            prompt, status_text = self._build_action_prompt(
+                action_type, target, draft, metadata
+            )
+
             self.job_queue.put_nowait({
                 "type": "chat",
-                "prompt": f"Send this Teams message to {target}: {draft}",
+                "prompt": prompt,
                 "_source": "telegram_action",
                 "_chat_id": chat_id,
             })
@@ -606,13 +613,37 @@ class TelegramBot:
             await query.edit_message_reply_markup(reply_markup=None)
             await self.app.bot.send_message(
                 chat_id=chat_id,
-                text=f"Sending to <b>{html.escape(target)}</b>...",
+                text=f"{html.escape(status_text)}",
                 parse_mode=ParseMode.HTML,
             )
 
         elif data.startswith("cancel:"):
             await query.edit_message_reply_markup(reply_markup=None)
             await self.app.bot.send_message(chat_id=chat_id, text="Cancelled.")
+
+    @staticmethod
+    def _build_action_prompt(action_type: str, target: str, draft: str, metadata: str) -> tuple[str, str]:
+        """Build the chat prompt and status text for a triage action.
+
+        Returns (prompt, status_text) tuple. The prompt is sent to the SDK
+        agent, which picks the right skill based on the instruction.
+        """
+        if action_type == "send_email_reply":
+            return (
+                f"Reply to the email from {target} with this message: {draft}",
+                f"Replying to <b>{html.escape(target)}</b>'s email...",
+            )
+        elif action_type == "schedule_meeting":
+            return (
+                f"Schedule a meeting: {metadata or draft}",
+                f"Scheduling meeting via Copilot...",
+            )
+        else:
+            # Default: Teams reply (draft_teams_reply or any unrecognized type)
+            return (
+                f"Send this Teams message to {target}: {draft}",
+                f"Sending to <b>{html.escape(target)}</b>...",
+            )
 
     def _find_action_draft(self, item_id: str, action_idx: int) -> dict | None:
         """Find a specific action draft from the latest triage JSON."""

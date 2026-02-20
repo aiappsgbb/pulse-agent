@@ -150,6 +150,8 @@ def build_session_config(
         "skill_directories": [
             str(PROJECT_ROOT / "config" / "skills" / "pulse-signal-drafter"),
             str(PROJECT_ROOT / "config" / "skills" / "teams-sender"),
+            str(PROJECT_ROOT / "config" / "skills" / "meeting-scheduler"),
+            str(PROJECT_ROOT / "config" / "skills" / "email-reply"),
         ],
         "working_directory": working_dir,
         "streaming": True,

@@ -10,6 +10,12 @@ from collectors.teams_inbox import format_inbox_for_prompt, scan_teams_inbox
 # --- format_inbox_for_prompt (pure function) ---
 
 
+def test_format_unavailable():
+    result = format_inbox_for_prompt(None)
+    assert "SCAN UNAVAILABLE" in result
+    assert "DO NOT assume" in result
+
+
 def test_format_empty_inbox():
     assert format_inbox_for_prompt([]) == "No unread Teams messages detected."
 
@@ -50,18 +56,18 @@ def test_format_item_missing_optional_fields():
 # --- scan_teams_inbox (async, needs browser mock) ---
 
 
-async def test_scan_no_browser_returns_empty():
+async def test_scan_no_browser_returns_none():
     with patch("core.browser.get_browser_manager", return_value=None):
         result = await scan_teams_inbox({})
-    assert result == []
+    assert result is None
 
 
-async def test_scan_browser_no_context_returns_empty():
+async def test_scan_browser_no_context_returns_none():
     mock_mgr = MagicMock()
     mock_mgr.context = None
     with patch("core.browser.get_browser_manager", return_value=mock_mgr):
         result = await scan_teams_inbox({})
-    assert result == []
+    assert result is None
 
 
 async def test_scan_exception_returns_empty():

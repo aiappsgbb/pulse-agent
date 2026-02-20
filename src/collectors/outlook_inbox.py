@@ -142,18 +142,19 @@ def _parse_inner_text(text: str) -> dict:
     return result
 
 
-async def scan_outlook_inbox(config: dict) -> list[dict]:
+async def scan_outlook_inbox(config: dict) -> list[dict] | None:
     """Scan Outlook Web for unread emails using the shared browser.
 
     Returns a list of dicts with unread=True items:
     [{sender, subject, preview, time, unread, has_attachment, conv_id}, ...]
+    Returns None if the browser is unavailable (distinct from [] = scanned, nothing found).
     """
     from core.browser import get_browser_manager
 
     browser_mgr = get_browser_manager()
     if not browser_mgr or not browser_mgr.context:
         log.warning("Outlook inbox scan skipped — no shared browser available")
-        return []
+        return None
 
     page = None
     try:
@@ -241,8 +242,13 @@ async def _do_scan(page) -> list[dict]:
     return []
 
 
-def format_outlook_for_prompt(items: list[dict]) -> str:
+def format_outlook_for_prompt(items: list[dict] | None) -> str:
     """Format scanned Outlook items as text for injection into trigger prompt."""
+    if items is None:
+        return (
+            "**SCAN UNAVAILABLE** — Browser was not running. Cannot determine "
+            "Outlook unread status. DO NOT assume zero unread."
+        )
     if not items:
         return "No unread emails detected (Outlook scan)."
 

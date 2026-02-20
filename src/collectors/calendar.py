@@ -1,8 +1,10 @@
-"""Scan Outlook Calendar for today's events via Playwright.
+"""Scan Outlook Calendar for upcoming events via Playwright.
 
 Deterministic script — no LLM involved. Uses the shared browser.
 Returns structured data that gets injected into the digest/monitor trigger prompt.
 Provides calendar coverage when WorkIQ is unavailable.
+
+Scans the work week view to show upcoming meetings (not just today).
 
 DOM structure (verified Feb 2026):
 - Events: div[aria-label] containing "event" or "meeting" (case-insensitive)
@@ -115,18 +117,19 @@ def _parse_calendar_aria(aria: str) -> dict | None:
     return result
 
 
-async def scan_calendar(config: dict) -> list[dict]:
-    """Scan Outlook Calendar for today's events using the shared browser.
+async def scan_calendar(config: dict) -> list[dict] | None:
+    """Scan Outlook Calendar for upcoming events using the shared browser.
 
     Returns a list of dicts:
     [{title, start_time, end_time, date, organizer, status, is_teams, is_recurring, is_declined}, ...]
+    Returns None if the browser is unavailable (distinct from [] = scanned, nothing found).
     """
     from core.browser import get_browser_manager
 
     browser_mgr = get_browser_manager()
     if not browser_mgr or not browser_mgr.context:
         log.warning("Calendar scan skipped — no shared browser available")
-        return []
+        return None
 
     page = None
     try:
@@ -144,21 +147,30 @@ async def scan_calendar(config: dict) -> list[dict]:
 
 
 async def _do_scan(page) -> list[dict]:
-    """Navigate to Outlook Calendar day view and extract events."""
-    log.info("Scanning calendar for today's events...")
+    """Navigate to Outlook Calendar work week view and extract events."""
+    log.info("Scanning calendar for work week events...")
 
-    await page.goto("https://outlook.office.com/calendar/view/day", wait_until="domcontentloaded")
+    await page.goto("https://outlook.office.com/calendar/view/workweek", wait_until="domcontentloaded")
     try:
         await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:
         pass
     await page.wait_for_timeout(3000)
 
+    # Click "+N more events" buttons to reveal hidden events
+    try:
+        more_btns = await page.query_selector_all('button[aria-label*="more event" i]')
+        for btn in more_btns:
+            await btn.click()
+            await page.wait_for_timeout(500)
+    except Exception:
+        pass
+
     # Extract events
     raw_items = await page.evaluate(EXTRACT_CALENDAR_JS)
 
     if not raw_items:
-        log.info("  No calendar events found for today")
+        log.info("  No calendar events found for this week")
         return []
 
     events = []
@@ -167,34 +179,48 @@ async def _do_scan(page) -> list[dict]:
         if parsed:
             events.append(parsed)
 
-    log.info(f"  Found {len(events)} calendar events")
-    for e in events[:10]:
+    log.info(f"  Found {len(events)} calendar events this week")
+    for e in events[:15]:
         status = " [DECLINED]" if e["is_declined"] else ""
         teams = " [Teams]" if e["is_teams"] else ""
-        log.info(f"    - {safe_encode(e['start_time'])} {safe_encode(e['title'][:50])}{teams}{status}")
+        date_str = f" ({e['date']})" if e["date"] else ""
+        log.info(f"    - {safe_encode(e['start_time'])} {safe_encode(e['title'][:50])}{teams}{status}{date_str}")
 
     return events
 
 
-def format_calendar_for_prompt(events: list[dict]) -> str:
+def format_calendar_for_prompt(events: list[dict] | None) -> str:
     """Format calendar events as text for injection into trigger prompt."""
+    if events is None:
+        return (
+            "**SCAN UNAVAILABLE** — Browser was not running. Cannot determine "
+            "calendar events. DO NOT assume no meetings today."
+        )
     if not events:
-        return "No calendar events found for today."
+        return "No calendar events found for the work week."
 
     # Filter out declined events for the summary
     active = [e for e in events if not e["is_declined"]]
     declined = [e for e in events if e["is_declined"]]
 
-    lines = [f"## Today's Calendar — {len(active)} events ({len(declined)} declined)\n"]
+    lines = [f"## This Week's Calendar — {len(active)} events ({len(declined)} declined)\n"]
 
+    # Group events by date for readability
+    by_date: dict[str, list[dict]] = {}
     for e in active:
-        title = e["title"]
-        time_range = f"{e['start_time']} - {e['end_time']}" if e["start_time"] else "All day"
-        organizer = f" (by {e['organizer']})" if e["organizer"] else ""
-        teams = " [Teams]" if e["is_teams"] else ""
-        status = f" [{e['status']}]" if e["status"] and e["status"] != "Busy" else ""
-        recurring = " [recurring]" if e["is_recurring"] else ""
-        lines.append(f"- **{time_range}**: {title}{teams}{organizer}{status}{recurring}")
+        day = e.get("date") or "Unknown day"
+        by_date.setdefault(day, []).append(e)
+
+    for day, day_events in by_date.items():
+        lines.append(f"### {day}")
+        for e in day_events:
+            title = e["title"]
+            time_range = f"{e['start_time']} - {e['end_time']}" if e["start_time"] else "All day"
+            organizer = f" (by {e['organizer']})" if e["organizer"] else ""
+            teams = " [Teams]" if e["is_teams"] else ""
+            status = f" [{e['status']}]" if e["status"] and e["status"] != "Busy" else ""
+            recurring = " [recurring]" if e["is_recurring"] else ""
+            lines.append(f"- **{time_range}**: {title}{teams}{organizer}{status}{recurring}")
 
     if declined:
         lines.append(f"\nDeclined ({len(declined)}): " + ", ".join(

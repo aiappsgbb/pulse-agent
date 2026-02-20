@@ -8,7 +8,7 @@ Run a 30-minute triage cycle NOW. Focus on the LAST 60 MINUTES only — not the 
 
 {{outlook_inbox_block}}
 
-## Today's Calendar (from Playwright — real-time)
+## This Week's Calendar (from Playwright — real-time)
 
 {{calendar_block}}
 
@@ -61,9 +61,10 @@ After writing the monitoring report, you MUST also write a structured JSON file 
       "suggested_actions": [
         {
           "label": "<short button label, max 30 chars>",
-          "action_type": "draft_teams_reply|draft_email_reply|dismiss|schedule_followup",
+          "action_type": "draft_teams_reply|send_email_reply|schedule_meeting|dismiss|schedule_followup",
           "draft": "<the actual draft message text if this is a reply action, or empty string>",
-          "target": "<person name or channel>"
+          "target": "<person name or channel>",
+          "metadata": "<optional: for schedule_meeting, include attendees + duration + subject>"
         }
       ]
     }
@@ -82,3 +83,10 @@ Rules for the JSON:
 - Use context from local files and WorkIQ to make drafts specific and informed
 - Keep drafts concise and professional — match the sender's tone
 - Write the JSON AFTER the markdown report
+
+Action types:
+- `draft_teams_reply` — reply to a Teams message (uses teams-sender skill)
+- `send_email_reply` — reply to an Outlook email (uses email-reply skill)
+- `schedule_meeting` — schedule a meeting via M365 Copilot (uses meeting-scheduler skill). Put attendees, duration, and subject in `metadata`.
+- `dismiss` — mark item as handled (no further action)
+- `schedule_followup` — remind later (no immediate action)

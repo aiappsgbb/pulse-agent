@@ -205,3 +205,52 @@ def test_find_action_draft_no_json(tmp_dir):
     with patch("tg.bot.OUTPUT_DIR", tmp_dir):
         result = bot._find_action_draft("any-id", 0)
     assert result is None
+
+
+# --- _build_action_prompt ---
+
+
+def test_build_action_prompt_teams_reply():
+    prompt, status = TelegramBot._build_action_prompt(
+        "draft_teams_reply", "Alice", "Hey, sounds good!", ""
+    )
+    assert "Teams message" in prompt
+    assert "Alice" in prompt
+    assert "Hey, sounds good!" in prompt
+    assert "Alice" in status
+
+
+def test_build_action_prompt_email_reply():
+    prompt, status = TelegramBot._build_action_prompt(
+        "send_email_reply", "Bob", "Thanks for the update.", ""
+    )
+    assert "Reply to the email" in prompt
+    assert "Bob" in prompt
+    assert "Thanks for the update." in prompt
+    assert "email" in status.lower()
+
+
+def test_build_action_prompt_schedule_meeting():
+    prompt, status = TelegramBot._build_action_prompt(
+        "schedule_meeting", "Charlie", "", "30min with Charlie about Q3 planning"
+    )
+    assert "Schedule a meeting" in prompt
+    assert "30min with Charlie" in prompt
+    assert "Copilot" in status
+
+
+def test_build_action_prompt_schedule_meeting_uses_draft_fallback():
+    """When metadata is empty, falls back to draft for meeting details."""
+    prompt, _ = TelegramBot._build_action_prompt(
+        "schedule_meeting", "Dave", "Meet with Dave about review", ""
+    )
+    assert "Meet with Dave about review" in prompt
+
+
+def test_build_action_prompt_unknown_type_defaults_to_teams():
+    """Unrecognized action types default to Teams reply."""
+    prompt, status = TelegramBot._build_action_prompt(
+        "some_future_type", "Eve", "Hello!", ""
+    )
+    assert "Teams message" in prompt
+    assert "Eve" in status

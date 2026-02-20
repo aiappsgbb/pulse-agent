@@ -362,20 +362,23 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     log.info("Phase 0: Scanning Teams inbox for unread messages...")
     items = await scan_teams_inbox(config)
-    if items:
+    formatted = format_inbox_for_prompt(items)
+    if items is None:
+        log.warning(f"  Teams inbox: UNAVAILABLE — browser not running")
+    elif items:
+        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
         log.info(f"  Found {len(items)} unread Teams messages (scanned at {scan_time})")
     else:
+        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
         log.info(f"  No unread Teams messages detected (scanned at {scan_time}).")
-
-    formatted = format_inbox_for_prompt(items)
-    formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
 
     log.info("Phase 0b: Scanning Outlook inbox for unread emails...")
     outlook_items = await scan_outlook_inbox(config)
     outlook_block = format_outlook_for_prompt(outlook_items)
-    outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+    if outlook_items is not None:
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
 
-    log.info("Phase 0c: Scanning calendar for today's events...")
+    log.info("Phase 0c: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
     calendar_block = format_calendar_for_prompt(cal_events)
 
@@ -431,26 +434,35 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     scan_time = datetime.now().strftime("%H:%M:%S")
     teams_inbox_block = format_inbox_for_prompt(teams_items)
     # Prepend timestamp so the agent knows when this snapshot was taken
-    teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
-    if teams_items:
+    if teams_items is None:
+        log.warning(f"  Teams inbox: UNAVAILABLE — browser not running")
+    elif teams_items:
+        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
         log.info(f"  Teams inbox: {len(teams_items)} unread (scanned at {scan_time})")
     else:
+        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
         log.info(f"  Teams inbox: no unread messages (scanned at {scan_time})")
 
     log.info("\nPhase 1d: Scanning Outlook inbox for unread emails...")
     outlook_items = await scan_outlook_inbox(config)
     outlook_block = format_outlook_for_prompt(outlook_items)
-    outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
-    if outlook_items:
+    if outlook_items is None:
+        log.warning(f"  Outlook inbox: UNAVAILABLE — browser not running")
+    elif outlook_items:
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
         log.info(f"  Outlook inbox: {len(outlook_items)} unread (scanned at {scan_time})")
     else:
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
         log.info(f"  Outlook inbox: no unread emails (scanned at {scan_time})")
 
-    log.info("\nPhase 1e: Scanning calendar for today's events...")
+    log.info("\nPhase 1e: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
     calendar_block = format_calendar_for_prompt(cal_events)
-    active_count = len([e for e in cal_events if not e.get("is_declined")])
-    log.info(f"  Calendar: {active_count} active events today")
+    if cal_events is None:
+        log.warning(f"  Calendar: UNAVAILABLE — browser not running")
+    else:
+        active_count = len([e for e in cal_events if not e.get("is_declined")])
+        log.info(f"  Calendar: {active_count} active events")
 
     # Build content block
     by_type: dict[str, list[dict]] = {}
