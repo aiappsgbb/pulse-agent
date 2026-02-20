@@ -87,6 +87,20 @@ def _build_prompt_variables(config: dict, mode: str) -> dict:
     """
     variables = {}
 
+    # User identity + context — available in all modes
+    user_cfg = config.get("user", {})
+    variables["user_name"] = user_cfg.get("name", "the user")
+    variables["user_email"] = user_cfg.get("email", "")
+    variables["user_role"] = user_cfg.get("role", "")
+    variables["user_org"] = user_cfg.get("org", "")
+    variables["user_focus"] = user_cfg.get("focus", "").strip()
+
+    what_matters = user_cfg.get("what_matters", [])
+    variables["what_matters"] = "\n".join(f"- {w}" for w in what_matters) if what_matters else ""
+
+    what_is_noise = user_cfg.get("what_is_noise", [])
+    variables["what_is_noise"] = "\n".join(f"- {n}" for n in what_is_noise) if what_is_noise else ""
+
     if mode == "monitor" or mode == "triage":
         monitoring = config.get("monitoring", {})
         priorities = monitoring.get("priorities", [])

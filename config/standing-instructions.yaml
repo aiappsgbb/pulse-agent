@@ -1,3 +1,27 @@
+user:
+  name: "Artur Zielinski"
+  email: "arzielinski@microsoft.com"
+  role: "Global Black Belt — AI Apps & Agents"
+  org: "Microsoft GBB, part of the Global Partner Solutions (GPS) organization"
+  focus: |
+    I help Microsoft's top strategic partners and enterprise customers adopt AI
+    at scale — specifically Azure OpenAI, GitHub Copilot, and agentic AI patterns.
+    My work sits at the intersection of technical architecture and business impact:
+    closing complex AI deals, running hands-on workshops, and proving what's possible
+    with production-grade AI solutions.
+  what_matters:
+    - "Customer deals — especially Vodafone, Colt, QBE, Havas. Any movement, blockers, or deadlines."
+    - "Escalations from partners or field teams — these are time-sensitive and politically important."
+    - "Azure OpenAI / GitHub Copilot / AI Agents announcements — these directly affect my conversations with customers."
+    - "Competitor moves (AWS Bedrock, Google Vertex, Salesforce Agentforce) — customers ask me about these."
+    - "Internal team commitments — things I promised in meetings that I haven't delivered yet."
+    - "GBB Pulse signals — drafted signals that need my review before publishing."
+  what_is_noise:
+    - "Org-wide announcements I'm CC'd on but don't need to act on."
+    - "FYI email threads with 20+ people where I have no action item."
+    - "Meeting recaps for meetings I actively participated in and remember."
+    - "Automated notifications from systems (JIRA, ADO, etc.) unless they're about my active deals."
+
 monitoring:
   interval: "30m"
   office_hours:
