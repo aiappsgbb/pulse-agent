@@ -90,7 +90,7 @@ def test_clean_transcript_only_speakers():
 
 # --- transcript compressor ---
 
-from collectors.transcripts.compressor import compress_transcript
+from collectors.transcripts.compressor import compress_transcript, compress_existing_transcripts
 
 
 async def test_compress_transcript_short_text_skipped():
@@ -165,3 +165,78 @@ async def test_compress_transcript_timeout():
 
     assert result is None
     mock_session.destroy.assert_called_once()
+
+
+# --- batch compression ---
+
+
+async def test_compress_existing_skips_already_compressed(tmp_path):
+    """If .md already exists for a .txt, skip it."""
+    txt = tmp_path / "2026-02-16_test-meeting.txt"
+    md = tmp_path / "2026-02-16_test-meeting.md"
+    txt.write_text("A" * 1000, encoding="utf-8")
+    md.write_text("# Already compressed", encoding="utf-8")
+
+    client = MagicMock()
+    count = await compress_existing_transcripts(client, tmp_path)
+    assert count == 0
+    client.create_session.assert_not_called()
+    # Original .txt should still exist (not deleted since we skipped)
+    assert txt.exists()
+
+
+async def test_compress_existing_replaces_txt_with_md(tmp_path):
+    """Successful compression replaces .txt with .md and deletes .txt."""
+    txt = tmp_path / "2026-02-16_test-meeting.txt"
+    txt.write_text("A" * 1000, encoding="utf-8")
+
+    mock_session = AsyncMock()
+
+    def fake_on(handler):
+        handler.final_text = "## Meeting Summary\n- Compressed"
+        handler.done.set()
+        return MagicMock()
+
+    mock_session.on = fake_on
+
+    client = MagicMock()
+    client.create_session = AsyncMock(return_value=mock_session)
+
+    count = await compress_existing_transcripts(client, tmp_path)
+    assert count == 1
+    # .txt should be gone, .md should exist
+    assert not txt.exists()
+    md = tmp_path / "2026-02-16_test-meeting.md"
+    assert md.exists()
+    content = md.read_text(encoding="utf-8")
+    assert "Meeting Summary" in content
+    assert "Original length" in content  # metadata header
+
+
+async def test_compress_existing_keeps_txt_on_failure(tmp_path):
+    """If compression fails, keep the raw .txt."""
+    txt = tmp_path / "2026-02-16_test-meeting.txt"
+    txt.write_text("A" * 1000, encoding="utf-8")
+
+    client = MagicMock()
+    client.create_session = AsyncMock(side_effect=Exception("SDK down"))
+
+    count = await compress_existing_transcripts(client, tmp_path)
+    assert count == 0
+    # .txt should still be there
+    assert txt.exists()
+    assert not (tmp_path / "2026-02-16_test-meeting.md").exists()
+
+
+async def test_compress_existing_empty_dir(tmp_path):
+    """No .txt files -> returns 0."""
+    client = MagicMock()
+    count = await compress_existing_transcripts(client, tmp_path)
+    assert count == 0
+
+
+async def test_compress_existing_nonexistent_dir():
+    """Nonexistent directory -> returns 0."""
+    client = MagicMock()
+    count = await compress_existing_transcripts(client, Path("/nonexistent"))
+    assert count == 0

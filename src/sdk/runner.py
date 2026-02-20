@@ -60,7 +60,7 @@ async def run_job(
     # Pre-process: collect data before agent call
     pre_process = mode_cfg.get("pre_process")
     if pre_process == "collect_content_and_feeds":
-        context.update(await _pre_process_digest(config))
+        context.update(await _pre_process_digest(config, client))
     elif pre_process == "collect_feeds":
         context.update(_pre_process_intel(config))
     elif pre_process == "scan_teams_inbox":
@@ -362,7 +362,7 @@ async def _pre_process_monitor(config: dict) -> dict:
     return {"teams_inbox": formatted}
 
 
-async def _pre_process_digest(config: dict) -> dict:
+async def _pre_process_digest(config: dict, client=None) -> dict:
     """Collect local content, RSS feeds, and Teams inbox scan before digest.
 
     The Teams inbox scan provides ground truth about what's actually unread
@@ -371,6 +371,17 @@ async def _pre_process_digest(config: dict) -> dict:
     from collectors.content import collect_content
     from collectors.feeds import collect_feeds
     from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
+    from collectors.transcripts.compressor import compress_existing_transcripts
+
+    # Phase 0: Compress any raw .txt transcripts before content collection
+    if client:
+        transcripts_dir = PROJECT_ROOT / "input" / "transcripts"
+        if transcripts_dir.exists() and list(transcripts_dir.glob("*.txt")):
+            tc_models = config.get("models", {})
+            compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
+            log.info("Phase 0: Compressing raw transcripts via GHCP SDK...")
+            compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
+            log.info(f"  Compressed {compressed_count} transcripts")
 
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)

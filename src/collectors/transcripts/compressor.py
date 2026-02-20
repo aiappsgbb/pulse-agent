@@ -6,6 +6,7 @@ Falls back to raw text if compression fails.
 """
 
 import asyncio
+from pathlib import Path
 
 from copilot import CopilotClient, PermissionRequest, PermissionRequestResult
 
@@ -117,3 +118,62 @@ async def compress_transcript(
                 await session.destroy()
             except Exception:
                 pass
+
+
+async def compress_existing_transcripts(
+    client: CopilotClient,
+    transcripts_dir: Path,
+    model: str = "claude-sonnet",
+) -> int:
+    """Batch-compress raw .txt transcripts that haven't been compressed yet.
+
+    Finds all .txt files in transcripts_dir, compresses each via SDK,
+    replaces with .md file, and deletes the raw .txt.
+
+    Args:
+        client: GHCP SDK client (already started)
+        transcripts_dir: Directory containing transcript files
+        model: Model to use for compression
+
+    Returns:
+        Number of transcripts compressed.
+    """
+    if not transcripts_dir.exists():
+        return 0
+
+    raw_files = sorted(transcripts_dir.glob("*.txt"))
+    if not raw_files:
+        return 0
+
+    log.info(f"  Found {len(raw_files)} raw transcripts to compress")
+    compressed_count = 0
+
+    for txt_path in raw_files:
+        # Check if compressed version already exists
+        md_path = txt_path.with_suffix(".md")
+        if md_path.exists():
+            log.info(f"  SKIP (already compressed): {txt_path.name}")
+            continue
+
+        raw_text = txt_path.read_text(encoding="utf-8")
+        meeting_name = txt_path.stem.split("_", 1)[-1].replace("-", " ").title()
+
+        compressed = await compress_transcript(client, raw_text, meeting_name, model=model)
+
+        if compressed:
+            # Save compressed .md with metadata header
+            date_part = txt_path.stem.split("_", 1)[0]
+            header = (
+                f"# {meeting_name}\n"
+                f"**Date**: {date_part} | "
+                f"**Original length**: {len(raw_text)} chars | "
+                f"**Compressed**: {len(compressed)} chars\n\n"
+            )
+            md_path.write_text(header + compressed, encoding="utf-8")
+            txt_path.unlink()
+            log.info(f"  Replaced {txt_path.name} -> {md_path.name}")
+            compressed_count += 1
+        else:
+            log.warning(f"  Could not compress {txt_path.name} — keeping raw")
+
+    return compressed_count
