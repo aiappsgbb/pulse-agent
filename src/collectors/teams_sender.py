@@ -363,8 +363,8 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
         log.info(f"    - {safe_encode(s.get('text', ''))}")
 
     # Step 5: Click the best suggestion
-    # Prefer exact name match that is NOT "(You)" (the sender's own account)
-    best_idx = 0
+    # ONLY select if the recipient name actually appears in the suggestion text.
+    # Never default to suggestion #0 — that sends to the wrong person.
     recipient_lower = recipient.lower()
     candidates = []
     for s in suggestions:
@@ -372,18 +372,32 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
         first_line = text.split("\n")[0]
         if recipient_lower in first_line:
             is_self = "(you)" in first_line
-            candidates.append((s["index"], is_self))
+            candidates.append((s["index"], is_self, s.get("text", "")))
 
-    if candidates:
-        # Prefer non-self matches; fall back to self if that's the only one
-        non_self = [idx for idx, is_self in candidates if not is_self]
-        best_idx = non_self[0] if non_self else candidates[0][0]
+    if not candidates:
+        top_names = [s.get("text", "").split("\n")[0] for s in suggestions[:5]]
+        return {
+            "success": False,
+            "detail": (
+                f"No match for '{recipient}' in suggestions. "
+                f"Top results: {', '.join(top_names)}"
+            ),
+        }
+
+    # Prefer non-self matches; fall back to self if that's the only one
+    non_self = [(idx, name) for idx, is_self, name in candidates if not is_self]
+    if non_self:
+        best_idx = non_self[0][0]
+        matched_name = non_self[0][1].split("\n")[0]
+    else:
+        best_idx = candidates[0][0]
+        matched_name = candidates[0][2].split("\n")[0]
 
     clicked = await page.evaluate(CLICK_SUGGESTION_JS, best_idx)
     if not clicked:
         return {"success": False, "detail": "Could not click on recipient suggestion"}
 
-    log.info(f"  Selected suggestion #{best_idx}")
+    log.info(f"  Selected: {safe_encode(matched_name)} (suggestion #{best_idx})")
     await page.wait_for_timeout(1500)
 
     # Step 6: Type the message

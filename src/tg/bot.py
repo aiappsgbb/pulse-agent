@@ -31,6 +31,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Mess
 from core.constants import OUTPUT_DIR
 from core.logging import log
 from tg.confirmations import has_pending_confirmation, resolve_confirmation
+from tg.pii_filter import scrub as scrub_pii
 
 
 def md_to_telegram_html(md_text: str) -> str:
@@ -118,7 +119,7 @@ class StreamingReply:
         """Edit the message with accumulated text so far."""
         if not self._message_id:
             return
-        text = "".join(self._buffer)
+        text = scrub_pii("".join(self._buffer))
         # Truncate preview to avoid Telegram limits (4096 chars)
         if len(text) > 3900:
             text = text[:3900] + "\n\n..."
@@ -134,7 +135,7 @@ class StreamingReply:
 
     async def finish(self):
         """Final edit with complete HTML-formatted text. Returns the full text."""
-        full_text = "".join(self._buffer)
+        full_text = scrub_pii("".join(self._buffer))
         if not self._message_id or not full_text:
             return full_text
 
@@ -725,6 +726,7 @@ class TelegramBot:
     async def _send(self, bot, chat_id: int, text: str, parse_mode=None,
                     reply_markup=None):
         """Send a single message, falling back to plain text on parse errors."""
+        text = scrub_pii(text)
         try:
             await bot.send_message(chat_id=chat_id, text=text,
                                    parse_mode=parse_mode,
