@@ -44,7 +44,7 @@ research:
 chat:
   model_key: chat
   working_dir: root
-  mcp_servers: [workiq, playwright]
+  mcp_servers: [workiq]  # Playwright MCP removed — browser actions use deterministic senders
   agents: [pulse-reader, m365-query]
   system_prompt: config/prompts/system/chat.md
   system_prompt_mode: replace

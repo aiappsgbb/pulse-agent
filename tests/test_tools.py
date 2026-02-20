@@ -18,6 +18,9 @@ from sdk.tools import (
     list_schedules_tool,
     cancel_schedule,
     search_local_files,
+    send_teams_message,
+    send_email_reply,
+    PENDING_ACTIONS_DIR,
 )
 
 
@@ -125,12 +128,12 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 9
+    assert len(tools) == 11
     names = {t.name for t in tools}
     assert names == {
         "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
         "schedule_task", "list_schedules", "cancel_schedule",
-        "search_local_files",
+        "search_local_files", "send_teams_message", "send_email_reply",
     }
 
 
@@ -245,3 +248,57 @@ async def test_search_local_files_context_lines(tmp_dir):
     text = result["textResultForLlm"]
     assert "line2" in text  # context before
     assert "line4" in text  # context after
+
+
+# --- send_teams_message ---
+
+
+async def test_send_teams_message_queues_action(tmp_dir):
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        result = await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Hello there",
+        }})
+    assert result["resultType"] == "success"
+    assert "queued" in result["textResultForLlm"].lower()
+    assert "Alice" in result["textResultForLlm"]
+
+    # Verify the action file was created
+    action_files = list(pending.glob("teams-send-*.json"))
+    assert len(action_files) == 1
+    data = json.loads(action_files[0].read_text())
+    assert data["type"] == "teams_send"
+    assert data["recipient"] == "Alice"
+    assert data["message"] == "Hello there"
+
+
+async def test_send_teams_message_with_chat_name(tmp_dir):
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        result = await send_teams_message.handler({"arguments": {
+            "recipient": "", "message": "Reply text",
+            "chat_name": "Project Discussion",
+        }})
+    assert "Project Discussion" in result["textResultForLlm"]
+    data = json.loads(list(pending.glob("*.json"))[0].read_text())
+    assert data["chat_name"] == "Project Discussion"
+
+
+# --- send_email_reply ---
+
+
+async def test_send_email_reply_queues_action(tmp_dir):
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        result = await send_email_reply.handler({"arguments": {
+            "search_query": "Bob budget review", "message": "Approved, thanks!",
+        }})
+    assert result["resultType"] == "success"
+    assert "queued" in result["textResultForLlm"].lower()
+
+    action_files = list(pending.glob("email-reply-*.json"))
+    assert len(action_files) == 1
+    data = json.loads(action_files[0].read_text())
+    assert data["type"] == "email_reply"
+    assert data["search_query"] == "Bob budget review"
+    assert data["message"] == "Approved, thanks!"

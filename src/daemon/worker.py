@@ -1,6 +1,7 @@
 """Job worker — processes jobs from the asyncio queue one at a time."""
 
 import asyncio
+import json
 
 from core.constants import OUTPUT_DIR
 from core.config import mark_task_completed
@@ -87,6 +88,8 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     # StreamingReply handles Telegram delivery when chat_id is set
                     await run_chat_query(client, config, prompt,
                                          telegram_app=telegram_app, chat_id=chat_id)
+                    # Process any browser actions the agent queued via tools
+                    await process_pending_actions(telegram_app, chat_id)
 
                 elif job_type == "research":
                     context = {"task": job}
@@ -114,6 +117,20 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     if chat_id:
                         await _post_job_notify(telegram_app, chat_id, job_type)
 
+                elif job_type == "teams_send":
+                    result = await _execute_teams_send(job)
+                    if chat_id:
+                        status = "Sent" if result.get("success") else "Failed"
+                        await _notify(telegram_app, chat_id,
+                                      f"Teams {status}: {result.get('detail', '')}")
+
+                elif job_type == "email_reply":
+                    result = await _execute_email_reply(job)
+                    if chat_id:
+                        status = "Sent" if result.get("success") else "Failed"
+                        await _notify(telegram_app, chat_id,
+                                      f"Email reply {status}: {result.get('detail', '')}")
+
                 else:
                     log.warning(f"  Unknown job type: {job_type}")
 
@@ -136,13 +153,95 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
         log.info(f"=== Job done: [{job_type}] {job_name} ===")
 
 
+async def _execute_teams_send(job: dict) -> dict:
+    """Execute a Teams message send using the deterministic Playwright sender."""
+    from collectors.teams_sender import send_teams_message, reply_to_chat
+
+    recipient = job.get("recipient", "")
+    message = job.get("message", "")
+    chat_name = job.get("chat_name", "")
+
+    if not message:
+        return {"success": False, "detail": "No message provided"}
+
+    if chat_name:
+        log.info(f"  Sending Teams reply to chat: {chat_name}")
+        return await reply_to_chat(chat_name, message)
+    elif recipient:
+        log.info(f"  Sending Teams message to: {recipient}")
+        return await send_teams_message(recipient, message)
+    else:
+        return {"success": False, "detail": "No recipient or chat_name provided"}
+
+
+async def _execute_email_reply(job: dict) -> dict:
+    """Execute an email reply using the deterministic Playwright sender."""
+    from collectors.outlook_sender import reply_to_email
+
+    search_query = job.get("search_query", "")
+    message = job.get("message", "")
+
+    if not message:
+        return {"success": False, "detail": "No message provided"}
+    if not search_query:
+        return {"success": False, "detail": "No search_query provided"}
+
+    log.info(f"  Replying to email matching: {search_query}")
+    return await reply_to_email(search_query, message)
+
+
+async def process_pending_actions(telegram_app, chat_id: int | None = None):
+    """Process any pending browser actions queued by SDK tools.
+
+    Called after each chat session completes. Picks up .json files from
+    .pending-actions/ and executes them via the deterministic senders.
+    """
+    from sdk.tools import PENDING_ACTIONS_DIR
+
+    if not PENDING_ACTIONS_DIR.exists():
+        return
+
+    action_files = sorted(PENDING_ACTIONS_DIR.glob("*.json"))
+    if not action_files:
+        return
+
+    log.info(f"Processing {len(action_files)} pending browser action(s)...")
+    for action_file in action_files:
+        try:
+            action = json.loads(action_file.read_text(encoding="utf-8"))
+            action_type = action.get("type", "")
+
+            if action_type == "teams_send":
+                result = await _execute_teams_send(action)
+            elif action_type == "email_reply":
+                result = await _execute_email_reply(action)
+            else:
+                log.warning(f"  Unknown action type: {action_type}")
+                result = {"success": False, "detail": f"Unknown action: {action_type}"}
+
+            # Notify via Telegram
+            notify_chat = chat_id
+            if notify_chat:
+                status = "Sent" if result.get("success") else "Failed"
+                detail = result.get("detail", "")
+                await _notify(telegram_app, notify_chat, f"{status}: {detail}")
+
+        except Exception as e:
+            log.error(f"  Pending action failed: {e}")
+        finally:
+            # Always remove the action file (processed or failed)
+            try:
+                action_file.unlink()
+            except Exception:
+                pass
+
+
 async def _post_job_notify(telegram_app, chat_id: int, job_type: str):
     """Send job-specific completion notification."""
     if job_type == "digest":
         from tg.bot import send_latest_digest
         await _notify(telegram_app, chat_id, "Digest complete:")
         await send_latest_digest(chat_id)
-        await _send_digest_actions(chat_id)
     elif job_type == "monitor":
         report = get_latest_monitoring_report()
         if report:
@@ -172,20 +271,6 @@ async def _send_triage_actions(chat_id: int):
         await send_triage_actions(chat_id, triage_data)
     except Exception:
         log.warning("Failed to send triage action buttons", exc_info=True)
-
-
-async def _send_digest_actions(chat_id: int):
-    """Send inline action buttons from the latest digest JSON."""
-    import json
-    digests = sorted(OUTPUT_DIR.glob("digests/*.json"), reverse=True)
-    if not digests:
-        return
-    try:
-        data = json.loads(digests[0].read_text(encoding="utf-8"))
-        from tg.bot import send_triage_actions
-        await send_triage_actions(chat_id, data)
-    except Exception:
-        log.warning("Failed to send digest action buttons", exc_info=True)
 
 
 def get_latest_monitoring_report() -> str | None:

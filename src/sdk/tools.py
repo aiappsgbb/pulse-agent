@@ -57,6 +57,17 @@ class CancelScheduleParams(BaseModel):
     id: str
 
 
+class SendTeamsMessageParams(BaseModel):
+    recipient: str  # person name to message
+    message: str
+    chat_name: str = ""  # if set, reply to this existing chat instead of 1:1
+
+
+class SendEmailReplyParams(BaseModel):
+    search_query: str  # sender name or subject to find the email
+    message: str
+
+
 class SearchLocalFilesParams(BaseModel):
     query: str
     file_pattern: str = "*.txt"  # glob pattern to filter files
@@ -282,6 +293,60 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
     return f"Found {len(results)} file(s) matching '{params.query}':\n\n" + "\n\n".join(results)
 
 
+# --- Browser action tools ---
+# These queue browser actions for the worker to execute.
+# The worker runs in the main async event loop where Playwright lives.
+
+PENDING_ACTIONS_DIR = OUTPUT_DIR / ".pending-actions"
+
+
+@define_tool(
+    name="send_teams_message",
+    description=(
+        "Send a message to someone on Microsoft Teams. Queues the action for "
+        "immediate execution via browser automation. The message will be sent "
+        "shortly and the user will receive a Telegram confirmation. "
+        "Use for 1:1 messages (set recipient) or replies to existing chats (set chat_name)."
+    ),
+)
+def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocation) -> str:
+    PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%H%M%S")
+    action_file = PENDING_ACTIONS_DIR / f"teams-send-{timestamp}.json"
+    action_data = {
+        "type": "teams_send",
+        "recipient": params.recipient,
+        "message": params.message,
+        "chat_name": params.chat_name or "",
+        "queued_at": datetime.now().isoformat(),
+    }
+    action_file.write_text(json.dumps(action_data), encoding="utf-8")
+    target = params.chat_name or params.recipient
+    return f"Teams message to {target} queued for delivery. User will receive confirmation via Telegram."
+
+
+@define_tool(
+    name="send_email_reply",
+    description=(
+        "Reply to an email in Outlook. Queues the action for immediate execution "
+        "via browser automation. Searches for the email by sender name or subject, "
+        "opens the thread, and sends the reply."
+    ),
+)
+def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -> str:
+    PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%H%M%S")
+    action_file = PENDING_ACTIONS_DIR / f"email-reply-{timestamp}.json"
+    action_data = {
+        "type": "email_reply",
+        "search_query": params.search_query,
+        "message": params.message,
+        "queued_at": datetime.now().isoformat(),
+    }
+    action_file.write_text(json.dumps(action_data), encoding="utf-8")
+    return f"Email reply for '{params.search_query}' queued for delivery. User will receive confirmation via Telegram."
+
+
 # --- Tool set builder ---
 
 def get_tools() -> list[Tool]:
@@ -289,5 +354,5 @@ def get_tools() -> list[Tool]:
     return [
         log_action, write_output, queue_task, dismiss_item, add_note,
         schedule_task, list_schedules_tool, cancel_schedule,
-        search_local_files,
+        search_local_files, send_teams_message, send_email_reply,
     ]

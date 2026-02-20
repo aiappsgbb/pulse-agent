@@ -286,7 +286,7 @@ class TelegramBot:
             log.warning(f"Telegram notify failed: {e}")
 
     async def send_latest_digest(self, chat_id: int):
-        """Send the most recent digest to a chat."""
+        """Send the most recent digest to a chat, with inline action buttons."""
         if self.app is None:
             return
         digests_dir = OUTPUT_DIR / "digests"
@@ -301,7 +301,47 @@ class TelegramBot:
 
         content = md_files[0].read_text(encoding="utf-8")
         formatted = md_to_telegram_html(content)
-        await self._send_chunked(self.app.bot, chat_id, formatted, ParseMode.HTML)
+
+        # Build inline keyboard from the corresponding digest JSON
+        markup = self._build_digest_keyboard(digests_dir)
+
+        await self._send_chunked(self.app.bot, chat_id, formatted, ParseMode.HTML,
+                                 reply_markup=markup)
+
+    def _build_digest_keyboard(self, digests_dir) -> InlineKeyboardMarkup | None:
+        """Build an InlineKeyboardMarkup from the latest digest JSON."""
+        import json as _json
+        json_files = sorted(digests_dir.glob("*.json"), reverse=True)
+        if not json_files:
+            return None
+        try:
+            data = _json.loads(json_files[0].read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+        items = data.get("items", [])
+        actionable = [i for i in items if i.get("suggested_actions")]
+        if not actionable:
+            return None
+
+        buttons = []
+        for item in actionable:
+            item_id = item.get("id", "unknown")
+            for i, action in enumerate(item.get("suggested_actions", [])):
+                label = action.get("label", "Action")[:30]
+                cb = f"action:{item_id}:{i}"
+                if len(cb) > 64:
+                    cb = f"action:{item_id[:50]}:{i}"
+                buttons.append([InlineKeyboardButton(label, callback_data=cb)])
+            # Dismiss button per item
+            dismiss_cb = f"dismiss:{item_id}"
+            if len(dismiss_cb) > 64:
+                dismiss_cb = f"dismiss:{item_id[:56]}"
+            buttons.append([InlineKeyboardButton(
+                f"Dismiss: {item.get('title', item_id)[:20]}", callback_data=dismiss_cb
+            )])
+
+        return InlineKeyboardMarkup(buttons) if buttons else None
 
     # --- Typing indicators ---
 
@@ -577,7 +617,7 @@ class TelegramBot:
             )
 
         elif data.startswith("send:"):
-            # User approved — queue the action based on action_type
+            # User approved — execute via deterministic senders (no LLM needed)
             parts = data.split(":")
             if len(parts) < 3:
                 return
@@ -597,25 +637,42 @@ class TelegramBot:
             action_type = draft_info.get("action_type", "draft_teams_reply")
             metadata = draft_info.get("metadata", "")
 
-            # Route to the right skill based on action_type
-            prompt, status_text = self._build_action_prompt(
-                action_type, target, draft, metadata
-            )
-
-            self.job_queue.put_nowait({
-                "type": "chat",
-                "prompt": prompt,
-                "_source": "telegram_action",
-                "_chat_id": chat_id,
-            })
-            self.start_typing(chat_id)
-
             await query.edit_message_reply_markup(reply_markup=None)
-            await self.app.bot.send_message(
-                chat_id=chat_id,
-                text=f"{html.escape(status_text)}",
-                parse_mode=ParseMode.HTML,
-            )
+
+            # Route to deterministic senders for Teams/email, keep chat for meetings
+            if action_type == "schedule_meeting":
+                # Meeting scheduling still needs LLM (Copilot Chat interaction)
+                prompt = f"Schedule a meeting: {metadata or draft}"
+                self.job_queue.put_nowait({
+                    "type": "chat",
+                    "prompt": prompt,
+                    "_source": "telegram_action",
+                    "_chat_id": chat_id,
+                })
+                self.start_typing(chat_id)
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text="Scheduling meeting via Copilot...",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                # Teams and email: queue direct execution (no SDK/LLM)
+                job_type = "email_reply" if action_type == "send_email_reply" else "teams_send"
+                self.job_queue.put_nowait({
+                    "type": job_type,
+                    "recipient": target,
+                    "message": draft,
+                    "search_query": target,
+                    "_source": "telegram_action",
+                    "_chat_id": chat_id,
+                })
+                self.start_typing(chat_id)
+                label = "Replying to email" if job_type == "email_reply" else "Sending Teams message"
+                await self.app.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"{label} to <b>{html.escape(target)}</b>...",
+                    parse_mode=ParseMode.HTML,
+                )
 
         elif data.startswith("cancel:"):
             await query.edit_message_reply_markup(reply_markup=None)
@@ -665,20 +722,31 @@ class TelegramBot:
 
     # --- Send helpers ---
 
-    async def _send(self, bot, chat_id: int, text: str, parse_mode=None):
+    async def _send(self, bot, chat_id: int, text: str, parse_mode=None,
+                    reply_markup=None):
         """Send a single message, falling back to plain text on parse errors."""
         try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            await bot.send_message(chat_id=chat_id, text=text,
+                                   parse_mode=parse_mode,
+                                   reply_markup=reply_markup)
         except Exception:
             if parse_mode is not None:
-                await bot.send_message(chat_id=chat_id, text=text)
+                await bot.send_message(chat_id=chat_id, text=text,
+                                       reply_markup=reply_markup)
             else:
                 raise
 
-    async def _send_chunked(self, bot, chat_id: int, text: str, parse_mode=None):
-        """Send text, splitting at natural boundaries if needed."""
-        for chunk in split_message(text):
-            await self._send(bot, chat_id, chunk, parse_mode)
+    async def _send_chunked(self, bot, chat_id: int, text: str, parse_mode=None,
+                            reply_markup=None):
+        """Send text, splitting at natural boundaries if needed.
+
+        If reply_markup is provided, it is attached to the last chunk only.
+        """
+        chunks = split_message(text)
+        for i, chunk in enumerate(chunks):
+            is_last = (i == len(chunks) - 1)
+            await self._send(bot, chat_id, chunk, parse_mode,
+                             reply_markup=reply_markup if is_last else None)
 
 
 # --- Module-level convenience functions for backward compatibility ---

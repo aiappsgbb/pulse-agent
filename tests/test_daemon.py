@@ -123,14 +123,13 @@ def test_check_missed_digest_no_dir_queues(tmp_dir):
     assert not queue.empty()
 
 
-# --- _send_digest_actions ---
+# --- _build_digest_keyboard (inline buttons on digest message) ---
 
 
-@pytest.mark.asyncio
-async def test_send_digest_actions_calls_triage_buttons(tmp_dir):
-    """_send_digest_actions loads digest JSON and sends action buttons."""
+def test_build_digest_keyboard_returns_markup(tmp_dir):
+    """_build_digest_keyboard builds InlineKeyboardMarkup from digest JSON."""
     import json
-    from unittest.mock import AsyncMock
+    from tg.bot import TelegramBot
 
     digest_data = {
         "date": "2026-02-20",
@@ -140,8 +139,9 @@ async def test_send_digest_actions_calls_triage_buttons(tmp_dir):
                 "type": "reply_needed",
                 "priority": "urgent",
                 "source": "Email from Esther",
+                "title": "QBE Foundry Resolution",
                 "suggested_actions": [
-                    {"label": "Reply", "draft": "Hi Esther", "target": "Esther"}
+                    {"label": "Reply to Esther", "draft": "Hi Esther", "target": "Esther"}
                 ],
             }
         ],
@@ -150,27 +150,42 @@ async def test_send_digest_actions_calls_triage_buttons(tmp_dir):
     digests_dir.mkdir()
     (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
 
-    mock_send = AsyncMock()
-    with patch("daemon.worker.OUTPUT_DIR", tmp_dir), \
-         patch("tg.bot.send_triage_actions", mock_send):
-        from daemon.worker import _send_digest_actions
-        await _send_digest_actions(12345)
+    bot = TelegramBot.__new__(TelegramBot)
+    markup = bot._build_digest_keyboard(digests_dir)
 
-    mock_send.assert_called_once()
-    call_args = mock_send.call_args
-    assert call_args[0][0] == 12345  # chat_id
-    assert call_args[0][1]["items"][0]["id"] == "reply-esther-qbe"
+    assert markup is not None
+    # Row 0: action button, Row 1: dismiss button
+    assert len(markup.inline_keyboard) == 2
+    assert markup.inline_keyboard[0][0].text == "Reply to Esther"
+    assert markup.inline_keyboard[0][0].callback_data == "action:reply-esther-qbe:0"
+    assert "dismiss:" in markup.inline_keyboard[1][0].callback_data
 
 
-@pytest.mark.asyncio
-async def test_send_digest_actions_no_json(tmp_dir):
-    """_send_digest_actions does nothing when no digest JSON exists."""
-    from unittest.mock import AsyncMock
+def test_build_digest_keyboard_no_json(tmp_dir):
+    """_build_digest_keyboard returns None when no digest JSON exists."""
+    from tg.bot import TelegramBot
 
-    mock_send = AsyncMock()
-    with patch("daemon.worker.OUTPUT_DIR", tmp_dir), \
-         patch("tg.bot.send_triage_actions", mock_send):
-        from daemon.worker import _send_digest_actions
-        await _send_digest_actions(12345)
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
 
-    mock_send.assert_not_called()
+    bot = TelegramBot.__new__(TelegramBot)
+    assert bot._build_digest_keyboard(digests_dir) is None
+
+
+def test_build_digest_keyboard_no_actions(tmp_dir):
+    """_build_digest_keyboard returns None when no items have suggested_actions."""
+    import json
+    from tg.bot import TelegramBot
+
+    digest_data = {
+        "date": "2026-02-20",
+        "items": [
+            {"id": "intel-foo", "type": "intel", "suggested_actions": []}
+        ],
+    }
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
+
+    bot = TelegramBot.__new__(TelegramBot)
+    assert bot._build_digest_keyboard(digests_dir) is None

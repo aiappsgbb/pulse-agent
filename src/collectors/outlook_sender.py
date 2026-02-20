@@ -1,0 +1,279 @@
+"""Reply to an email via Outlook Web Playwright automation.
+
+Deterministic script — no LLM involved. Uses the shared browser.
+Same pattern as outlook_inbox.py but for sending replies.
+
+Flow:
+1. Navigate to Outlook inbox
+2. Search for the email thread (by sender name or subject)
+3. Open the matching email
+4. Click Reply
+5. Type the reply message
+6. Click Send (or Ctrl+Enter)
+"""
+
+from core.logging import log, safe_encode
+
+
+# --- JS Snippets ---
+
+# Search for an email by typing in the Outlook search box
+FIND_SEARCH_BOX_JS = """
+() => {
+    // Outlook search box
+    let box = document.querySelector('input[aria-label*="Search" i]');
+    if (box) { box.focus(); box.click(); return 'found'; }
+
+    box = document.querySelector('[role="search"] input');
+    if (box) { box.focus(); box.click(); return 'found-role'; }
+
+    box = document.querySelector('#topSearchInput');
+    if (box) { box.focus(); box.click(); return 'found-id'; }
+
+    return null;
+}
+"""
+
+# Extract email search results
+EXTRACT_SEARCH_RESULTS_JS = """
+() => {
+    const results = [];
+    const items = document.querySelectorAll('[role="option"][data-convid], [role="listitem"]');
+    for (const item of items) {
+        const text = (item.innerText || '').trim();
+        if (text && text.length > 5) {
+            results.push({
+                text: text.substring(0, 300),
+                index: results.length,
+            });
+        }
+    }
+    return results;
+}
+"""
+
+# Click the Nth search result (0-indexed)
+CLICK_SEARCH_RESULT_JS = """
+(index) => {
+    const items = document.querySelectorAll('[role="option"][data-convid], [role="listitem"]');
+    if (index < items.length) {
+        items[index].click();
+        return true;
+    }
+    return false;
+}
+"""
+
+# Find and click the Reply button (not Reply All)
+CLICK_REPLY_JS = """
+() => {
+    // Try specific reply buttons
+    let btn = document.querySelector('button[aria-label="Reply" i]');
+    if (btn) { btn.click(); return 'clicked reply button'; }
+
+    btn = document.querySelector('button[title="Reply" i]');
+    if (btn) { btn.click(); return 'clicked reply title'; }
+
+    // Look for reply icon buttons
+    const buttons = document.querySelectorAll('button');
+    for (const b of buttons) {
+        const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').toLowerCase();
+        if (label === 'reply' || label === 'reply (ctrl+r)') {
+            b.click();
+            return 'clicked: ' + label;
+        }
+    }
+
+    return null;
+}
+"""
+
+# Find the reply compose area
+FIND_REPLY_COMPOSE_JS = """
+() => {
+    // Outlook reply compose — contenteditable div
+    let box = document.querySelector('[role="textbox"][aria-label*="Message body" i]');
+    if (box) return 'textbox-message-body';
+
+    box = document.querySelector('[aria-label*="Message body" i][contenteditable="true"]');
+    if (box) return 'contenteditable-message-body';
+
+    box = document.querySelector('div[contenteditable="true"][class*="draftEditor" i]');
+    if (box) return 'draft-editor';
+
+    // Generic contenteditable in compose area
+    box = document.querySelector(
+        '[class*="compose" i] [contenteditable="true"], ' +
+        '[class*="reply" i] [contenteditable="true"]'
+    );
+    if (box) return 'compose-area';
+
+    return null;
+}
+"""
+
+# Focus the reply compose area
+FOCUS_REPLY_COMPOSE_JS = """
+() => {
+    const selectors = [
+        '[role="textbox"][aria-label*="Message body" i]',
+        '[aria-label*="Message body" i][contenteditable="true"]',
+        'div[contenteditable="true"][class*="draftEditor" i]',
+        '[class*="compose" i] [contenteditable="true"]',
+        '[class*="reply" i] [contenteditable="true"]',
+    ];
+    for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el) {
+            el.focus();
+            el.click();
+            return true;
+        }
+    }
+    return false;
+}
+"""
+
+# Click the Send button
+CLICK_SEND_JS = """
+() => {
+    let btn = document.querySelector('button[aria-label="Send" i]');
+    if (btn) { btn.click(); return 'clicked send'; }
+
+    btn = document.querySelector('button[title="Send" i]');
+    if (btn) { btn.click(); return 'clicked send title'; }
+
+    // Look for send button by text content
+    const buttons = document.querySelectorAll('button');
+    for (const b of buttons) {
+        const text = (b.innerText || '').trim().toLowerCase();
+        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+        if (text === 'send' || label === 'send') {
+            b.click();
+            return 'clicked: ' + (text || label);
+        }
+    }
+    return null;
+}
+"""
+
+
+async def reply_to_email(search_query: str, message: str) -> dict:
+    """Reply to an email in Outlook Web.
+
+    Searches for the email by sender name or subject, opens it,
+    clicks Reply, types the message, and sends.
+
+    Args:
+        search_query: Sender name or subject line to search for
+        message: Reply text to send
+
+    Returns: {success: bool, detail: str}
+    """
+    from core.browser import get_browser_manager
+
+    browser_mgr = get_browser_manager()
+    if not browser_mgr or not browser_mgr.context:
+        return {"success": False, "detail": "No shared browser available"}
+
+    page = None
+    try:
+        page = await browser_mgr.new_page()
+        return await _do_reply(page, search_query, message)
+    except Exception as e:
+        log.error(f"Outlook reply failed: {e}")
+        return {"success": False, "detail": str(e)}
+    finally:
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+
+async def _do_reply(page, search_query: str, message: str) -> dict:
+    """Navigate to Outlook, find email, reply."""
+    log.info(f"  Replying to email matching: {safe_encode(search_query)}")
+
+    # Step 1: Navigate to Outlook
+    await page.goto("https://outlook.office.com/mail/inbox", wait_until="domcontentloaded")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+
+    await page.wait_for_timeout(3000)
+
+    # Check for login page
+    url = page.url.lower()
+    if "login" in url or "oauth" in url or "microsoftonline" in url:
+        return {"success": False, "detail": "Outlook session expired — login page detected"}
+
+    # Step 2: Search for the email
+    search_found = await page.evaluate(FIND_SEARCH_BOX_JS)
+    if not search_found:
+        return {"success": False, "detail": "Could not find Outlook search box"}
+
+    await page.keyboard.type(search_query, delay=30)
+    await page.keyboard.press("Enter")
+    await page.wait_for_timeout(3000)
+
+    # Step 3: Get search results
+    results = await page.evaluate(EXTRACT_SEARCH_RESULTS_JS)
+    if not results:
+        return {
+            "success": False,
+            "detail": f"No emails found matching '{search_query}'",
+        }
+
+    log.info(f"  Found {len(results)} email result(s)")
+
+    # Click the first result
+    clicked = await page.evaluate(f"({CLICK_SEARCH_RESULT_JS})(0)")
+    if not clicked:
+        return {"success": False, "detail": "Could not open email from search results"}
+
+    await page.wait_for_timeout(2000)
+
+    # Step 4: Click Reply
+    reply_result = await page.evaluate(CLICK_REPLY_JS)
+    if not reply_result:
+        # Try keyboard shortcut
+        await page.keyboard.press("Control+r")
+        await page.wait_for_timeout(1500)
+        reply_result = "keyboard Ctrl+R"
+
+    log.info(f"  Reply: {reply_result}")
+    await page.wait_for_timeout(1500)
+
+    # Step 5: Find and focus the reply compose area
+    compose_found = await page.evaluate(FIND_REPLY_COMPOSE_JS)
+    if not compose_found:
+        return {"success": False, "detail": "Could not find reply compose area"}
+
+    log.info(f"  Reply compose found: {compose_found}")
+    focused = await page.evaluate(FOCUS_REPLY_COMPOSE_JS)
+    if not focused:
+        return {"success": False, "detail": "Could not focus reply compose area"}
+
+    await page.wait_for_timeout(300)
+
+    # Step 6: Type the reply
+    await page.keyboard.type(message, delay=20)
+    await page.wait_for_timeout(500)
+
+    # Step 7: Send
+    send_result = await page.evaluate(CLICK_SEND_JS)
+    if not send_result:
+        # Fallback: Ctrl+Enter
+        await page.keyboard.press("Control+Enter")
+        send_result = "keyboard Ctrl+Enter"
+
+    log.info(f"  Send: {send_result}")
+    await page.wait_for_timeout(2000)
+
+    log.info(f"  Email reply sent for: {safe_encode(search_query)}")
+    return {
+        "success": True,
+        "detail": f"Reply sent to email matching '{search_query}'",
+    }
