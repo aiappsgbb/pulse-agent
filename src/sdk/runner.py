@@ -62,7 +62,7 @@ async def run_job(
     if pre_process == "collect_content_and_feeds":
         context.update(await _pre_process_digest(config, client))
     elif pre_process == "collect_feeds":
-        context.update(_pre_process_intel(config))
+        context.update(await _pre_process_intel(config, client))
     elif pre_process == "scan_teams_inbox":
         context.update(await _pre_process_monitor(config))
 
@@ -204,12 +204,17 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
 
         article_lines = []
         for a in articles:
-            article_lines.append(
+            why = a.get("why", "")
+            line = (
                 f"- [{a['source']}] **{a['title']}**\n"
                 f"  Link: {a['link']}\n"
-                f"  Published: {a['published']}\n"
-                f"  Summary: {a['summary']}"
+                f"  Published: {a['published']}"
             )
+            if why:
+                line += f"\n  Why it matters: {why}"
+            else:
+                line += f"\n  Summary: {a['summary']}"
+            article_lines.append(line)
         variables["articles"] = "\n\n".join(article_lines)
 
     elif mode == "monitor":
@@ -426,6 +431,16 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     articles = collect_feeds(config)
     if articles:
         log.info(f"  Collected {len(articles)} new articles")
+        # Pre-filter via SDK — only keep articles worth reading
+        if client:
+            from collectors.article_filter import filter_articles
+            intel_cfg = config.get("intelligence", {})
+            articles = await filter_articles(
+                client, articles,
+                topics=intel_cfg.get("topics"),
+                competitors=intel_cfg.get("competitors"),
+                model=config.get("models", {}).get("intel", "gpt-4.1"),
+            )
     else:
         log.info("  No new articles.")
 
@@ -478,15 +493,20 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
 
     content_block = "\n".join(content_sections)
 
-    # Build articles block — with filter instruction
+    # Build articles block — pre-filtered by SDK, each article has a "why it matters"
     articles_block = ""
     if articles:
-        article_lines = [f"- [{a['source']}] **{a['title']}** ({a['published']})" for a in articles]
+        article_lines = []
+        for a in articles:
+            why = a.get("why", "")
+            line = f"- [{a['source']}] **{a['title']}**"
+            if why:
+                line += f" — {why}"
+            article_lines.append(line)
         articles_block = (
-            f"\n## Part C — External Intel ({len(articles)} articles from RSS feeds)\n"
-            f"**FILTER**: Only include articles that directly name an active customer "
-            f"(Vodafone, Colt, QBE, Havas) or a competitor in a live deal. "
-            f"Generic AI/LLM news belongs in the separate intel mode — skip it here.\n\n"
+            f"\n## Part C — External Intel ({len(articles)} pre-filtered articles)\n"
+            f"These articles have already been filtered for relevance. Include any that "
+            f"affect active customers, competitive positioning, or upcoming conversations.\n\n"
             + "\n".join(article_lines) + "\n"
         )
 
@@ -500,8 +520,8 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     }
 
 
-def _pre_process_intel(config: dict) -> dict:
-    """Collect RSS feeds before intel agent call."""
+async def _pre_process_intel(config: dict, client: CopilotClient | None = None) -> dict:
+    """Collect RSS feeds and pre-filter via SDK before intel agent call."""
     from collectors.feeds import collect_feeds
 
     log.info("Phase 1: Fetching RSS feeds...")
@@ -511,5 +531,15 @@ def _pre_process_intel(config: dict) -> dict:
         log.info("  No new articles.")
     else:
         log.info(f"  Collected {len(articles)} new articles")
+        # Pre-filter via SDK
+        if client:
+            from collectors.article_filter import filter_articles
+            intel_cfg = config.get("intelligence", {})
+            articles = await filter_articles(
+                client, articles,
+                topics=intel_cfg.get("topics"),
+                competitors=intel_cfg.get("competitors"),
+                model=config.get("models", {}).get("intel", "gpt-4.1"),
+            )
 
     return {"articles": articles}

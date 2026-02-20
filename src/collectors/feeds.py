@@ -3,7 +3,6 @@
 import hashlib
 import re
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from time import mktime
 
 import feedparser
@@ -24,6 +23,7 @@ def collect_feeds(config: dict) -> list[dict]:
     feeds = intel_cfg.get("feeds", [])
     lookback_hours = intel_cfg.get("lookback_hours", 48)
     max_articles = intel_cfg.get("max_articles", 100)
+    per_feed_max = intel_cfg.get("per_feed_max", 20)
     state_file = PROJECT_ROOT / intel_cfg.get("state_file", "output/.intel-state.json")
 
     state = load_json_state(state_file, {"seen": {}})
@@ -34,6 +34,7 @@ def collect_feeds(config: dict) -> list[dict]:
     for feed_cfg in feeds:
         url = feed_cfg["url"]
         name = feed_cfg.get("name", url)
+        feed_limit = feed_cfg.get("max", per_feed_max)
         log.info(f"  Fetching: {name}...")
 
         try:
@@ -44,6 +45,9 @@ def collect_feeds(config: dict) -> list[dict]:
 
         count = 0
         for entry in feed.entries:
+            if count >= feed_limit:
+                break
+
             # Parse published date
             published = None
             if hasattr(entry, "published_parsed") and entry.published_parsed:

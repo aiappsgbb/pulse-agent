@@ -2,64 +2,91 @@
 
 Deterministic script — no LLM involved. Uses the shared browser.
 Returns structured data that gets injected into the monitor trigger prompt.
+
+DOM structure (verified Feb 2026):
+- Chat tree: [role="tree"] contains all chat categories + conversations
+- Categories (level 1): Copilot, Discover, Mentions, Saved, Important, Regular, Chats
+- Chat items (level 2): [role="treeitem"][data-item-type="chat"] with data-testid="list-item"
+- Unread indicator: badge elements ([class*="Badge"]) inside the treeitem
+- Text format: "chat name\\ntime\\nsender: preview" (newline-separated)
 """
 
-import asyncio
+import re
 from datetime import datetime
 
 from core.logging import log, safe_encode
 
 
-# JS snippet to extract chat list items from Teams
-# Teams renders chat items as list items with unread indicators (bold text, badge counts)
+# JS snippet to extract chat items from Teams tree view
 EXTRACT_CHAT_LIST_JS = """
 () => {
     const results = [];
 
-    // Teams new UI: chat list items are in [role="listitem"] or similar containers
-    // Look for the chat list panel first
+    // Teams 2026 UI: chats are treeitem elements with data-item-type="chat"
     const chatItems = document.querySelectorAll(
-        '[data-tid="chat-list-item"], [role="listitem"][data-is-focusable="true"]'
+        '[role="treeitem"][data-item-type="chat"]'
     );
 
     for (const item of chatItems) {
         const text = item.innerText || '';
         if (!text.trim()) continue;
 
-        // Check for unread indicator: bold class, unread badge, or data attribute
-        const isUnread = !!(
-            item.querySelector('[class*="unread"], [class*="Unread"], [data-testid*="unread"]') ||
-            item.querySelector('.fui-Badge') ||
-            item.getAttribute('aria-label')?.includes('unread') ||
-            item.classList.toString().includes('unread')
+        // Unread: badge elements inside the treeitem
+        const hasBadge = !!(
+            item.querySelector('[class*="Badge"], [class*="badge"]') ||
+            item.querySelector('[class*="unread"], [class*="Unread"]') ||
+            item.getAttribute('aria-label')?.toLowerCase().includes('unread')
         );
 
-        // Extract the text lines — typically: name, last message preview, time
+        // Parse text: lines are name, time, sender: preview (varies)
         const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
 
-        if (lines.length >= 1) {
-            results.push({
-                name: lines[0] || '',
-                preview: lines.length > 1 ? lines.slice(1, -1).join(' ') : '',
-                time: lines.length > 1 ? lines[lines.length - 1] : '',
-                unread: isUnread,
-                raw: text.substring(0, 200),
-            });
+        // Extract name (first line), time, and preview
+        let name = lines[0] || '';
+        let time = '';
+        let preview = '';
+
+        // Look for time pattern (e.g. "1:53 PM", "11:35 AM", "Yesterday")
+        for (let i = 1; i < lines.length; i++) {
+            if (/^\\d{1,2}:\\d{2}\\s*(AM|PM)$/i.test(lines[i]) ||
+                /^(Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i.test(lines[i]) ||
+                /^\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(lines[i])) {
+                time = lines[i];
+            } else if (lines[i].includes(':') && !time) {
+                // Could be "sender: message" - check if previous line was time
+                preview = lines[i];
+            } else if (i === lines.length - 1 && !time) {
+                time = lines[i];
+            } else if (!preview) {
+                preview = lines[i];
+            }
         }
+
+        // If preview still empty, try last non-time line
+        if (!preview && lines.length > 2) {
+            preview = lines[lines.length - 1];
+            if (preview === time) preview = lines.length > 3 ? lines[lines.length - 2] : '';
+        }
+
+        results.push({
+            name: name.substring(0, 200),
+            preview: preview.substring(0, 300),
+            time: time,
+            unread: hasBadge,
+            raw: text.substring(0, 300),
+        });
     }
     return results;
 }
 """
 
-# Fallback: just get all visible text from the chat pane
+# Fallback: raw text from the tree
 EXTRACT_CHAT_PANE_TEXT_JS = """
 () => {
-    // Try to find the chat list container
-    const pane = document.querySelector('[role="tree"], [data-tid="chat-pane"], [aria-label*="Chat"]');
-    if (pane) return pane.innerText.substring(0, 5000);
+    const tree = document.querySelector('[role="tree"]');
+    if (tree) return tree.innerText.substring(0, 5000);
 
-    // Broader fallback: get the left panel text
-    const nav = document.querySelector('nav, [role="navigation"]');
+    const nav = document.querySelector('[role="navigation"]');
     if (nav) return nav.innerText.substring(0, 5000);
 
     return '';
@@ -103,28 +130,22 @@ async def _do_scan(page) -> list[dict]:
     # Navigate to Teams Chat view
     await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
     try:
-        await page.wait_for_load_state("networkidle", timeout=7000)
+        await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:
-        await page.wait_for_timeout(1200)
+        pass
 
-    # Click Chat in the left sidebar
-    try:
-        chat_btn = page.get_by_role("button", name="Chat")
-        await chat_btn.click()
-        await page.wait_for_timeout(600)
-    except Exception:
-        log.warning("Could not click Chat button — may already be on chat view")
-
-    # Wait for chat list to render
+    # Wait for the chat tree to render (treeitems with chat data)
     try:
         await page.wait_for_selector(
-            '[data-tid="chat-list-item"], [role="listitem"][data-is-focusable="true"]',
-            timeout=6000,
+            '[role="treeitem"][data-item-type="chat"]',
+            timeout=10000,
         )
+        await page.wait_for_timeout(2000)
     except Exception:
-        await page.wait_for_timeout(1200)
+        log.warning("  Chat tree items not found — Teams may still be loading")
+        await page.wait_for_timeout(3000)
 
-    # Try structured extraction first
+    # Try structured extraction
     items = await page.evaluate(EXTRACT_CHAT_LIST_JS)
 
     if items:
@@ -140,7 +161,6 @@ async def _do_scan(page) -> list[dict]:
 
     if raw_text:
         log.info(f"  Got {len(raw_text)} chars of chat pane text")
-        # Return as a single "raw" item for the LLM to parse
         return [{
             "name": "Teams Chat Pane (raw)",
             "preview": raw_text[:3000],

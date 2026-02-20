@@ -41,7 +41,7 @@ transcripts:
 
 intelligence:
   lookback_hours: 48
-  max_articles: 100
+  max_articles: 200
   state_file: "output/.intel-state.json"
   topics:
     - "Azure OpenAI"
@@ -77,12 +77,40 @@ intelligence:
       name: "TechCrunch AI"
     - url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
       name: "The Verge AI"
+    - url: "https://arstechnica.com/ai/feed/"
+      name: "Ars Technica AI"
+    - url: "https://www.wired.com/feed/tag/ai/latest/rss"
+      name: "Wired AI"
     # Vendor blogs
     - url: "https://blog.google/technology/ai/rss/"
       name: "Google AI Blog"
-    # Community
+    - url: "https://openai.com/blog/rss.xml"
+      name: "OpenAI Blog"
+    - url: "https://aws.amazon.com/blogs/machine-learning/feed/"
+      name: "AWS Machine Learning Blog"
+    - url: "https://blogs.microsoft.com/ai/feed/"
+      name: "Microsoft AI Blog"
+    # Reddit (native RSS — high signal, fast-moving)
+    - url: "https://www.reddit.com/r/MachineLearning/hot/.rss?limit=25"
+      name: "Reddit — r/MachineLearning"
+    - url: "https://www.reddit.com/r/LocalLLaMA/hot/.rss?limit=25"
+      name: "Reddit — r/LocalLLaMA"
+    - url: "https://www.reddit.com/r/artificial/hot/.rss?limit=25"
+      name: "Reddit — r/artificial"
+    - url: "https://www.reddit.com/r/singularity/hot/.rss?limit=25"
+      name: "Reddit — r/singularity"
+    # ArXiv (research papers — early signal for what becomes products)
+    - url: "https://rss.arxiv.org/rss/cs.AI"
+      name: "ArXiv — Artificial Intelligence"
+    - url: "https://rss.arxiv.org/rss/cs.CL"
+      name: "ArXiv — Computation and Language"
+    # Community (Hacker News — split for better coverage)
     - url: "https://hnrss.org/newest?q=LLM+OR+AI+agents+OR+GPT+OR+Claude&count=30"
-      name: "Hacker News — AI"
+      name: "Hacker News — AI/LLM"
+    - url: "https://hnrss.org/newest?q=Microsoft+Copilot+OR+Azure+OpenAI+OR+GitHub+Copilot&count=20"
+      name: "Hacker News — Microsoft AI"
+    - url: "https://hnrss.org/newest?q=Anthropic+OR+OpenAI+OR+Gemini+OR+Llama&count=20"
+      name: "Hacker News — AI Companies"
 
 onedrive:
   sync_enabled: true
