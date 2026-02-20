@@ -1,7 +1,9 @@
-"""Tests for collectors/ modules — extractors, feeds, transcript parsing."""
+"""Tests for collectors/ modules — extractors, feeds, transcript parsing, compressor."""
 
+import asyncio
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -84,3 +86,82 @@ def test_clean_transcript_only_speakers():
     ]
     result = clean_transcript(entries)
     assert result is None
+
+
+# --- transcript compressor ---
+
+from collectors.transcripts.compressor import compress_transcript
+
+
+async def test_compress_transcript_short_text_skipped():
+    """Transcripts under 500 chars are too short to compress."""
+    client = MagicMock()
+    result = await compress_transcript(client, "short text", "Test Meeting")
+    assert result is None
+    client.create_session.assert_not_called()
+
+
+async def test_compress_transcript_empty_text_skipped():
+    """Empty transcript returns None."""
+    client = MagicMock()
+    result = await compress_transcript(client, "", "Test Meeting")
+    assert result is None
+
+
+async def test_compress_transcript_success():
+    """Successful compression returns compressed text."""
+    raw = "A" * 1000  # long enough to trigger compression
+
+    # Mock SDK session + event handler
+    mock_session = AsyncMock()
+
+    # Simulate the event handler being set up and completing
+    def fake_on(handler):
+        # When session.on(handler) is called, set up the handler to complete
+        handler.final_text = "## Meeting Summary\n- Discussed topic A"
+        handler.done.set()
+        return MagicMock()  # unsub function
+
+    mock_session.on = fake_on
+
+    client = MagicMock()
+    client.create_session = AsyncMock(return_value=mock_session)
+
+    result = await compress_transcript(client, raw, "Test Meeting")
+    assert result is not None
+    assert "Meeting Summary" in result
+    client.create_session.assert_called_once()
+    mock_session.destroy.assert_called_once()
+
+
+async def test_compress_transcript_sdk_failure():
+    """SDK session creation failure returns None (fallback to raw)."""
+    client = MagicMock()
+    client.create_session = AsyncMock(side_effect=Exception("CLI not available"))
+
+    raw = "A" * 1000
+    result = await compress_transcript(client, raw, "Test Meeting")
+    assert result is None
+
+
+async def test_compress_transcript_timeout():
+    """Compression timeout returns None."""
+    raw = "A" * 1000
+
+    mock_session = AsyncMock()
+
+    def fake_on(handler):
+        # Don't set handler.done — simulates timeout
+        return MagicMock()
+
+    mock_session.on = fake_on
+
+    client = MagicMock()
+    client.create_session = AsyncMock(return_value=mock_session)
+
+    # Patch the timeout to be very short
+    with patch("collectors.transcripts.compressor.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        result = await compress_transcript(client, raw, "Test Meeting")
+
+    assert result is None
+    mock_session.destroy.assert_called_once()

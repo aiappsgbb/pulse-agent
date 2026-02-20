@@ -10,6 +10,7 @@ from core.constants import INPUT_DIR
 from core.logging import safe_encode
 from collectors.transcripts.navigation import return_to_calendar, find_meeting_buttons
 from collectors.transcripts.extraction import extract_meeting_transcript
+from collectors.transcripts.compressor import compress_transcript
 
 
 def _print(text: str):
@@ -157,10 +158,32 @@ async def run_transcript_collection(client, config: dict):
                 transcript, opened_recap = await extract_meeting_transcript(page, iframe, meeting_name)
                 if transcript:
                     date_str = datetime.now().strftime("%Y-%m-%d")
-                    filename = f"{date_str}_{slug}.txt"
-                    filepath = output_dir / filename
-                    filepath.write_text(transcript, encoding="utf-8")
-                    _print(f"  SAVED: {filename} ({len(transcript)} chars)")
+
+                    # Compress via GHCP SDK if client is available
+                    compressed = None
+                    if client:
+                        tc_models = config.get("models", {})
+                        compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
+                        compressed = await compress_transcript(client, transcript, meeting_name, model=compress_model)
+
+                    if compressed:
+                        filename = f"{date_str}_{slug}.md"
+                        filepath = output_dir / filename
+                        # Prepend metadata header
+                        header = (
+                            f"# {meeting_name}\n"
+                            f"**Date**: {date_str} | "
+                            f"**Original length**: {len(transcript)} chars | "
+                            f"**Compressed**: {len(compressed)} chars\n\n"
+                        )
+                        filepath.write_text(header + compressed, encoding="utf-8")
+                        _print(f"  SAVED (compressed): {filename} ({len(compressed)} chars from {len(transcript)})")
+                    else:
+                        filename = f"{date_str}_{slug}.txt"
+                        filepath = output_dir / filename
+                        filepath.write_text(transcript, encoding="utf-8")
+                        _print(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
+
                     collected += 1
                 else:
                     _print(f"  No transcript available for this meeting.")
