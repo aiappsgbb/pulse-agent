@@ -198,13 +198,79 @@ def test_find_action_draft_missing_item(tmp_dir):
 
 
 def test_find_action_draft_no_json(tmp_dir):
-    """Returns None when no monitoring JSON exists."""
+    """Returns None when no monitoring or digest JSON exists."""
     from unittest.mock import patch
 
     bot = TelegramBot.__new__(TelegramBot)
     with patch("tg.bot.OUTPUT_DIR", tmp_dir):
         result = bot._find_action_draft("any-id", 0)
     assert result is None
+
+
+def test_find_action_draft_from_digest_json(tmp_dir):
+    """_find_action_draft falls back to digest JSON when monitoring has no match."""
+    from unittest.mock import patch
+    import json
+
+    digest_data = {
+        "date": "2026-02-20",
+        "items": [
+            {
+                "id": "reply-esther-qbe",
+                "type": "reply_needed",
+                "priority": "urgent",
+                "source": "Email from Esther",
+                "title": "QBE Foundry",
+                "summary": "Needs prioritization",
+                "suggested_actions": [
+                    {
+                        "label": "Reply to Esther",
+                        "action_type": "send_email_reply",
+                        "draft": "Hi Esther, I'll prioritize this today.",
+                        "target": "Esther Dediashvili",
+                    }
+                ],
+            }
+        ],
+    }
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
+
+    bot = TelegramBot.__new__(TelegramBot)
+    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+        result = bot._find_action_draft("reply-esther-qbe", 0)
+    assert result is not None
+    assert result["draft"] == "Hi Esther, I'll prioritize this today."
+    assert result["action_type"] == "send_email_reply"
+
+
+def test_find_action_draft_monitoring_takes_precedence(tmp_dir):
+    """Monitoring JSON is searched before digest JSON."""
+    from unittest.mock import patch
+    import json
+
+    monitoring_data = {
+        "items": [{
+            "id": "reply-bob",
+            "suggested_actions": [{"draft": "from monitoring", "target": "Bob"}],
+        }],
+    }
+    digest_data = {
+        "items": [{
+            "id": "reply-bob",
+            "suggested_actions": [{"draft": "from digest", "target": "Bob"}],
+        }],
+    }
+    (tmp_dir / "monitoring-2026-02-20T10-00.json").write_text(json.dumps(monitoring_data), encoding="utf-8")
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
+
+    bot = TelegramBot.__new__(TelegramBot)
+    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+        result = bot._find_action_draft("reply-bob", 0)
+    assert result["draft"] == "from monitoring"
 
 
 # --- _build_action_prompt ---

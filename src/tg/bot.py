@@ -646,19 +646,21 @@ class TelegramBot:
             )
 
     def _find_action_draft(self, item_id: str, action_idx: int) -> dict | None:
-        """Find a specific action draft from the latest triage JSON."""
-        reports = sorted(OUTPUT_DIR.glob("monitoring-*.json"), reverse=True)
-        if not reports:
-            return None
-        try:
-            data = json.loads(reports[0].read_text(encoding="utf-8"))
-            for item in data.get("items", []):
-                if item.get("id") == item_id:
-                    actions = item.get("suggested_actions", [])
-                    if 0 <= action_idx < len(actions):
-                        return actions[action_idx]
-        except Exception:
-            log.warning("Failed to load triage JSON for action draft", exc_info=True)
+        """Find a specific action draft from the latest triage or digest JSON."""
+        # Search monitoring JSONs first, then digest JSONs
+        for pattern in ("monitoring-*.json", "digests/*.json"):
+            reports = sorted(OUTPUT_DIR.glob(pattern), reverse=True)
+            if not reports:
+                continue
+            try:
+                data = json.loads(reports[0].read_text(encoding="utf-8"))
+                for item in data.get("items", []):
+                    if item.get("id") == item_id:
+                        actions = item.get("suggested_actions", [])
+                        if 0 <= action_idx < len(actions):
+                            return actions[action_idx]
+            except Exception:
+                log.warning(f"Failed to load {pattern} for action draft", exc_info=True)
         return None
 
     # --- Send helpers ---

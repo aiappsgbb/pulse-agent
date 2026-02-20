@@ -86,6 +86,16 @@ Before adding ANY item to the digest, ask yourself:
 
 **PRIORITIZE FORWARD-LOOKING CONTENT. The digest should answer: "What do I need to do next?" not "What happened last week?"**
 
+**AGING / URGENCY CUES**: For every outstanding item, calculate how long it's been waiting and include it. Use relative time like "(2 days ago — no reply yet)" or "(sent 18h ago)". This creates urgency. Don't just state the date — make the reader feel the clock ticking.
+
+**NEW vs CARRIED FORWARD**: Start the digest with a 1-line summary: "X new items, Y carried forward, Z resolved since last digest." If there's no previous digest, just say "X items found." This lets the reader immediately know what changed.
+
+**CALENDAR FILTERING**: Strip personal recurring events (commutes, childcare, breaks, lunch, personal blocks) from the calendar section. Only surface meetings that need prep, have conflicts, or are new/unusual. The user already knows their own routine — don't recite it back.
+
+**UNVERIFIED ITEMS**: When you can't verify whether an action was completed (e.g., WorkIQ unavailable and item isn't in inbox scans), tag it as "(unverified — may already be handled)" instead of presenting it as definitely outstanding. Don't drop it, but be honest about your confidence level.
+
+**EMPTY SECTIONS**: If a section has no items (Pulse Signals, External Intel, Key Takeaways, Risks), omit the section heading entirely. Do NOT write "None" or "Nothing drafted." Sections that consistently say "none" train the reader to skip the digest.
+
 The ONLY things that belong in the digest (in priority order):
 1. **Upcoming meetings this week** that need prep or have important context — what's on my calendar, who's attending, what should I prepare
 2. **Unreplied messages** — Teams chats, emails where someone is waiting for MY response
@@ -126,7 +136,18 @@ You MUST produce TWO outputs using `write_output`:
       "title": "<short title — max 80 chars>",
       "summary": "<1-2 sentence description of what needs attention>",
       "date": "<YYYY-MM-DD when this originated>",
-      "status": "outstanding"
+      "age": "<human-readable age, e.g. '2 days', '18 hours', 'today'>",
+      "verified": true,
+      "status": "outstanding",
+      "suggested_actions": [
+        {
+          "label": "<short button label, max 30 chars>",
+          "action_type": "draft_teams_reply|send_email_reply|schedule_meeting|dismiss",
+          "draft": "<the actual draft message text if this is a reply action, or empty string>",
+          "target": "<person name or channel>",
+          "metadata": "<optional: for schedule_meeting, include attendees + duration + subject>"
+        }
+      ]
     }
   ],
   "signals": [
@@ -139,37 +160,62 @@ You MUST produce TWO outputs using `write_output`:
   ],
   "stats": {
     "sources_processed": "<number>",
-    "items_outstanding": "<number>"
+    "items_outstanding": "<number>",
+    "items_new": "<number of items not in previous digest>",
+    "items_carried_forward": "<number of items kept from previous digest>",
+    "items_resolved": "<number of previous items dropped as resolved>"
   }
 }
 ```
 
 Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g. `reply-esther-enact-user-base`, `action-vodafone-voice-quality`, `intel-github-copilot-sdk-cli`.
 
+Rules for `age` and `verified`:
+- `age`: human-readable relative time from the item's origin date to today. E.g. "2 days", "18 hours", "today", "5 days".
+- `verified`: `true` if you confirmed the item's status via WorkIQ or inbox scans. `false` if you're carrying it forward without confirmation (e.g., WorkIQ unavailable and item not found in scans).
+
+Rules for `suggested_actions`:
+- Every `reply_needed` item MUST have at least one `suggested_actions` entry with a drafted reply
+- `action_item` items SHOULD have a suggested action if a concrete next step is obvious (e.g., reply, schedule meeting)
+- The `draft` field should be a complete, ready-to-send message (not a placeholder)
+- Use context from local files and WorkIQ to make drafts specific and informed
+- Keep drafts concise and professional — match the sender's tone
+- `fyi` and `intel` items don't need `suggested_actions` — leave the array empty or omit it
+- Action types: `draft_teams_reply` (Teams reply), `send_email_reply` (Outlook reply), `schedule_meeting` (M365 Copilot scheduling — put attendees, duration, subject in `metadata`)
+
 ### Output 2: Human-readable Markdown — `digests/{{date}}.md`
 
 ```markdown
 # Digest — {{date}}
 
-## Coming Up (meetings & deadlines this week)
-- **{day, time}**: {meeting title} — {who's attending} — {what to prep}
+{X new items, Y carried forward, Z resolved since last digest.}
+{If WorkIQ unavailable or scans failed, state data source caveat here.}
+
+## Coming Up
+- **{day, time}**: {meeting title} — {what to prep if known}
 - **{deadline}**: {what's due} — {current status}
+(Only non-routine meetings. No personal blocks, recurring commutes, childcare, etc.)
 
 ## Still Outstanding
-- **[REPLY]** {sender} — {subject} — {what they need} ({date})
-- **[ACTION]** {what} — {deadline} — {context}
+- **[URGENT REPLY]** {sender} — {subject} — {what they need} *({N days/hours ago — no reply yet})*
+- **[REPLY]** {sender} — {subject} — {what they need} *({aging})*
+- **[ACTION]** {what} — {deadline} — {context} *({aging})* {if unverified: "(unverified — may already be handled)"}
 - **[DECISION]** {what needs deciding} — {by when}
 
-## Key Takeaways (only if they affect what you do next)
-- {1-line meeting insight or decision that matters}
+## Key Takeaways
+(OMIT this section if empty. Only include if a meeting decision changes what you do next.)
+- {1-line insight}
 
-## External Intel (only if directly relevant to your deals/customers — omit section if nothing qualifies)
-- **[Company]** — what happened — why it matters to YOUR work specifically
+## External Intel
+(OMIT this section if nothing directly relevant to active deals/customers.)
+- **[Company]** — what happened — why it matters to YOUR work
 
 ## Risks
+(OMIT this section if empty.)
 - {unresolved risk with specific customer/deal name}
 
 ## Pulse Signals
+(OMIT this section if nothing qualifies. Do NOT write "None drafted.")
 - **[Type]** {customer/topic} — {1-line summary} → `pulse-signals/YYYY-MM-DD-slug.md`
 ```
 

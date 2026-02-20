@@ -142,6 +142,7 @@ async def _post_job_notify(telegram_app, chat_id: int, job_type: str):
         from tg.bot import send_latest_digest
         await _notify(telegram_app, chat_id, "Digest complete:")
         await send_latest_digest(chat_id)
+        await _send_digest_actions(chat_id)
     elif job_type == "monitor":
         report = get_latest_monitoring_report()
         if report:
@@ -171,6 +172,20 @@ async def _send_triage_actions(chat_id: int):
         await send_triage_actions(chat_id, triage_data)
     except Exception:
         log.warning("Failed to send triage action buttons", exc_info=True)
+
+
+async def _send_digest_actions(chat_id: int):
+    """Send inline action buttons from the latest digest JSON."""
+    import json
+    digests = sorted(OUTPUT_DIR.glob("digests/*.json"), reverse=True)
+    if not digests:
+        return
+    try:
+        data = json.loads(digests[0].read_text(encoding="utf-8"))
+        from tg.bot import send_triage_actions
+        await send_triage_actions(chat_id, data)
+    except Exception:
+        log.warning("Failed to send digest action buttons", exc_info=True)
 
 
 def get_latest_monitoring_report() -> str | None:
