@@ -20,6 +20,7 @@ from sdk.tools import (
     search_local_files,
     send_teams_message,
     send_email_reply,
+    send_task_to_agent,
     PENDING_ACTIONS_DIR,
 )
 
@@ -128,12 +129,13 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 11
+    assert len(tools) == 12
     names = {t.name for t in tools}
     assert names == {
         "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
         "schedule_task", "list_schedules", "cancel_schedule",
         "search_local_files", "send_teams_message", "send_email_reply",
+        "send_task_to_agent",
     }
 
 
@@ -302,3 +304,113 @@ async def test_send_email_reply_queues_action(tmp_dir):
     assert data["type"] == "email_reply"
     assert data["search_query"] == "Bob budget review"
     assert data["message"] == "Approved, thanks!"
+
+
+# --- send_task_to_agent ---
+
+
+async def test_send_task_to_agent_success(tmp_dir):
+    (tmp_dir / "alice-onedrive").mkdir()
+    team_config = {
+        "team": [
+            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice-onedrive")},
+        ],
+        "user": {"name": "Artur Zielinski"},
+        "onedrive": {"path": str(tmp_dir / "my-onedrive")},
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "alice",
+            "task": "What do you know about Vodafone?",
+            "kind": "question",
+        }})
+    assert result["resultType"] == "success"
+    assert "Alice Test" in result["textResultForLlm"]
+    assert "Request ID" in result["textResultForLlm"]
+
+    # Verify YAML was written to alice's Jobs folder
+    jobs_dir = tmp_dir / "alice-onedrive" / "Jobs"
+    yaml_files = list(jobs_dir.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    data = yaml.safe_load(yaml_files[0].read_text())
+    assert data["type"] == "agent_request"
+    assert data["kind"] == "question"
+    assert data["from"] == "Artur Zielinski"
+    assert data["reply_to"]  # non-empty
+    assert data["request_id"]  # UUID present
+    assert "Vodafone" in data["task"]
+
+
+async def test_send_task_to_agent_unknown_agent(tmp_dir):
+    team_config = {
+        "team": [
+            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
+        ],
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "nobody",
+            "task": "Hello?",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+    assert "not found" in result["textResultForLlm"]
+    assert "alice" in result["textResultForLlm"]
+
+
+async def test_send_task_to_agent_no_team_config(tmp_dir):
+    with patch("core.config.load_config", return_value={"team": []}):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "anyone",
+            "task": "Hello",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+    assert "not found" in result["textResultForLlm"]
+
+
+async def test_send_task_to_agent_path_not_accessible(tmp_dir):
+    team_config = {
+        "team": [
+            {"name": "Alice", "alias": "alice", "agent_path": str(tmp_dir / "nonexistent-path")},
+        ],
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "alice",
+            "task": "Hello",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+    assert "not accessible" in result["textResultForLlm"]
+
+
+async def test_send_task_to_agent_case_insensitive(tmp_dir):
+    (tmp_dir / "alice").mkdir()
+    team_config = {
+        "team": [
+            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
+        ],
+        "user": {"name": "Artur"},
+        "onedrive": {"path": str(tmp_dir)},
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "Alice",
+            "task": "Test case insensitivity",
+        }})
+    assert result["resultType"] == "success"
+
+
+async def test_send_task_to_agent_match_by_name(tmp_dir):
+    (tmp_dir / "alice").mkdir()
+    team_config = {
+        "team": [
+            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
+        ],
+        "user": {"name": "Artur"},
+        "onedrive": {"path": str(tmp_dir)},
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "alice test",
+            "task": "Test name matching",
+        }})
+    assert result["resultType"] == "success"

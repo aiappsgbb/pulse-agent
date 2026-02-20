@@ -43,7 +43,17 @@ async def main():
         action="store_true",
         help="Run a single cycle then exit (no loop)",
     )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to standing-instructions YAML (default: config/standing-instructions.yaml). Also settable via PULSE_CONFIG env var.",
+    )
     args = parser.parse_args()
+
+    # Set config override before anything calls load_config()
+    if args.config:
+        import os
+        os.environ["PULSE_CONFIG"] = args.config
 
     run_id = new_run_id()
     setup_logging(run_id=run_id)

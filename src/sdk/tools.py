@@ -68,6 +68,14 @@ class SendEmailReplyParams(BaseModel):
     message: str
 
 
+class SendTaskToAgentParams(BaseModel):
+    agent: str  # alias or name from team directory
+    task: str  # what to ask/request
+    kind: str = "question"  # question, research, intel, review
+    priority: str = "normal"
+    description: str = ""
+
+
 class SearchLocalFilesParams(BaseModel):
     query: str
     file_pattern: str = "*.txt"  # glob pattern to filter files
@@ -232,6 +240,91 @@ def cancel_schedule(params: CancelScheduleParams, invocation: ToolInvocation) ->
     return f"Schedule '{params.id}' not found."
 
 
+# --- Inter-agent communication ---
+
+@define_tool(
+    name="send_task_to_agent",
+    description=(
+        "Send a task or question to another team member's Pulse Agent. "
+        "The task is delivered via their shared OneDrive folder. "
+        "Their agent will process it and send back a response. "
+        "Use 'agent' to specify the team member (alias from team directory). "
+        "Use 'kind' to specify the type: question, research, intel, or review."
+    ),
+)
+def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation) -> str:
+    import uuid
+    import yaml
+    from core.config import load_config
+
+    config = load_config()
+
+    # Look up agent in team directory
+    team = config.get("team", [])
+    agent_entry = None
+    for member in team:
+        if member.get("alias", "").lower() == params.agent.lower():
+            agent_entry = member
+            break
+        if member.get("name", "").lower() == params.agent.lower():
+            agent_entry = member
+            break
+
+    if not agent_entry:
+        available = ", ".join(m.get("alias", m.get("name", "?")) for m in team)
+        return f"ERROR: Agent '{params.agent}' not found in team directory. Available: {available}"
+
+    agent_path = Path(agent_entry["agent_path"])
+    jobs_dir = agent_path / "Jobs"
+
+    if not agent_path.exists():
+        return (
+            f"ERROR: Path for agent '{params.agent}' not accessible: {agent_path}. "
+            f"Is their OneDrive folder shared and synced on this machine?"
+        )
+
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build reply_to path (this agent's own incoming jobs folder)
+    onedrive_path = Path(config.get("onedrive", {}).get("path", ""))
+    reply_to = str(onedrive_path / "Jobs") if onedrive_path and str(onedrive_path) != "." else ""
+
+    # Build this agent's identity
+    user_cfg = config.get("user", {})
+    from_name = user_cfg.get("name", "Unknown")
+    from_alias = from_name.lower().split()[0] if from_name else "unknown"
+
+    request_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    import re
+    slug = re.sub(r"[^a-z0-9-]", "", params.task.lower().replace(" ", "-"))[:40]
+
+    task_data = {
+        "type": "agent_request",
+        "kind": params.kind,
+        "task": params.task,
+        "description": params.description or params.task,
+        "from": from_name,
+        "from_alias": from_alias,
+        "reply_to": reply_to,
+        "request_id": request_id,
+        "priority": params.priority,
+        "created_at": timestamp,
+    }
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    task_file = jobs_dir / f"{date_str}-from-{from_alias}-{slug}.yaml"
+
+    with open(task_file, "w") as f:
+        yaml.dump(task_data, f, default_flow_style=False)
+
+    return (
+        f"Task sent to {agent_entry['name']} ({params.kind}): {params.task[:80]}\n"
+        f"Request ID: {request_id}\n"
+        f"Written to: {task_file}"
+    )
+
+
 # --- Local file search ---
 
 @define_tool(
@@ -355,4 +448,5 @@ def get_tools() -> list[Tool]:
         log_action, write_output, queue_task, dismiss_item, add_note,
         schedule_task, list_schedules_tool, cancel_schedule,
         search_local_files, send_teams_message, send_email_reply,
+        send_task_to_agent,
     ]

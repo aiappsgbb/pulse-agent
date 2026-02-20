@@ -140,6 +140,14 @@ onedrive:
   sync_enabled: true
   path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse"
 
+team:
+  - name: "Agent Alpha"
+    alias: "alpha"
+    agent_path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse-Team/agent-alpha"
+  - name: "Agent Beta"
+    alias: "beta"
+    agent_path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse-Team/agent-beta"
+
 telegram:
   enabled: true
   bot_token: "$TELEGRAM_BOT_TOKEN"

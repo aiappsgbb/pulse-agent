@@ -1,4 +1,4 @@
-"""Tests for daemon/ modules — heartbeat utilities, sync."""
+"""Tests for daemon/ modules — heartbeat utilities, sync, worker helpers."""
 
 import asyncio
 import tempfile
@@ -7,11 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from daemon.heartbeat import parse_interval, is_office_hours, check_missed_digest
+from daemon.worker import _write_agent_response
 
 
 # --- parse_interval ---
@@ -189,3 +191,59 @@ def test_build_digest_keyboard_no_actions(tmp_dir):
 
     bot = TelegramBot.__new__(TelegramBot)
     assert bot._build_digest_keyboard(digests_dir) is None
+
+
+# --- _write_agent_response ---
+
+
+def test_write_agent_response_creates_yaml(tmp_dir):
+    """Response YAML is written to reply_to path with correct fields."""
+    reply_dir = tmp_dir / "reply-jobs"
+    reply_dir.mkdir()
+
+    config = {"user": {"name": "Esther Barthel"}}
+    job = {
+        "type": "agent_request",
+        "task": "What about Vodafone?",
+        "from": "Artur Zielinski",
+        "reply_to": str(reply_dir),
+        "request_id": "abc-12345678",
+    }
+
+    _write_agent_response(config, job, "Vodafone deal is progressing well.")
+
+    yaml_files = list(reply_dir.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    data = yaml.safe_load(yaml_files[0].read_text())
+    assert data["type"] == "agent_response"
+    assert data["kind"] == "response"
+    assert data["request_id"] == "abc-12345678"
+    assert data["from"] == "Esther Barthel"
+    assert "Vodafone" in data["result"]
+    assert data["original_task"] == "What about Vodafone?"
+
+
+def test_write_agent_response_no_reply_to(tmp_dir):
+    """No crash and no file written when reply_to is empty."""
+    config = {"user": {"name": "Esther"}}
+    job = {"type": "agent_request", "task": "Test", "reply_to": ""}
+
+    _write_agent_response(config, job, "Result")
+    # Nothing should be written anywhere
+    assert not list(tmp_dir.glob("**/*.yaml"))
+
+
+def test_write_agent_response_creates_reply_dir(tmp_dir):
+    """reply_to directory is created if it does not exist."""
+    reply_dir = tmp_dir / "new-reply-dir"
+    config = {"user": {"name": "Esther"}}
+    job = {
+        "type": "agent_request",
+        "task": "Test",
+        "reply_to": str(reply_dir),
+        "request_id": "xyz-987",
+    }
+
+    _write_agent_response(config, job, "Answer here.")
+    assert reply_dir.exists()
+    assert len(list(reply_dir.glob("*.yaml"))) == 1

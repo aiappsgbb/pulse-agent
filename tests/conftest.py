@@ -46,4 +46,10 @@ def sample_config():
             "feeds": [],
         },
         "telegram": {"allowed_users": [12345]},
+        "user": {"name": "Test User"},
+        "onedrive": {"path": "/tmp/test-onedrive"},
+        "team": [
+            {"name": "Alice Test", "alias": "alice", "agent_path": "/tmp/alice-pulse"},
+            {"name": "Bob Test", "alias": "bob", "agent_path": "/tmp/bob-pulse"},
+        ],
     }

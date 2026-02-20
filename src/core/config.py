@@ -41,6 +41,12 @@ def validate_config(config: dict) -> list[str]:
     if not allowed:
         warnings.append("telegram.allowed_users is empty — anyone can interact with the bot")
 
+    for member in config.get("team", []):
+        if not member.get("alias"):
+            warnings.append(f"Team member '{member.get('name', '?')}' missing 'alias'")
+        if not member.get("agent_path"):
+            warnings.append(f"Team member '{member.get('alias', '?')}' missing 'agent_path'")
+
     return warnings
 
 
@@ -48,8 +54,11 @@ def load_config() -> dict:
     """Load standing instructions from YAML config.
 
     Expands environment variables and validates required fields.
+    Uses PULSE_CONFIG env var if set, otherwise defaults to
+    config/standing-instructions.yaml.
     """
-    config_path = CONFIG_DIR / "standing-instructions.yaml"
+    override = os.environ.get("PULSE_CONFIG")
+    config_path = Path(override) if override else CONFIG_DIR / "standing-instructions.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 

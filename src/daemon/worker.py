@@ -2,6 +2,10 @@
 
 import asyncio
 import json
+from datetime import datetime
+from pathlib import Path
+
+import yaml
 
 from core.constants import OUTPUT_DIR
 from core.config import mark_task_completed
@@ -116,6 +120,37 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                         mark_task_completed(job)
                     if chat_id:
                         await _post_job_notify(telegram_app, chat_id, job_type)
+
+                elif job_type == "agent_request":
+                    result_text = await _handle_agent_request(
+                        client, config, job, telegram_app, chat_id
+                    )
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    _write_agent_response(config, job, result_text)
+                    if chat_id:
+                        from_name = job.get("from", "Unknown agent")
+                        await _notify(telegram_app, chat_id,
+                                      f"Processed request from {from_name}: {job_name}")
+
+                elif job_type == "agent_response":
+                    from_name = job.get("from", "Unknown")
+                    original_task = job.get("original_task", "")
+                    result_text = job.get("result", "No content in response.")
+                    log.info(f"  Agent response from {from_name} (req: {job.get('request_id', '?')[:8]})")
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    notify_id = chat_id
+                    if not notify_id:
+                        from tg.bot import get_proactive_chat_id
+                        notify_id = get_proactive_chat_id()
+                    if notify_id:
+                        notification = (
+                            f"Response from {from_name}'s agent:\n\n"
+                            f"Re: {original_task[:100]}\n\n"
+                            f"{result_text}"
+                        )
+                        await _notify(telegram_app, notify_id, notification)
 
                 elif job_type == "teams_send":
                     result = await _execute_teams_send(job)
@@ -274,6 +309,82 @@ async def _send_triage_actions(chat_id: int):
         await send_triage_actions(chat_id, triage_data)
     except Exception:
         log.warning("Failed to send triage action buttons", exc_info=True)
+
+
+async def _handle_agent_request(client, config: dict, job: dict,
+                                 telegram_app, chat_id: int | None) -> str:
+    """Process an incoming agent_request — runs a chat query to answer."""
+    from sdk.runner import run_job
+
+    task_text = job.get("task", "")
+    from_name = job.get("from", "Unknown")
+    kind = job.get("kind", "question")
+
+    log.info(f"  Agent request from {from_name} ({kind}): {task_text[:80]}...")
+
+    if chat_id:
+        await _notify(telegram_app, chat_id,
+                      f"Incoming request from {from_name}: {task_text[:100]}")
+
+    if kind == "research":
+        context = {"task": job}
+        result = await run_job(client, config, "research", context=context,
+                               telegram_app=telegram_app, chat_id=chat_id)
+    else:
+        prompt = (
+            f"A colleague ({from_name}) sent this request to your agent:\n\n"
+            f"**Request ({kind}):** {task_text}\n\n"
+            f"Search your local files (transcripts, documents, emails) for relevant "
+            f"context and provide a thorough answer. Include specific details from "
+            f"meetings and documents if available."
+        )
+        result = await run_chat_query(client, config, prompt,
+                                       telegram_app=telegram_app, chat_id=chat_id)
+
+    return result or "No response generated."
+
+
+def _write_agent_response(config: dict, original_job: dict, result_text: str):
+    """Write a response YAML to the requesting agent's reply_to path."""
+    reply_to = original_job.get("reply_to", "")
+    if not reply_to:
+        log.warning("  Agent request has no reply_to — cannot send response")
+        return
+
+    reply_dir = Path(reply_to)
+    if not reply_dir.exists():
+        try:
+            reply_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            log.error(f"  Cannot create reply_to path: {e}")
+            return
+
+    user_cfg = config.get("user", {})
+    from_name = user_cfg.get("name", "Unknown")
+    from_alias = from_name.lower().split()[0] if from_name else "unknown"
+
+    request_id = original_job.get("request_id", "unknown")
+    timestamp = datetime.now().isoformat()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    slug = request_id[:8]
+
+    response_data = {
+        "type": "agent_response",
+        "kind": "response",
+        "request_id": request_id,
+        "from": from_name,
+        "from_alias": from_alias,
+        "original_task": original_job.get("task", "")[:200],
+        "result": result_text,
+        "created_at": timestamp,
+    }
+
+    response_file = reply_dir / f"{date_str}-response-{from_alias}-{slug}.yaml"
+
+    with open(response_file, "w") as f:
+        yaml.dump(response_data, f, default_flow_style=False)
+
+    log.info(f"  Response written to: {response_file}")
 
 
 def get_latest_monitoring_report() -> str | None:
