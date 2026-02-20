@@ -81,16 +81,14 @@ async def main():
     log.info(f"Connected. State: {client.get_state()}")
 
     # Start shared browser (single Edge instance for all Playwright consumers)
+    # Uses dedicated daemon profile (pulse-daemon-profile) to avoid conflicts
+    # with the user's Edge or Claude Code's Playwright MCP server.
     from core.browser import BrowserManager
-    from pathlib import Path
-    playwright_cfg = config.get("transcripts", {}).get("playwright", {})
-    default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
-    user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
-    browser = BrowserManager(user_data_dir)
+    browser = BrowserManager()
     try:
         await browser.start()
     except Exception as e:
-        log.warning(f"Shared browser failed to start: {e} — Playwright will launch per-session", exc_info=True)
+        log.warning(f"Shared browser failed to start: {e} — browser scans will be unavailable")
         browser = None
 
     # --once --mode X: run a single stage and exit (dev/debugging)

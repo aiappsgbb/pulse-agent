@@ -1,17 +1,18 @@
 """Shared browser manager — single Edge instance for all Playwright consumers.
 
-Avoids user-data-dir profile locking by launching ONE browser with
---remote-debugging-port, then sharing it via CDP endpoint.
+Resilient startup: tries CDP connect first (reuse surviving browser from a
+previous crash), then fresh launch with a dedicated daemon profile.
 
-- Direct Python code (transcripts) uses the context/page objects directly.
+- Direct Python code (transcripts, inbox scans) uses context/page objects.
 - MCP Playwright servers (SDK sessions) connect via --cdp-endpoint.
 """
 
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 
-from playwright.async_api import async_playwright, BrowserContext, Page
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 log = logging.getLogger("pulse")
 
@@ -19,6 +20,7 @@ log = logging.getLogger("pulse")
 _manager: "BrowserManager | None" = None
 
 CDP_PORT = 9222
+DAEMON_PROFILE = "pulse-daemon-profile"
 
 
 def get_browser_manager() -> "BrowserManager | None":
@@ -26,43 +28,126 @@ def get_browser_manager() -> "BrowserManager | None":
     return _manager
 
 
-class BrowserManager:
-    """Single shared Edge browser instance for all Playwright consumers."""
+def _default_profile_dir() -> str:
+    """Default user-data-dir for the daemon's dedicated Edge profile."""
+    return str(Path.home() / "AppData/Local/ms-playwright" / DAEMON_PROFILE)
 
-    def __init__(self, user_data_dir: str, headless: bool = True):
-        self._user_data_dir = user_data_dir
-        self._headless = headless
+
+def _is_cdp_alive(port: int = CDP_PORT) -> bool:
+    """Quick check if something is listening on the CDP port."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except (ConnectionRefusedError, OSError, TimeoutError):
+        return False
+
+
+def _kill_orphan_edge(user_data_dir: str):
+    """Kill Edge processes that hold a stale lock on our profile directory.
+
+    Only kills processes whose command line includes our specific profile path,
+    not the user's normal Edge browser.
+    """
+    try:
+        # Use WMIC to find Edge processes with our profile in the command line
+        result = subprocess.run(
+            ["wmic", "process", "where",
+             f"name='msedge.exe' and commandline like '%{DAEMON_PROFILE}%'",
+             "get", "processid"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pid = int(line)
+                log.info(f"Killing orphan Edge process {pid} (held {DAEMON_PROFILE} profile)")
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=5)
+    except Exception as e:
+        log.debug(f"Orphan cleanup failed (non-fatal): {e}")
+
+
+class BrowserManager:
+    """Single shared Edge browser instance for all Playwright consumers.
+
+    Startup strategy:
+    1. Check if CDP port is already responding (previous daemon's browser survived)
+       → connect via CDP, reuse it
+    2. If not, launch fresh Edge with dedicated profile + remote debugging port
+    3. If launch fails (profile locked), kill orphan Edge processes and retry once
+    """
+
+    def __init__(self, user_data_dir: str | None = None):
+        self._user_data_dir = user_data_dir or _default_profile_dir()
         self._playwright = None
         self._context: BrowserContext | None = None
+        self._browser: Browser | None = None
+        self._connected_via_cdp = False
 
     @property
     def cdp_endpoint(self) -> str:
         """CDP endpoint URL for MCP Playwright server to connect to."""
-        return f"http://localhost:{CDP_PORT}"
+        return f"http://127.0.0.1:{CDP_PORT}"
 
     @property
     def context(self) -> BrowserContext | None:
         return self._context
 
     async def start(self):
-        """Launch Edge with persistent profile + remote debugging port."""
+        """Start the shared browser — connect to existing or launch new."""
         global _manager
 
         self._playwright = await async_playwright().__aenter__()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            self._user_data_dir,
-            channel="msedge",
-            headless=self._headless,
-            viewport={"width": 1280, "height": 900},
-            args=[f"--remote-debugging-port={CDP_PORT}"],
-        )
 
-        # Close any restored pages from a previous session
-        for page in self._context.pages[1:]:
-            await page.close()
+        # Strategy 1: Reuse a surviving browser from a previous daemon run
+        if _is_cdp_alive():
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(
+                    f"http://127.0.0.1:{CDP_PORT}"
+                )
+                contexts = self._browser.contexts
+                self._context = contexts[0] if contexts else await self._browser.new_context(
+                    viewport={"width": 1280, "height": 900}
+                )
+                self._connected_via_cdp = True
+                _manager = self
+                log.info(f"Connected to existing browser via CDP :{CDP_PORT}")
+                return
+            except Exception as e:
+                log.debug(f"CDP connect failed: {e} — will launch fresh")
+                self._browser = None
 
+        # Strategy 2: Launch fresh Edge with dedicated daemon profile
+        await self._launch_fresh()
         _manager = self
-        log.info(f"Shared browser started (profile: {self._user_data_dir}, CDP: :{CDP_PORT})")
+
+    async def _launch_fresh(self, retry: bool = True):
+        """Launch Edge with persistent profile. On lock failure, kill orphans and retry once."""
+        try:
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                self._user_data_dir,
+                channel="msedge",
+                headless=True,
+                viewport={"width": 1280, "height": 900},
+                args=[f"--remote-debugging-port={CDP_PORT}"],
+            )
+            self._connected_via_cdp = False
+
+            # Close any restored pages from a previous session
+            for page in self._context.pages[1:]:
+                await page.close()
+
+            log.info(f"Shared browser started (profile: {self._user_data_dir}, CDP: :{CDP_PORT})")
+
+        except Exception as e:
+            if not retry:
+                raise
+
+            log.warning(f"Browser launch failed: {e} — attempting orphan cleanup")
+            _kill_orphan_edge(self._user_data_dir)
+            await asyncio.sleep(2)  # Give OS time to release locks
+            await self._launch_fresh(retry=False)
 
     async def new_page(self) -> Page:
         """Create a new page in the shared browser context."""
@@ -74,7 +159,15 @@ class BrowserManager:
         """Close the browser cleanly."""
         global _manager
 
-        if self._context:
+        if self._connected_via_cdp and self._browser:
+            # Don't close the browser itself — just disconnect
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+            self._context = None
+        elif self._context:
             try:
                 await self._context.close()
             except Exception as e:

@@ -55,9 +55,8 @@ def playwright_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPL
         )
 
     # Fallback: launch own browser (CLI --once mode, no shared browser)
-    playwright_cfg = config.get("transcripts", {}).get("playwright", {})
-    default_data_dir = str(Path.home() / "AppData/Local/ms-playwright/mcp-msedge-profile")
-    user_data_dir = playwright_cfg.get("user_data_dir", default_data_dir)
+    from core.browser import _default_profile_dir
+    user_data_dir = _default_profile_dir()
     return MCPLocalServerConfig(
         type="local",
         command="npx",
