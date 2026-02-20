@@ -4,9 +4,17 @@ Run a 30-minute triage cycle NOW. Focus on the LAST 60 MINUTES only — not the 
 
 {{teams_inbox}}
 
+## Outlook Inbox Scan (from Playwright — real-time)
+
+{{outlook_inbox_block}}
+
+## Today's Calendar (from Playwright — real-time)
+
+{{calendar_block}}
+
 ## Your Task
 
-Priority order: Teams messages first (from scan above + WorkIQ), then emails, then upcoming meetings.
+Priority order: Teams messages first (from scan above + WorkIQ), then emails (cross-reference with Outlook scan above), then upcoming meetings (cross-reference with Calendar scan above).
 
 ### Step 0: Search Local Context
 Before triaging, use `search_local_files` to look up any names or topics from the Teams inbox scan in your local transcripts. This gives you meeting context about what was recently discussed with each person.
@@ -20,12 +28,16 @@ For EACH unread Teams message from the scan above:
 5. If yes: draft a specific suggested reply based on the context you found
 
 ### Step 2: Check Emails
-Ask WorkIQ: "Show me emails in the last 60 minutes where I am in the TO field (not CC) and someone is asking ME to do something or reply."
+Start with the Outlook Inbox Scan above — this shows what's ACTUALLY unread right now.
+Then ask WorkIQ: "Show me emails in the last 60 minutes where I am in the TO field (not CC) and someone is asking ME to do something or reply."
+Cross-reference: if the Outlook scan shows an unread email, it's real. If WorkIQ mentions an email not in the scan, verify before including.
 
 For each result, query for sender context and suggest an action.
 
 ### Step 3: Upcoming Meetings
-Ask WorkIQ: "What meetings do I have in the next 2 hours? Any prep needed?"
+Start with the Calendar scan above — this shows today's actual schedule.
+Then ask WorkIQ: "What meetings do I have in the next 2 hours? Any prep needed?"
+Use both sources — the calendar scan has times and organizers, WorkIQ may have agenda details.
 
 Make at least 5 separate WorkIQ queries. Write the report to monitoring-YYYY-MM-DDTHH-MM.md.
 

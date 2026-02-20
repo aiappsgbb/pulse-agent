@@ -12,11 +12,18 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 {{content_sections}}
 {{articles_block}}
 
-## Part B — Teams Inbox Scan (GROUND TRUTH — live Playwright scan of your actual Teams)
+## Part B — Inbox Scans (GROUND TRUTH — live Playwright scans)
 
-This data comes from a real-time browser scan of your Teams chat list. It shows what is ACTUALLY unread right now.
+These come from real-time browser scans. They show what is ACTUALLY unread right now.
 
+### Teams Inbox
 {{teams_inbox_block}}
+
+### Outlook Inbox
+{{outlook_inbox_block}}
+
+### Today's Calendar
+{{calendar_block}}
 
 ## WorkIQ Queries
 
@@ -33,11 +40,11 @@ Ask WorkIQ: "Which of my recent emails and Teams messages have I already replied
 
 ### IF WORKIQ FAILS:
 If ANY WorkIQ query returns an error (e.g. "Failed to create conversation"), you MUST:
-1. **Use the Teams Inbox Scan (Part B above) as your primary source of truth** for Teams messages
-2. **DO NOT blindly carry forward items from the previous digest** — if a person does NOT appear as unread in the Teams inbox scan, assume you've already replied and DROP that item
-3. State clearly in the digest: "WorkIQ unavailable — verified via Teams inbox scan only. Email status unverified."
-4. Only keep carry-forward items that are CORROBORATED by the Teams inbox scan (the person still shows as unread)
-5. For email-sourced items: keep only if <3 days old. Older email items without WorkIQ verification = DROP with note.
+1. **Use the Inbox Scans (Part B above) as your primary source of truth** — Teams scan for chats, Outlook scan for emails, Calendar scan for meetings
+2. **DO NOT blindly carry forward items from the previous digest** — if a person does NOT appear as unread in the Teams or Outlook inbox scans, assume you've already replied and DROP that item
+3. State clearly in the digest: "WorkIQ unavailable — verified via browser inbox scans only."
+4. Only keep carry-forward items that are CORROBORATED by the inbox scans (the person still shows as unread in Teams or Outlook)
+5. For email-sourced items: check the Outlook scan first. If the sender appears as unread, keep. If not in the Outlook scan and >3 days old, DROP with note.
 
 ### Step 4: MERGE with Known Outstanding Items
 - For each **Known Outstanding Item** from the previous digest:

@@ -182,6 +182,12 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         # Teams inbox scan (ground truth for unread messages)
         variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
 
+        # Outlook inbox scan
+        variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
+
+        # Calendar scan
+        variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
+
     elif mode == "intel":
         variables["date"] = date_str
         articles = context.get("articles", [])
@@ -208,6 +214,8 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
 
     elif mode == "monitor":
         variables["teams_inbox"] = context.get("teams_inbox", "No Teams inbox data available.")
+        variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
+        variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
 
     elif mode == "research":
         task = context.get("task", {})
@@ -345,13 +353,15 @@ def _validate_digest_json(date_str: str):
 
 
 async def _pre_process_monitor(config: dict) -> dict:
-    """Scan Teams inbox for unread messages before monitor agent call."""
+    """Scan Teams inbox, Outlook inbox, and calendar before monitor agent call."""
     from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
+    from collectors.outlook_inbox import scan_outlook_inbox, format_outlook_for_prompt
+    from collectors.calendar import scan_calendar, format_calendar_for_prompt
+
+    scan_time = datetime.now().strftime("%H:%M:%S")
 
     log.info("Phase 0: Scanning Teams inbox for unread messages...")
     items = await scan_teams_inbox(config)
-    scan_time = datetime.now().strftime("%H:%M:%S")
-
     if items:
         log.info(f"  Found {len(items)} unread Teams messages (scanned at {scan_time})")
     else:
@@ -359,7 +369,21 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     formatted = format_inbox_for_prompt(items)
     formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
-    return {"teams_inbox": formatted}
+
+    log.info("Phase 0b: Scanning Outlook inbox for unread emails...")
+    outlook_items = await scan_outlook_inbox(config)
+    outlook_block = format_outlook_for_prompt(outlook_items)
+    outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+
+    log.info("Phase 0c: Scanning calendar for today's events...")
+    cal_events = await scan_calendar(config)
+    calendar_block = format_calendar_for_prompt(cal_events)
+
+    return {
+        "teams_inbox": formatted,
+        "outlook_inbox_block": outlook_block,
+        "calendar_block": calendar_block,
+    }
 
 
 async def _pre_process_digest(config: dict, client=None) -> dict:
@@ -371,6 +395,8 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     from collectors.content import collect_content
     from collectors.feeds import collect_feeds
     from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
+    from collectors.outlook_inbox import scan_outlook_inbox, format_outlook_for_prompt
+    from collectors.calendar import scan_calendar, format_calendar_for_prompt
     from collectors.transcripts.compressor import compress_existing_transcripts
 
     # Phase 0: Compress any raw .txt transcripts before content collection
@@ -411,6 +437,21 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     else:
         log.info(f"  Teams inbox: no unread messages (scanned at {scan_time})")
 
+    log.info("\nPhase 1d: Scanning Outlook inbox for unread emails...")
+    outlook_items = await scan_outlook_inbox(config)
+    outlook_block = format_outlook_for_prompt(outlook_items)
+    outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+    if outlook_items:
+        log.info(f"  Outlook inbox: {len(outlook_items)} unread (scanned at {scan_time})")
+    else:
+        log.info(f"  Outlook inbox: no unread emails (scanned at {scan_time})")
+
+    log.info("\nPhase 1e: Scanning calendar for today's events...")
+    cal_events = await scan_calendar(config)
+    calendar_block = format_calendar_for_prompt(cal_events)
+    active_count = len([e for e in cal_events if not e.get("is_declined")])
+    log.info(f"  Calendar: {active_count} active events today")
+
     # Build content block
     by_type: dict[str, list[dict]] = {}
     for item in items:
@@ -442,6 +483,8 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         "articles_block": articles_block,
         "articles": articles,
         "teams_inbox_block": teams_inbox_block,
+        "outlook_inbox_block": outlook_block,
+        "calendar_block": calendar_block,
     }
 
 

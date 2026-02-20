@@ -190,16 +190,75 @@ def test_trigger_variables_research():
 
 async def test_pre_process_monitor_with_items():
     mock_items = [{"name": "Alice", "preview": "Hey", "time": "3pm", "unread": True}]
-    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=mock_items) as mock_scan, \
-         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="## 1 Unread") as mock_fmt:
+    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=mock_items), \
+         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="## 1 Unread"), \
+         patch("collectors.outlook_inbox.scan_outlook_inbox", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.outlook_inbox.format_outlook_for_prompt", return_value="No unread emails"), \
+         patch("collectors.calendar.scan_calendar", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.calendar.format_calendar_for_prompt", return_value="No events"):
         result = await _pre_process_monitor({})
     assert "## 1 Unread" in result["teams_inbox"]
     assert "*(Scanned at" in result["teams_inbox"]
+    assert "outlook_inbox_block" in result
+    assert "calendar_block" in result
 
 
 async def test_pre_process_monitor_empty():
-    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=[]) as mock_scan, \
-         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="No unread") as mock_fmt:
+    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="No unread"), \
+         patch("collectors.outlook_inbox.scan_outlook_inbox", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.outlook_inbox.format_outlook_for_prompt", return_value="No unread emails"), \
+         patch("collectors.calendar.scan_calendar", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.calendar.format_calendar_for_prompt", return_value="No events"):
         result = await _pre_process_monitor({})
     assert "No unread" in result["teams_inbox"]
     assert "*(Scanned at" in result["teams_inbox"]
+
+
+async def test_pre_process_monitor_returns_outlook_and_calendar():
+    """Monitor pre-process returns Outlook inbox and Calendar blocks."""
+    mock_outlook = [{"sender": "Bob", "subject": "Review", "unread": True}]
+    mock_cal = [{"title": "Standup", "start_time": "9:00 AM", "is_declined": False}]
+    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=[]), \
+         patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="No unread"), \
+         patch("collectors.outlook_inbox.scan_outlook_inbox", new_callable=AsyncMock, return_value=mock_outlook), \
+         patch("collectors.outlook_inbox.format_outlook_for_prompt", return_value="## 1 Unread Email"), \
+         patch("collectors.calendar.scan_calendar", new_callable=AsyncMock, return_value=mock_cal), \
+         patch("collectors.calendar.format_calendar_for_prompt", return_value="## 1 Event"):
+        result = await _pre_process_monitor({})
+    assert "## 1 Unread Email" in result["outlook_inbox_block"]
+    assert "*(Scanned at" in result["outlook_inbox_block"]
+    assert result["calendar_block"] == "## 1 Event"
+
+
+def test_trigger_variables_monitor_outlook_and_calendar(sample_config):
+    """Monitor trigger variables include Outlook and Calendar blocks."""
+    context = {
+        "teams_inbox": "## Teams data",
+        "outlook_inbox_block": "## Outlook data",
+        "calendar_block": "## Calendar data",
+    }
+    result = _build_trigger_variables("monitor", sample_config, context)
+    assert result["outlook_inbox_block"] == "## Outlook data"
+    assert result["calendar_block"] == "## Calendar data"
+
+
+def test_trigger_variables_digest_outlook_and_calendar(sample_config, tmp_dir):
+    """Digest trigger variables include Outlook and Calendar blocks."""
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+        result = _build_trigger_variables("digest", sample_config, {
+            "content_block": "content",
+            "teams_inbox_block": "teams",
+            "outlook_inbox_block": "## Outlook data",
+            "calendar_block": "## Calendar data",
+        })
+    assert result["outlook_inbox_block"] == "## Outlook data"
+    assert result["calendar_block"] == "## Calendar data"
+
+
+def test_trigger_variables_digest_defaults_outlook_calendar(sample_config, tmp_dir):
+    """Digest trigger variables have defaults when scans unavailable."""
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+        result = _build_trigger_variables("digest", sample_config, {})
+    assert "unavailable" in result["outlook_inbox_block"].lower()
+    assert "unavailable" in result["calendar_block"].lower()
