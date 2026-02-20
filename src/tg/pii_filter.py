@@ -27,7 +27,9 @@ _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?(?:[\dA-Z]{4}[\s]?){1
 _REGEX_RULES: list[tuple[re.Pattern, str]] = [
     (_IBAN_RE,  "<iban>"),   # IBAN before CC — CC regex would partial-match IBAN digits
     (_CC_RE,    "<card>"),
-    (_EMAIL_RE, "<email>"),
+    # EMAIL intentionally excluded — user needs to see email addresses to verify
+    # recipients in outbound message confirmations. Colleague emails are not PII
+    # in this context.
     (_PHONE_RE, "<phone>"),
     (_IP_RE,    "<ip>"),
 ]
@@ -39,8 +41,9 @@ _anonymizer = None
 _presidio_available: bool | None = None  # None = not checked yet
 
 # Entities to detect — light tier (no PERSON, ORGANIZATION, LOCATION)
+# EMAIL_ADDRESS intentionally excluded — user needs to see email addresses
+# to verify recipients in outbound message confirmations.
 _ENTITIES = [
-    "EMAIL_ADDRESS",
     "PHONE_NUMBER",
     "CREDIT_CARD",
     "IP_ADDRESS",
@@ -74,7 +77,6 @@ def _scrub_presidio(text: str) -> str:
         return text
 
     operators = {
-        "EMAIL_ADDRESS": OperatorConfig("replace", {"new_value": "<email>"}),
         "PHONE_NUMBER":  OperatorConfig("replace", {"new_value": "<phone>"}),
         "CREDIT_CARD":   OperatorConfig("replace", {"new_value": "<card>"}),
         "IP_ADDRESS":    OperatorConfig("replace", {"new_value": "<ip>"}),
