@@ -27,10 +27,10 @@ digest:
   incremental: true
   state_file: "output/.digest-state.json"
   priorities:
-    - "Flag action items assigned to me"
-    - "Flag escalations, risks, and customer complaints"
-    - "Summarize decisions made in meetings I missed"
-    - "Highlight documents that need my review"
+    - "Revenue deals and customer escalations — Vodafone, Colt, QBE, Havas (any movement, blockers, or deadlines)"
+    - "Unreplied messages where someone is waiting for MY response (not CC, not FYI)"
+    - "Commitments I made in meetings that I haven't delivered on yet"
+    - "Key decisions made in meetings I missed or was distracted in"
 
 transcripts:
   lookback_days: 7

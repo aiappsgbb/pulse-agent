@@ -14,6 +14,10 @@ from sdk.tools import (
     queue_task,
     dismiss_item,
     add_note,
+    schedule_task,
+    list_schedules_tool,
+    cancel_schedule,
+    search_local_files,
 )
 
 
@@ -119,8 +123,125 @@ async def test_add_note_persists(tmp_dir):
 # --- get_tools ---
 
 
-def test_get_tools_returns_five():
+def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 5
+    assert len(tools) == 9
     names = {t.name for t in tools}
-    assert names == {"log_action", "write_output", "queue_task", "dismiss_item", "add_note"}
+    assert names == {
+        "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
+        "schedule_task", "list_schedules", "cancel_schedule",
+        "search_local_files",
+    }
+
+
+# --- schedule_task ---
+
+
+async def test_schedule_task_creates(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        result = await schedule_task.handler({"arguments": {
+            "id": "morning-digest", "type": "digest",
+            "pattern": "weekdays 07:00", "description": "Morning digest",
+        }})
+    assert result["resultType"] == "success"
+    assert "Scheduled" in result["textResultForLlm"]
+
+
+async def test_schedule_task_invalid_pattern(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        result = await schedule_task.handler({"arguments": {
+            "id": "bad", "type": "digest", "pattern": "nope",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+
+
+# --- list_schedules ---
+
+
+async def test_list_schedules_empty(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        result = await list_schedules_tool.handler({"arguments": {}})
+    assert "No schedules" in result["textResultForLlm"]
+
+
+async def test_list_schedules_with_entries(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        await schedule_task.handler({"arguments": {
+            "id": "test-sched", "type": "intel", "pattern": "daily 18:00",
+        }})
+        result = await list_schedules_tool.handler({"arguments": {}})
+    assert "test-sched" in result["textResultForLlm"]
+    assert "daily 18:00" in result["textResultForLlm"]
+
+
+# --- cancel_schedule ---
+
+
+async def test_cancel_schedule_exists(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        await schedule_task.handler({"arguments": {
+            "id": "to-cancel", "type": "digest", "pattern": "every 6h",
+        }})
+        result = await cancel_schedule.handler({"arguments": {"id": "to-cancel"}})
+    assert "Cancelled" in result["textResultForLlm"]
+
+
+async def test_cancel_schedule_not_found(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        result = await cancel_schedule.handler({"arguments": {"id": "nope"}})
+    assert "not found" in result["textResultForLlm"]
+
+
+# --- search_local_files ---
+
+
+async def test_search_local_files_finds_match(tmp_dir):
+    input_dir = tmp_dir / "input" / "transcripts"
+    input_dir.mkdir(parents=True)
+    (input_dir / "meeting.txt").write_text("Alice discussed the Havas project timeline.\nBob agreed.", encoding="utf-8")
+    with patch("core.constants.INPUT_DIR", tmp_dir / "input"):
+        result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
+    assert result["resultType"] == "success"
+    assert "Havas" in result["textResultForLlm"]
+    assert "meeting.txt" in result["textResultForLlm"]
+
+
+async def test_search_local_files_no_match(tmp_dir):
+    input_dir = tmp_dir / "input" / "transcripts"
+    input_dir.mkdir(parents=True)
+    (input_dir / "meeting.txt").write_text("Nothing relevant here.", encoding="utf-8")
+    with patch("core.constants.INPUT_DIR", tmp_dir / "input"):
+        result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
+    assert "No matches" in result["textResultForLlm"]
+
+
+async def test_search_local_files_no_input_dir(tmp_dir):
+    with patch("core.constants.INPUT_DIR", tmp_dir / "nonexistent"):
+        result = await search_local_files.handler({"arguments": {"query": "test"}})
+    assert "No input directory" in result["textResultForLlm"]
+
+
+async def test_search_local_files_path_traversal_blocked(tmp_dir):
+    input_dir = tmp_dir / "input"
+    input_dir.mkdir(parents=True)
+    with patch("core.constants.INPUT_DIR", input_dir):
+        result = await search_local_files.handler({"arguments": {"query": "test", "file_pattern": "../../*.txt"}})
+    assert "ERROR" in result["textResultForLlm"]
+
+
+async def test_search_local_files_context_lines(tmp_dir):
+    input_dir = tmp_dir / "input"
+    input_dir.mkdir(parents=True)
+    lines = ["line1", "line2", "line3 has TARGET word", "line4", "line5", "line6"]
+    (input_dir / "doc.txt").write_text("\n".join(lines), encoding="utf-8")
+    with patch("core.constants.INPUT_DIR", input_dir):
+        result = await search_local_files.handler({"arguments": {"query": "TARGET"}})
+    text = result["textResultForLlm"]
+    assert "line2" in text  # context before
+    assert "line4" in text  # context after

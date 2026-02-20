@@ -12,29 +12,43 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 {{content_sections}}
 {{articles_block}}
 
+## Part B — Teams Inbox Scan (GROUND TRUTH — live Playwright scan of your actual Teams)
+
+This data comes from a real-time browser scan of your Teams chat list. It shows what is ACTUALLY unread right now.
+
+{{teams_inbox_block}}
+
 ## WorkIQ Queries
 
-Make these WorkIQ queries IN ORDER. The query window is **{{workiq_window}}** — only look for NEW activity in this period.
+Try these WorkIQ queries. The query window is **{{workiq_window}}**.
 
 ### Step 1: Get emails addressed TO ME
 Ask WorkIQ: "Show me emails {{workiq_window}} where I am in the TO field (not just CC) and someone is directly asking ME to do something or reply. For each one, tell me: sender, subject, and exactly what they're asking ME to do."
 
-### Step 2: Get Teams messages addressed TO ME (make 2 queries)
-Ask WorkIQ: "Show me my unread Teams 1:1 and group chat messages {{workiq_window}}. For each: who sent it, what did they say, and are they waiting for MY reply?"
-Then ask: "What Teams channel messages {{workiq_window}} directly @mention me or ask me a specific question by name? Include channel name and the exact question."
+### Step 2: Get Teams messages addressed TO ME
+Ask WorkIQ: "What Teams channel messages {{workiq_window}} directly @mention me or ask me a specific question by name? Include channel name and the exact question."
 
 ### Step 3: Check what I've already handled
 Ask WorkIQ: "Which of my recent emails and Teams messages have I already replied to or acted on?"
 
+### IF WORKIQ FAILS:
+If ANY WorkIQ query returns an error (e.g. "Failed to create conversation"), you MUST:
+1. **Use the Teams Inbox Scan (Part B above) as your primary source of truth** for Teams messages
+2. **DO NOT blindly carry forward items from the previous digest** — if a person does NOT appear as unread in the Teams inbox scan, assume you've already replied and DROP that item
+3. State clearly in the digest: "WorkIQ unavailable — verified via Teams inbox scan only. Email status unverified."
+4. Only keep carry-forward items that are CORROBORATED by the Teams inbox scan (the person still shows as unread)
+5. For email-sourced items: keep only if <3 days old. Older email items without WorkIQ verification = DROP with note.
+
 ### Step 4: MERGE with Known Outstanding Items
 - For each **Known Outstanding Item** from the previous digest:
-  - **KEEP** it if WorkIQ shows no reply/action was taken
-  - **DROP** it if WorkIQ confirms it's been handled (reply sent, meeting attended, task done)
-  - **UPDATE** it if there's new activity on the same thread
-- For each **NEW** WorkIQ result (Steps 1 & 2):
+  - **DROP** if the person does NOT appear as unread in the Teams inbox scan (they've been replied to)
+  - **DROP** if WorkIQ confirms it's been handled (reply sent, meeting attended, task done)
+  - **KEEP** only if the person STILL shows as unread in the Teams inbox scan, OR if WorkIQ confirms no reply was sent
+  - **UPDATE** if there's new activity on the same thread
+- For each **NEW** item from WorkIQ or Teams inbox scan:
   - **ADD** only if it's not already covered by a Known Outstanding Item
   - Skip FYI emails, newsletters, no-reply senders, and things clearly already handled
-- The final digest = carried-forward items + genuinely new items = complete snapshot of what's outstanding
+- The final digest = verified carry-forward items + genuinely new items = accurate snapshot
 
 ## CRITICAL FILTER: Is this actually MY responsibility?
 
@@ -57,7 +71,7 @@ The ONLY things that belong in the digest:
 - Risks/escalations that are still unresolved
 - Key decisions from meetings (1 line each, not paragraphs)
 - Commitments I made that I haven't delivered on yet
-- Significant competitor/industry moves from RSS articles (max 5 lines)
+- RSS articles ONLY if they directly name one of your active customers, a competitor in a live deal, or a product you're actively selling — max 3 lines. Generic industry news belongs in the separate intel mode, not here.
 
 Things that do NOT belong:
 - Emails I already replied to
@@ -69,7 +83,8 @@ Things that do NOT belong:
 - Microsoft Community Hub draft reviews (unless I specifically committed)
 - Anything that's clearly already handled
 - Detailed per-meeting breakdowns (just the key takeaway + any open action items)
-- Generic AI hype articles with no substance
+- Generic AI hype articles with no substance — these go in the separate intel mode
+- Competitor news that doesn't affect your active deals or customers
 
 ## Output Formats
 
@@ -122,8 +137,8 @@ Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g
 ## Key Takeaways This Week
 - {1-line meeting insight or decision that matters}
 
-## External Intel
-- **[Company]** — what happened — why it matters
+## External Intel (only if directly relevant to your deals/customers — omit section if nothing qualifies)
+- **[Company]** — what happened — why it matters to YOUR work specifically
 
 ## Risks
 - {unresolved risk with specific customer/deal name}

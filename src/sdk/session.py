@@ -1,5 +1,7 @@
 """Session configuration builder — config-driven, no hardcoded if/elif chains."""
 
+import asyncio
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,9 +16,11 @@ from copilot import (
 )
 
 from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR
-from core.logging import log, log_event
+from core.logging import log
 from sdk.prompts import load_prompt
 from sdk.agents import load_agents, _mcp_config
+
+MAX_SESSION_RETRIES = 3
 
 
 def _load_modes() -> dict:
@@ -175,19 +179,26 @@ async def agent_session(
     config: dict,
     mode: str,
     tools: list[Tool] | None = None,
-    timeout: int = 600,
     telegram_app=None,
     chat_id: int | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ):
     """Async context manager for GHCP SDK sessions.
 
-    Usage:
-        async with agent_session(client, config, "digest", tools=get_tools()) as session:
-            response = await session.send_and_wait({"prompt": prompt}, timeout=600)
+    Yields (session, handler) tuple. Use session.send() + handler.done.wait()
+    for non-blocking sends with proper timeout control:
 
-    Handles session creation, event streaming, and cleanup automatically.
+        async with agent_session(client, config, "digest", tools=get_tools()) as (session, handler):
+            await session.send({"prompt": prompt})
+            await asyncio.wait_for(handler.done.wait(), timeout=1800)
+            response_text = handler.final_text
+
+    Handles session creation with retry, event streaming via dispatch table,
+    and cleanup automatically.
     """
     from core.browser import get_browser_manager
+    from sdk.event_handler import EventHandler
+
     mgr = get_browser_manager()
     cdp_endpoint = mgr.cdp_endpoint if mgr else None
 
@@ -196,10 +207,31 @@ async def agent_session(
         telegram_app=telegram_app, chat_id=chat_id,
         cdp_endpoint=cdp_endpoint,
     )
-    session = await client.create_session(session_config)
-    session.on(lambda event: log_event(event))
+
+    # Retry session creation (handles transient CLI startup failures)
+    session = None
+    for attempt in range(1, MAX_SESSION_RETRIES + 1):
+        try:
+            session = await client.create_session(session_config)
+            break
+        except Exception as e:
+            if attempt == MAX_SESSION_RETRIES:
+                raise
+            log.warning(f"Session creation failed (attempt {attempt}/{MAX_SESSION_RETRIES}): {e}")
+            await asyncio.sleep(2 ** attempt)
+
+    handler = EventHandler(on_delta=on_delta)
+    unsub = session.on(handler)
 
     try:
-        yield session
+        yield session, handler
     finally:
-        await session.destroy()
+        if unsub:
+            try:
+                unsub()
+            except Exception:
+                pass
+        try:
+            await session.destroy()
+        except Exception:
+            log.debug("Error destroying session", exc_info=True)

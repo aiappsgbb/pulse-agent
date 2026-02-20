@@ -10,6 +10,7 @@ from sdk.runner import (
     _build_trigger_variables,
     _load_previous_digest,
     _pre_process_monitor,
+    MAX_CARRY_FORWARD_DAYS,
 )
 
 
@@ -26,10 +27,14 @@ def test_carry_forward_no_items():
 
 
 def test_carry_forward_with_items():
+    from datetime import datetime, timedelta
+    # Use dates within the staleness window
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     prev = {
         "items": [
-            {"priority": "urgent", "title": "Reply to Alice", "id": "reply-alice", "source": "Email", "date": "2026-02-17"},
-            {"priority": "high", "title": "Review PR", "id": "action-review-pr", "source": "Teams", "date": "2026-02-16"},
+            {"priority": "urgent", "title": "Reply to Alice", "id": "reply-alice", "source": "Email", "date": today},
+            {"priority": "high", "title": "Review PR", "id": "action-review-pr", "source": "Teams", "date": yesterday},
         ]
     }
     result = _build_carry_forward(prev)
@@ -39,6 +44,37 @@ def test_carry_forward_with_items():
     assert "[HIGH]" in result
     assert "KEEP" in result
     assert "DROP" in result
+
+
+def test_carry_forward_drops_stale_items():
+    """Items older than MAX_CARRY_FORWARD_DAYS are auto-dropped."""
+    from datetime import datetime, timedelta
+    old_date = (datetime.now() - timedelta(days=MAX_CARRY_FORWARD_DAYS + 2)).strftime("%Y-%m-%d")
+    fresh_date = datetime.now().strftime("%Y-%m-%d")
+    prev = {
+        "items": [
+            {"priority": "urgent", "title": "Old item", "id": "old", "source": "Email", "date": old_date},
+            {"priority": "high", "title": "Fresh item", "id": "fresh", "source": "Teams", "date": fresh_date},
+        ]
+    }
+    result = _build_carry_forward(prev)
+    assert "Fresh item" in result
+    assert "Old item" not in result
+    assert "Auto-dropped 1" in result
+
+
+def test_carry_forward_all_stale():
+    """When all items are stale, return a note only."""
+    from datetime import datetime, timedelta
+    old_date = (datetime.now() - timedelta(days=MAX_CARRY_FORWARD_DAYS + 1)).strftime("%Y-%m-%d")
+    prev = {
+        "items": [
+            {"priority": "high", "title": "Ancient", "id": "ancient", "source": "Email", "date": old_date},
+        ]
+    }
+    result = _build_carry_forward(prev)
+    assert "Ancient" not in result
+    assert "Auto-dropped" in result
 
 
 # --- _load_previous_digest ---
@@ -99,11 +135,15 @@ def test_trigger_variables_monitor_default(sample_config):
 
 def test_trigger_variables_digest_no_previous(sample_config, tmp_dir):
     with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
-        result = _build_trigger_variables("digest", sample_config, {"content_block": "some content"})
+        result = _build_trigger_variables("digest", sample_config, {
+            "content_block": "some content",
+            "teams_inbox_block": "## 2 Unread Messages",
+        })
     assert "date" in result
     assert result["workiq_window"] == "in the last 7 days"
     assert "Revenue deals" in result["priorities"]
     assert result["content_sections"] == "some content"
+    assert result["teams_inbox_block"] == "## 2 Unread Messages"
 
 
 def test_trigger_variables_digest_with_previous(sample_config, tmp_dir):
@@ -153,11 +193,13 @@ async def test_pre_process_monitor_with_items():
     with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=mock_items) as mock_scan, \
          patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="## 1 Unread") as mock_fmt:
         result = await _pre_process_monitor({})
-    assert result["teams_inbox"] == "## 1 Unread"
+    assert "## 1 Unread" in result["teams_inbox"]
+    assert "*(Scanned at" in result["teams_inbox"]
 
 
 async def test_pre_process_monitor_empty():
     with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=[]) as mock_scan, \
          patch("collectors.teams_inbox.format_inbox_for_prompt", return_value="No unread") as mock_fmt:
         result = await _pre_process_monitor({})
-    assert result["teams_inbox"] == "No unread"
+    assert "No unread" in result["teams_inbox"]
+    assert "*(Scanned at" in result["teams_inbox"]

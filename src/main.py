@@ -61,6 +61,12 @@ async def main():
     for w in warnings:
         log.warning(f"CONFIG: {w}")
 
+    # Startup diagnostics — preflight checks
+    from core.diagnostics import run_diagnostics
+    diag_warnings = run_diagnostics(config)
+    for w in diag_warnings:
+        log.warning(f"DIAG: {w}")
+
     log.info(f"Pulse Agent starting — run: {run_id}")
 
     # Start GHCP SDK client
@@ -158,17 +164,20 @@ async def main():
     from daemon.heartbeat import heartbeat, check_missed_digest
     check_missed_digest(job_queue)
 
-    # Start worker and heartbeat
+    # Start worker, heartbeat, and scheduler
     from daemon.worker import job_worker
+    from core.scheduler import scheduler_loop
     worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
     heartbeat_task = asyncio.create_task(heartbeat(config, job_queue, shutdown_event))
+    scheduler_task = asyncio.create_task(scheduler_loop(job_queue, shutdown_event))
 
-    log.info("Daemon running — Telegram + heartbeat active. Ctrl+C to stop.")
+    log.info("Daemon running — Telegram + heartbeat + scheduler active. Ctrl+C to stop.")
 
     # Wait for shutdown
     await shutdown_event.wait()
 
     # Cleanup
+    scheduler_task.cancel()
     heartbeat_task.cancel()
     worker_task.cancel()
     await stop_telegram_bot(telegram_app)

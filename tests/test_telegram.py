@@ -1,4 +1,4 @@
-"""Tests for tg/ modules — bot utilities, confirmations."""
+"""Tests for tg/ modules — bot utilities, message splitting, confirmations."""
 
 import asyncio
 from pathlib import Path
@@ -8,7 +8,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from tg.bot import md_to_telegram_html, _match_quick_action
+from tg.bot import md_to_telegram_html, split_message, TelegramBot
 from tg.confirmations import has_pending_confirmation, resolve_confirmation, wait_for_confirmation
 
 
@@ -49,37 +49,58 @@ def test_mixed():
     assert "<code>code</code>" in result
 
 
-# --- _match_quick_action ---
+# --- split_message ---
 
-def test_quick_action_digest():
-    assert _match_quick_action("run digest") == "digest"
-    assert _match_quick_action("digest") == "digest"
-    assert _match_quick_action("morning digest") == "digest"
-
-
-def test_quick_action_triage():
-    assert _match_quick_action("triage") == "monitor"
-    assert _match_quick_action("run triage") == "monitor"
+def test_split_short():
+    """Short text returns as-is in a single chunk."""
+    assert split_message("hello") == ["hello"]
 
 
-def test_quick_action_intel():
-    assert _match_quick_action("intel") == "intel"
-    assert _match_quick_action("intel brief") == "intel"
+def test_split_exact_limit():
+    """Text exactly at the limit stays in one chunk."""
+    text = "a" * 4000
+    assert split_message(text) == [text]
 
 
-def test_quick_action_transcripts():
-    assert _match_quick_action("transcripts") == "transcripts"
-    assert _match_quick_action("grab transcripts") == "transcripts"
+def test_split_at_newline():
+    """Text splits at newline boundary when possible."""
+    text = "a" * 3000 + "\n" + "b" * 2000
+    chunks = split_message(text)
+    assert len(chunks) == 2
+    assert chunks[0] == "a" * 3000
+    assert chunks[1] == "b" * 2000
 
 
-def test_quick_action_no_match():
-    assert _match_quick_action("hello world") is None
-    assert _match_quick_action("analyze something") is None
+def test_split_at_space():
+    """Falls back to space boundary when no newline is near the limit."""
+    text = "word " * 900  # ~4500 chars
+    chunks = split_message(text)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert len(chunk) <= 4000
 
 
-def test_quick_action_case_insensitive():
-    assert _match_quick_action("Run Digest") == "digest"
-    assert _match_quick_action("TRIAGE") == "monitor"
+def test_split_hard_cut():
+    """Hard cut when no newlines or spaces exist."""
+    text = "a" * 8000
+    chunks = split_message(text)
+    assert len(chunks) == 2
+    assert len(chunks[0]) == 4000
+    assert len(chunks[1]) == 4000
+
+
+def test_split_custom_max():
+    """Custom max_len is respected."""
+    text = "Hello world this is a test"
+    chunks = split_message(text, max_len=12)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert len(chunk) <= 12
+
+
+def test_split_empty():
+    """Empty text returns single empty chunk."""
+    assert split_message("") == [""]
 
 
 # --- confirmations ---
@@ -121,3 +142,66 @@ async def test_wait_for_confirmation_timeout():
     pending = {}
     with pytest.raises(asyncio.TimeoutError):
         await wait_for_confirmation(pending, 12345, timeout=0.05)
+
+
+# --- TelegramBot._find_action_draft ---
+
+
+def test_find_action_draft_from_json(tmp_dir):
+    """_find_action_draft reads the latest monitoring JSON and finds the action."""
+    from unittest.mock import patch
+    import json
+
+    triage_data = {
+        "timestamp": "2026-02-20T10:00",
+        "items": [
+            {
+                "id": "reply-sarah-havas",
+                "type": "reply_needed",
+                "priority": "high",
+                "source": "Teams: Sarah",
+                "summary": "Asking about Havas",
+                "context": "Yesterday's dry-run",
+                "suggested_actions": [
+                    {
+                        "label": "Draft: We pivoted to Y",
+                        "action_type": "draft_teams_reply",
+                        "draft": "Hey Sarah, we pivoted to Y.",
+                        "target": "Sarah",
+                    }
+                ],
+            }
+        ],
+    }
+    (tmp_dir / "monitoring-2026-02-20T10-00.json").write_text(json.dumps(triage_data), encoding="utf-8")
+
+    bot = TelegramBot.__new__(TelegramBot)
+    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+        result = bot._find_action_draft("reply-sarah-havas", 0)
+    assert result is not None
+    assert result["draft"] == "Hey Sarah, we pivoted to Y."
+    assert result["target"] == "Sarah"
+
+
+def test_find_action_draft_missing_item(tmp_dir):
+    """Returns None when item ID doesn't match."""
+    from unittest.mock import patch
+    import json
+
+    triage_data = {"items": [{"id": "other-item", "suggested_actions": []}]}
+    (tmp_dir / "monitoring-2026-02-20T10-00.json").write_text(json.dumps(triage_data), encoding="utf-8")
+
+    bot = TelegramBot.__new__(TelegramBot)
+    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+        result = bot._find_action_draft("nonexistent", 0)
+    assert result is None
+
+
+def test_find_action_draft_no_json(tmp_dir):
+    """Returns None when no monitoring JSON exists."""
+    from unittest.mock import patch
+
+    bot = TelegramBot.__new__(TelegramBot)
+    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+        result = bot._find_action_draft("any-id", 0)
+    assert result is None

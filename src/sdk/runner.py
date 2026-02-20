@@ -1,5 +1,6 @@
 """Unified config-driven job runner — replaces per-mode orchestration functions."""
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ async def run_job(
     context: dict | None = None,
     telegram_app=None,
     chat_id: int | None = None,
+    on_delta=None,
 ) -> str | None:
     """Unified entry point for running any SDK-based job.
 
@@ -39,6 +41,7 @@ async def run_job(
         context: Extra context for the job (e.g. research task details, chat prompt)
         telegram_app: Telegram Application (for ask_user relay)
         chat_id: Telegram chat ID
+        on_delta: Optional callback for streaming text deltas
     Returns:
         Response text from the agent, or None
     """
@@ -51,12 +54,13 @@ async def run_job(
     if mode_cfg.get("standalone"):
         raise ValueError(f"Mode '{mode}' is standalone — use its handler directly")
 
+    date_str = datetime.now().strftime("%Y-%m-%d")
     log.info(f"=== {mode_key} cycle start ===")
 
     # Pre-process: collect data before agent call
     pre_process = mode_cfg.get("pre_process")
     if pre_process == "collect_content_and_feeds":
-        context.update(_pre_process_digest(config))
+        context.update(await _pre_process_digest(config))
     elif pre_process == "collect_feeds":
         context.update(_pre_process_intel(config))
     elif pre_process == "scan_teams_inbox":
@@ -65,8 +69,8 @@ async def run_job(
     # Build trigger prompt
     prompt = _build_trigger_prompt(mode_key, mode_cfg, config, context)
 
-    # Determine timeout
-    timeout = 3600 if mode_key == "research" else 600
+    # Determine timeout — generous limits since agent may use many tools
+    timeout = 3600 if mode_key == "research" else 1800
 
     # Run the session
     async with agent_session(
@@ -74,19 +78,27 @@ async def run_job(
         tools=get_tools(),
         telegram_app=telegram_app,
         chat_id=chat_id,
-    ) as session:
+        on_delta=on_delta,
+    ) as (session, handler):
         log.info("  Agent working...")
-        response = await session.send_and_wait({"prompt": prompt}, timeout=timeout)
+        await session.send({"prompt": prompt})
 
-        if not response:
-            log.warning("  No response from agent (timed out).")
+        try:
+            await asyncio.wait_for(handler.done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            log.warning(f"  Agent timed out after {timeout}s (partial text: {bool(handler.final_text)})")
+            return handler.final_text  # return partial if available
+
+        if handler.error:
+            log.error(f"  Session error: {handler.error}")
             return None
 
-        log.info(f"=== {mode_key} cycle end ===")
+        # Post-process: validate digest JSON if written
+        if mode_key == "digest":
+            _validate_digest_json(date_str)
 
-        if response.data and response.data.content:
-            return response.data.content
-        return None
+        log.info(f"=== {mode_key} cycle end ===")
+        return handler.final_text
 
 
 def _build_trigger_prompt(mode: str, mode_cfg: dict, config: dict, context: dict) -> str:
@@ -130,8 +142,19 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         notes = actions.get("notes", {})
 
         if dismissed:
-            dismissed_items = "\n".join(f"- {d['item']}" for d in dismissed)
-            variables["dismissed_block"] = f"\n## Previously Dismissed Items (DO NOT include these)\n{dismissed_items}\n"
+            dismissed_lines = []
+            for d in dismissed:
+                reason = d.get("reason", "")
+                if reason:
+                    dismissed_lines.append(f"- {d['item']} — *Reason: {reason}*")
+                else:
+                    dismissed_lines.append(f"- {d['item']}")
+            dismissed_items = "\n".join(dismissed_lines)
+            variables["dismissed_block"] = (
+                f"\n## Previously Dismissed Items (DO NOT include these)\n{dismissed_items}\n"
+                "\nLearn from these: if items were dismissed because \"already replied\" or "
+                "\"not my responsibility\", apply the same logic to similar items today.\n"
+            )
         else:
             variables["dismissed_block"] = ""
 
@@ -145,10 +168,19 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["carry_forward"] = _build_carry_forward(prev)
 
         # Content sections from pre-processing
-        variables["content_sections"] = context.get("content_block", "No new local content.")
+        content_block = context.get("content_block", "")
+        if not content_block or not content_block.strip():
+            content_block = (
+                "No new local content since last digest. "
+                "Focus on WorkIQ inbox check and carry-forward verification only."
+            )
+        variables["content_sections"] = content_block
 
         # Articles block from pre-processing
         variables["articles_block"] = context.get("articles_block", "")
+
+        # Teams inbox scan (ground truth for unread messages)
+        variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
 
     elif mode == "intel":
         variables["date"] = date_str
@@ -202,29 +234,114 @@ def _load_previous_digest() -> dict | None:
         return None
 
 
+MAX_CARRY_FORWARD_DAYS = 5
+
+
 def _build_carry_forward(prev: dict | None) -> str:
-    """Build carry-forward block from previous digest items."""
+    """Build carry-forward block from previous digest items.
+
+    Items older than MAX_CARRY_FORWARD_DAYS are auto-dropped — if they
+    haven't been verified or dismissed in that time, they're stale.
+    """
     if not prev or not prev.get("items"):
+        return ""
+
+    today = datetime.now().date()
+    fresh_items = []
+    stale_count = 0
+
+    for item in prev["items"]:
+        item_date_str = item.get("date", "")
+        try:
+            item_date = datetime.strptime(item_date_str, "%Y-%m-%d").date()
+            age_days = (today - item_date).days
+        except (ValueError, TypeError):
+            age_days = 0
+
+        if age_days > MAX_CARRY_FORWARD_DAYS:
+            stale_count += 1
+            log.info(f"  Dropping stale item ({age_days}d old): {item.get('title', '?')}")
+            continue
+
+        item["_age_days"] = age_days
+        fresh_items.append(item)
+
+    if not fresh_items:
+        if stale_count:
+            return f"(Auto-dropped {stale_count} items older than {MAX_CARRY_FORWARD_DAYS} days.)\n"
         return ""
 
     lines = [
         "## Known Outstanding Items (from previous digest)\n",
         "These items were flagged previously. For each one:",
         "- **KEEP** if still unresolved (no reply sent, no action taken)",
-        "- **DROP** if WorkIQ confirms it's been handled (reply sent, meeting attended, etc.)",
+        "- **DROP** if WorkIQ or Teams inbox scan confirms it's been handled",
         "- **UPDATE** if there's new activity on the same thread\n",
     ]
-    for item in prev["items"]:
+
+    if stale_count:
+        lines.append(f"(Auto-dropped {stale_count} items older than {MAX_CARRY_FORWARD_DAYS} days.)\n")
+
+    for item in fresh_items:
         priority = item.get("priority", "?")
         title = item.get("title", "?")
         item_id = item.get("id", "?")
         source = item.get("source", "?")
         date = item.get("date", "?")
+        age = item.get("_age_days", 0)
+        age_label = f", {age}d outstanding" if age > 0 else ", new today"
         lines.append(
             f"- [{priority.upper()}] **{title}** "
-            f"(id: {item_id}, source: {source}, date: {date})"
+            f"(id: {item_id}, source: {source}, date: {date}{age_label})"
         )
     return "\n".join(lines)
+
+
+REQUIRED_ITEM_FIELDS = {"id", "priority", "date", "title", "source"}
+
+
+def _validate_digest_json(date_str: str):
+    """Validate the digest JSON after the agent writes it.
+
+    Checks that the file exists, is valid JSON, and each item has the
+    required fields for carry-forward to work correctly.
+    """
+    digest_file = OUTPUT_DIR / "digests" / f"{date_str}.json"
+    if not digest_file.exists():
+        log.warning(f"  Digest validation: {date_str}.json was not written by agent")
+        return
+
+    try:
+        data = json.loads(digest_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        log.error(f"  Digest validation: {date_str}.json is invalid JSON — {e}")
+        return
+
+    if "items" not in data:
+        log.warning("  Digest validation: missing 'items' key")
+        return
+
+    items = data["items"]
+    issues = []
+    for i, item in enumerate(items):
+        missing = REQUIRED_ITEM_FIELDS - set(item.keys())
+        if missing:
+            issues.append(f"  item[{i}] ({item.get('id', '?')}): missing {missing}")
+
+        # Check date format for carry-forward
+        item_date = item.get("date", "")
+        if item_date:
+            try:
+                datetime.strptime(item_date, "%Y-%m-%d")
+            except ValueError:
+                issues.append(f"  item[{i}] ({item.get('id', '?')}): bad date format '{item_date}'")
+
+    if issues:
+        log.warning(f"  Digest validation: {len(issues)} issue(s) in {date_str}.json:")
+        for issue in issues:
+            log.warning(issue)
+    else:
+        log.info(f"  Digest validation: {date_str}.json OK ({len(items)} items)")
 
 
 async def _pre_process_monitor(config: dict) -> dict:
@@ -233,19 +350,27 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     log.info("Phase 0: Scanning Teams inbox for unread messages...")
     items = await scan_teams_inbox(config)
+    scan_time = datetime.now().strftime("%H:%M:%S")
 
     if items:
-        log.info(f"  Found {len(items)} unread Teams messages")
+        log.info(f"  Found {len(items)} unread Teams messages (scanned at {scan_time})")
     else:
-        log.info("  No unread Teams messages detected.")
+        log.info(f"  No unread Teams messages detected (scanned at {scan_time}).")
 
-    return {"teams_inbox": format_inbox_for_prompt(items)}
+    formatted = format_inbox_for_prompt(items)
+    formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
+    return {"teams_inbox": formatted}
 
 
-def _pre_process_digest(config: dict) -> dict:
-    """Collect local content and RSS feeds before digest agent call."""
+async def _pre_process_digest(config: dict) -> dict:
+    """Collect local content, RSS feeds, and Teams inbox scan before digest.
+
+    The Teams inbox scan provides ground truth about what's actually unread
+    right now — critical for verifying carry-forward items when WorkIQ is down.
+    """
     from collectors.content import collect_content
     from collectors.feeds import collect_feeds
+    from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
 
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
@@ -264,6 +389,17 @@ def _pre_process_digest(config: dict) -> dict:
     else:
         log.info("  No new articles.")
 
+    log.info("\nPhase 1c: Scanning Teams inbox for unread messages...")
+    teams_items = await scan_teams_inbox(config)
+    scan_time = datetime.now().strftime("%H:%M:%S")
+    teams_inbox_block = format_inbox_for_prompt(teams_items)
+    # Prepend timestamp so the agent knows when this snapshot was taken
+    teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
+    if teams_items:
+        log.info(f"  Teams inbox: {len(teams_items)} unread (scanned at {scan_time})")
+    else:
+        log.info(f"  Teams inbox: no unread messages (scanned at {scan_time})")
+
     # Build content block
     by_type: dict[str, list[dict]] = {}
     for item in items:
@@ -278,16 +414,23 @@ def _pre_process_digest(config: dict) -> dict:
 
     content_block = "\n".join(content_sections)
 
-    # Build articles block
+    # Build articles block — with filter instruction
     articles_block = ""
     if articles:
         article_lines = [f"- [{a['source']}] **{a['title']}** ({a['published']})" for a in articles]
-        articles_block = f"\n## Part C — External Intel ({len(articles)} articles from RSS feeds)\n" + "\n".join(article_lines) + "\n"
+        articles_block = (
+            f"\n## Part C — External Intel ({len(articles)} articles from RSS feeds)\n"
+            f"**FILTER**: Only include articles that directly name an active customer "
+            f"(Vodafone, Colt, QBE, Havas) or a competitor in a live deal. "
+            f"Generic AI/LLM news belongs in the separate intel mode — skip it here.\n\n"
+            + "\n".join(article_lines) + "\n"
+        )
 
     return {
         "content_block": content_block,
         "articles_block": articles_block,
         "articles": articles,
+        "teams_inbox_block": teams_inbox_block,
     }
 
 
