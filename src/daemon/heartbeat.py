@@ -67,9 +67,8 @@ def check_missed_digest(job_queue: asyncio.Queue):
 
 
 async def heartbeat(config: dict, job_queue: asyncio.Queue, shutdown_event: asyncio.Event):
-    """Periodic heartbeat — enqueues triage during office hours + pulls OneDrive jobs."""
+    """Periodic heartbeat — enqueues triage during office hours."""
     from tg.bot import get_proactive_chat_id
-    from daemon.sync import sync_jobs_from_onedrive
 
     interval = config["monitoring"].get("interval", "30m")
     seconds = parse_interval(interval)
@@ -82,9 +81,6 @@ async def heartbeat(config: dict, job_queue: asyncio.Queue, shutdown_event: asyn
         await asyncio.sleep(1)
 
     while not shutdown_event.is_set():
-        # Pull file-based jobs from OneDrive (always, even outside office hours)
-        sync_jobs_from_onedrive(config, job_queue)
-
         # Triage only during office hours
         if is_office_hours(config):
             chat_id = get_proactive_chat_id()

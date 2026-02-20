@@ -168,6 +168,10 @@ async def main():
     from tg.bot import start_telegram_bot, stop_telegram_bot
     telegram_app = await start_telegram_bot(config, job_queue)
 
+    # Pull any pending jobs from OneDrive (picks up inter-agent requests immediately)
+    from daemon.sync import sync_jobs_from_onedrive
+    sync_jobs_from_onedrive(config, job_queue)
+
     # Check for missed digests (runs before worker starts processing)
     from daemon.heartbeat import heartbeat, check_missed_digest
     check_missed_digest(job_queue)
@@ -177,7 +181,7 @@ async def main():
     from core.scheduler import scheduler_loop
     worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
     heartbeat_task = asyncio.create_task(heartbeat(config, job_queue, shutdown_event))
-    scheduler_task = asyncio.create_task(scheduler_loop(job_queue, shutdown_event))
+    scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, shutdown_event))
 
     log.info("Daemon running — Telegram + heartbeat + scheduler active. Ctrl+C to stop.")
 

@@ -164,20 +164,26 @@ def mark_run(schedule_id: str):
 
 
 async def scheduler_loop(
+    config: dict,
     job_queue: asyncio.Queue,
     shutdown_event: asyncio.Event,
     check_interval: int = 60,
 ):
-    """Background loop — checks schedules every `check_interval` seconds.
+    """Background loop — checks schedules and syncs OneDrive every `check_interval` seconds.
 
     When a schedule is due, enqueues the job and marks it as run.
+    Also pulls new job files from OneDrive each tick (inter-agent requests, etc.).
     """
     from tg.bot import get_proactive_chat_id
+    from daemon.sync import sync_jobs_from_onedrive
 
     log.info(f"Scheduler started (checking every {check_interval}s)")
 
     while not shutdown_event.is_set():
         try:
+            # Pull new job files from OneDrive (inter-agent requests, etc.)
+            sync_jobs_from_onedrive(config, job_queue)
+
             schedules = _load_schedules()
             now = datetime.now()
 
