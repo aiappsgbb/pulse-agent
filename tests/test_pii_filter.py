@@ -1,4 +1,8 @@
-"""Tests for tg/pii_filter — PII scrubbing before Telegram delivery."""
+"""Tests for tg/pii_filter — PII scrubbing before Telegram delivery.
+
+Note: EMAIL_ADDRESS is intentionally NOT scrubbed — users need to see
+email addresses to verify recipients in outbound message confirmations.
+"""
 
 import re
 import sys
@@ -18,11 +22,12 @@ from tg.pii_filter import scrub, _scrub_regex, _REGEX_RULES
 class TestRegexFallback:
     """Test the regex-based PII scrubber directly."""
 
-    def test_email(self):
-        assert _scrub_regex("Contact john@microsoft.com") == "Contact <email>"
+    def test_email_preserved(self):
+        """Emails are intentionally kept for recipient verification."""
+        assert _scrub_regex("Contact john@microsoft.com") == "Contact john@microsoft.com"
 
-    def test_email_with_plus(self):
-        assert _scrub_regex("Send to user+tag@example.org") == "Send to <email>"
+    def test_email_with_plus_preserved(self):
+        assert _scrub_regex("Send to user+tag@example.org") == "Send to user+tag@example.org"
 
     def test_phone_us(self):
         assert _scrub_regex("Call 555-123-4567") == "Call <phone>"
@@ -60,23 +65,23 @@ class TestRegexFallback:
         text = "Meeting with Contoso about Azure"
         assert _scrub_regex(text) == text
 
-    def test_mixed_pii(self):
+    def test_mixed_pii_keeps_email(self):
         text = "Email john@test.com or call 555-123-4567 from 10.0.0.1"
         result = _scrub_regex(text)
-        assert "<email>" in result
+        assert "john@test.com" in result  # email preserved
         assert "<phone>" in result
         assert "<ip>" in result
-        assert "john@test.com" not in result
         assert "555-123-4567" not in result
         assert "10.0.0.1" not in result
 
     def test_empty_string(self):
         assert _scrub_regex("") == ""
 
-    def test_multiple_emails(self):
+    def test_multiple_emails_preserved(self):
         text = "CC: alice@foo.com and bob@bar.org"
         result = _scrub_regex(text)
-        assert result == "CC: <email> and <email>"
+        assert "alice@foo.com" in result
+        assert "bob@bar.org" in result
 
 
 # --- scrub() integration tests ---
@@ -91,16 +96,16 @@ class TestScrub:
         assert scrub("   ") == "   "
 
     def test_none_safe(self):
-        # scrub should handle empty/falsy gracefully
         assert scrub("") == ""
 
     def test_no_pii(self):
         text = "The project is on track for Q3"
         assert scrub(text) == text
 
-    def test_email_scrubbed(self):
+    def test_email_preserved(self):
+        """Emails must NOT be scrubbed — needed for recipient confirmation."""
         result = scrub("Contact john@microsoft.com for details")
-        assert "john@microsoft.com" not in result
+        assert "john@microsoft.com" in result
 
     def test_phone_scrubbed(self):
         result = scrub("Call +1-555-123-4567")
@@ -122,7 +127,6 @@ class TestFallbackBehavior:
 
     def test_regex_fallback_on_import_error(self):
         """Force Presidio to be unavailable and verify regex fallback works."""
-        # Reset module state
         pii_mod._presidio_available = None
         pii_mod._analyzer = None
         pii_mod._anonymizer = None
@@ -132,15 +136,12 @@ class TestFallbackBehavior:
             "presidio_anonymizer": None,
             "presidio_anonymizer.entities": None,
         }):
-            # Force reload of availability check
             pii_mod._presidio_available = None
             result = scrub("Email alice@test.com from 10.0.0.1")
-            assert "alice@test.com" not in result
+            assert "alice@test.com" in result   # email preserved
             assert "10.0.0.1" not in result
-            assert "<email>" in result
             assert "<ip>" in result
 
-        # Restore for other tests
         pii_mod._presidio_available = None
 
     def test_regex_fallback_on_presidio_exception(self):
@@ -152,9 +153,7 @@ class TestFallbackBehavior:
         pii_mod._analyzer.analyze.side_effect = RuntimeError("boom")
 
         result = scrub("Email alice@test.com")
-        assert "alice@test.com" not in result
-        assert "<email>" in result
+        assert "alice@test.com" in result  # email preserved
 
-        # Restore
         pii_mod._analyzer = orig_analyzer
         pii_mod._presidio_available = None
