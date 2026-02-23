@@ -2,13 +2,14 @@
 
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from core.constants import TRANSCRIPTS_DIR
+from core.constants import PULSE_HOME, TRANSCRIPTS_DIR
 from core.logging import log
+from core.state import load_json_state, save_json_state
 from collectors.transcripts.navigation import (
     return_to_calendar, find_meeting_buttons, navigate_weeks_back,
 )
@@ -18,6 +19,29 @@ from collectors.transcripts.compressor import compress_transcript
 # Per-meeting timeout (extraction + compression). Prevents one stuck meeting
 # from eating the entire transcript collection budget.
 PER_MEETING_TIMEOUT = 180  # 3 minutes
+
+# Persistent state — tracks slugs we've already attempted (success or failure).
+# Avoids re-clicking meetings that have no transcript every single run.
+TRANSCRIPT_STATE_FILE = PULSE_HOME / ".transcript-state.json"
+ATTEMPT_TTL_DAYS = 14  # retry after 14 days in case transcript appears later
+
+
+def _load_attempted_slugs() -> dict[str, str]:
+    """Load attempted slugs from state file, pruning entries older than TTL."""
+    state = load_json_state(TRANSCRIPT_STATE_FILE, {"attempted": {}})
+    attempted = state.get("attempted", {})
+    cutoff = (datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS)).isoformat()
+    # Prune expired entries
+    pruned = {slug: ts for slug, ts in attempted.items() if ts > cutoff}
+    if len(pruned) < len(attempted):
+        save_json_state(TRANSCRIPT_STATE_FILE, {"attempted": pruned})
+    return pruned
+
+
+def _mark_attempted(attempted: dict[str, str], slug: str):
+    """Record that we attempted a slug and persist to disk."""
+    attempted[slug] = datetime.now().isoformat()
+    save_json_state(TRANSCRIPT_STATE_FILE, {"attempted": attempted})
 
 
 def _slugify(text: str) -> str:
@@ -85,6 +109,10 @@ async def run_transcript_collection(client, config: dict):
     collected = 0
     skipped = 0
     errors = []
+
+    # Load persistent attempt tracking — skip meetings we've already tried
+    attempted_history = _load_attempted_slugs()
+    log.info(f"  Transcript state: {len(attempted_history)} previously attempted slugs (TTL={ATTEMPT_TTL_DAYS}d)")
 
     # Use shared browser if available, otherwise launch our own
     from core.browser import get_browser_manager
@@ -183,6 +211,11 @@ async def run_transcript_collection(client, config: dict):
                     continue
                 attempted_slugs.add(slug)
 
+                # Check persistent history — already tried in a previous run?
+                if slug in attempted_history:
+                    skipped += 1
+                    continue
+
                 # Check if already collected on disk
                 existing = list(output_dir.glob(f"*_{slug}*"))
                 if existing:
@@ -218,6 +251,9 @@ async def run_transcript_collection(client, config: dict):
                         consecutive_click_failures = 0
                     log.warning(f"  ERROR: {meeting_name[:40]}: {e}")
                     errors.append(f"{meeting_name[:40]}: {e}")
+
+                # Persist this attempt so we skip it in future runs
+                _mark_attempted(attempted_history, slug)
 
                 # Navigate back to calendar for next meeting
                 if opened_recap:
