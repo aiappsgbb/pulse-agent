@@ -100,6 +100,8 @@ async def run_transcript_collection(client, config: dict):
     max_meetings = tc.get("max_per_run", 20)
     lookback_weeks = tc.get("lookback_weeks", 2)
     output_dir = Path(tc.get("output_dir", str(TRANSCRIPTS_DIR)))
+    if not output_dir.is_absolute():
+        output_dir = PULSE_HOME / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     playwright_cfg = tc.get("playwright", {})

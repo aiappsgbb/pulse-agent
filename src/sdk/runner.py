@@ -240,7 +240,7 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["task"] = task.get("task", "unnamed")
         variables["description"] = task.get("description", variables["task"])
         output_cfg = task.get("output", {})
-        variables["output_path"] = output_cfg.get("local", "./output/")
+        variables["output_path"] = output_cfg.get("local", str(PULSE_HOME))
 
     return variables
 
