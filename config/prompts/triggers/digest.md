@@ -29,17 +29,20 @@ These come from real-time browser scans. They show what is ACTUALLY happening ri
 {{commitments_summary}}
 {{projects_block}}
 
-### Project Discovery & Update Instructions
+### MANDATORY: Persist Project Memory Before Writing Digest
 
-As you process content, look for **projects** — recurring customer engagements, deals, initiatives. For any project activity you find:
+**You MUST call `update_project` for every active project before writing the digest.** This creates persistent YAML files that carry context across digest cycles. If you skip this, tomorrow's digest starts from zero.
 
-1. **Check existing project files** (loaded above in Part D) before creating new ones
-2. **Discover new projects** from patterns: same customer across multiple sources, active deals with timelines, recurring meeting series
-3. **Update commitments**: who promised what to whom, by when. Mark overdue items.
-4. **Use `update_project`** tool to persist changes. Always read existing content first, merge new info, write full YAML back.
-5. **Link digest items** to projects using the `project` field in JSON output.
+**How to do it:**
+1. Scan all sources (transcripts, emails, Teams, calendar) for customer engagements, deals, initiatives
+2. For each project found: call `update_project(project_id="slug", yaml_content="...")` with full YAML
+3. If Part D above has existing project files, merge new info into them (don't overwrite — add new stakeholders, update commitments, change status)
+4. If Part D is empty, this is a bootstrap run — create a file for every project you discover
+5. Link each digest item to its project using the `project` field in the JSON output
 
-Project YAML schema:
+**What counts as a project:** Any customer engagement, deal, initiative, or workstream that has meetings, emails, or action items associated with it. If the same customer/topic appears in 2+ sources, it's a project.
+
+**Project YAML schema** (use this exact structure):
 ```yaml
 project: "Human-readable name"
 status: active  # active | blocked | on-hold | completed
@@ -48,6 +51,7 @@ summary: "1-2 sentence context"
 stakeholders:
   - name: "Full Name"
     role: "PM"
+    org: "Their Company"
 commitments:
   - what: "Send pricing proposal"
     who: "You"
@@ -59,6 +63,15 @@ next_meeting: "2026-02-25 14:00"
 key_dates:
   - date: "2026-03-01"
     event: "Contract renewal deadline"
+tags: [deal, enterprise]
+```
+
+**Example `update_project` call:**
+```
+update_project(
+  project_id="first-central-moonshot",
+  yaml_content="project: First Central Moonshot\nstatus: active\nrisk_level: high\nsummary: Technical deep-dive series for moonshot project...\nstakeholders:\n  - name: Jay Crofton\n    role: Technical Lead\n..."
+)
 ```
 
 ## WorkIQ Queries
@@ -217,7 +230,8 @@ Rules for `suggested_actions`:
 - Use context from local files and WorkIQ to make drafts specific and informed
 - Keep drafts concise and professional — match the sender's tone
 - `fyi` and `intel` items don't need `suggested_actions` — leave the array empty or omit it
-- Action types: `draft_teams_reply` (Teams reply), `send_email_reply` (Outlook reply), `schedule_meeting` (M365 Copilot scheduling — put attendees, duration, subject in `metadata`)
+- **PREFER Teams over email for all internal/Microsoft contacts.** Use `draft_teams_reply` as the default action type. Only use `send_email_reply` for external contacts who are NOT on Teams.
+- Action types: `draft_teams_reply` (Teams reply — DEFAULT for internal), `send_email_reply` (Outlook reply — external contacts only), `schedule_meeting` (M365 Copilot scheduling — put attendees, duration, subject in `metadata`)
 
 ### Output 2: Human-readable Markdown — `digests/{{date}}.md`
 

@@ -84,9 +84,11 @@ Rules for the JSON:
 - Keep drafts concise and professional — match the sender's tone
 - Write the JSON AFTER the markdown report
 
+**PREFER Teams over email for all internal/Microsoft contacts.** Use `draft_teams_reply` as the default — even if the original message came via email. Only use `send_email_reply` for external contacts who are NOT on Teams.
+
 Action types:
-- `draft_teams_reply` — reply to a Teams message (uses teams-sender skill)
-- `send_email_reply` — reply to an Outlook email (uses email-reply skill)
+- `draft_teams_reply` — reply via Teams (DEFAULT for internal contacts, even if original was email)
+- `send_email_reply` — reply via Outlook email (ONLY for external contacts not on Teams)
 - `schedule_meeting` — schedule a meeting via M365 Copilot (uses meeting-scheduler skill). Put attendees, duration, and subject in `metadata`.
 - `dismiss` — mark item as handled (no further action)
 - `schedule_followup` — remind later (no immediate action)
