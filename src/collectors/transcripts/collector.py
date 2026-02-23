@@ -151,6 +151,7 @@ async def run_transcript_collection(client, config: dict):
 
         # Step 3b: Multi-week lookback — process each week from most recent to oldest
         current_week_offset = 0
+        attempted_slugs: set[str] = set()  # Track slugs we've already tried
 
         for week_num in range(1, lookback_weeks + 1):
             if collected >= max_meetings:
@@ -162,25 +163,27 @@ async def run_transcript_collection(client, config: dict):
             await navigate_weeks_back(page, iframe, 1)
             current_week_offset += 1
 
-            # Step 4: Find meetings
+            # Step 4: Find meetings — wait for calendar to fully render
+            await page.wait_for_timeout(2000)
             meeting_buttons = await find_meeting_buttons(page, iframe)
 
             # If few meetings found, calendar may still be loading — retry
             if len(meeting_buttons) < 3:
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(4000)
                 meeting_buttons = await find_meeting_buttons(page, iframe)
             log.info(f"  Found {len(meeting_buttons)} meeting buttons in calendar.")
 
-            # Step 5: Process each meeting — try all, most won't have transcripts
-            for meeting_name in meeting_buttons:
-                if collected >= max_meetings:
-                    break
+            # Step 5: Process meetings — re-scan after each recap return
+            consecutive_click_failures = 0
+            while meeting_buttons and collected < max_meetings:
+                meeting_name = meeting_buttons.pop(0)
 
                 slug = _slugify(meeting_name)
-                if not slug:
+                if not slug or slug in attempted_slugs:
                     continue
+                attempted_slugs.add(slug)
 
-                # Check if already collected
+                # Check if already collected on disk
                 existing = list(output_dir.glob(f"*_{slug}*"))
                 if existing:
                     skipped += 1
@@ -198,22 +201,42 @@ async def run_transcript_collection(client, config: dict):
                         collected += 1
                     else:
                         skipped += 1
+                    consecutive_click_failures = 0
                 except asyncio.TimeoutError:
                     log.warning(f"  TIMEOUT: {meeting_name[:40]} exceeded {PER_MEETING_TIMEOUT}s")
                     errors.append(f"{meeting_name[:40]}: timeout after {PER_MEETING_TIMEOUT}s")
                     opened_recap = True  # assume we navigated away
                 except Exception as e:
-                    err_msg = f"{meeting_name[:40]}: {e}"
-                    log.warning(f"  ERROR: {err_msg}")
-                    errors.append(err_msg)
+                    err_msg = str(e)
+                    if "Timeout" in err_msg:
+                        consecutive_click_failures += 1
+                        if consecutive_click_failures >= 3:
+                            log.warning("  3 consecutive click failures — calendar view likely stale, re-navigating...")
+                            # Force re-navigation and re-scan
+                            opened_recap = True
+                    else:
+                        consecutive_click_failures = 0
+                    log.warning(f"  ERROR: {meeting_name[:40]}: {e}")
+                    errors.append(f"{meeting_name[:40]}: {e}")
 
                 # Navigate back to calendar for next meeting
-                try:
-                    await return_to_calendar(page, iframe, force=opened_recap,
-                                             week_offset=current_week_offset)
-                except Exception:
-                    log.warning("  FATAL: Cannot return to calendar, stopping collection.")
-                    break
+                if opened_recap:
+                    try:
+                        await return_to_calendar(page, iframe, force=True,
+                                                 week_offset=current_week_offset)
+                        # Re-scan buttons — calendar may have different state after return
+                        meeting_buttons = await find_meeting_buttons(page, iframe)
+                        log.info(f"  Re-scanned: {len(meeting_buttons)} meetings after return.")
+                        consecutive_click_failures = 0
+                    except Exception:
+                        log.warning("  FATAL: Cannot return to calendar, stopping collection.")
+                        meeting_buttons = []
+                else:
+                    # Simple popup — just escape
+                    try:
+                        await return_to_calendar(page, iframe, force=False)
+                    except Exception:
+                        pass
 
     finally:
         # Close the page we created, but only close the context if we own it

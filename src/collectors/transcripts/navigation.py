@@ -26,10 +26,28 @@ async def navigate_weeks_back(page: Page, iframe, weeks: int = 1):
         try:
             prev_btn = iframe.get_by_role("button", name=re.compile(r"Go to previous week"))
             await prev_btn.click()
-            await page.wait_for_timeout(1500)
+            # Wait for calendar iframe to re-render after navigation
+            await page.wait_for_timeout(2500)
         except Exception as e:
             log.warning(f"  Could not navigate to previous week (step {i + 1}/{weeks}): {e}")
             break
+
+
+async def go_to_today(page: Page, iframe):
+    """Click 'Go to today' to reset the calendar to the current week.
+
+    After clicking Calendar in the left nav, Teams may return to the LAST
+    VIEWED week instead of the current week. This resets to today first.
+    """
+    try:
+        today_btn = iframe.get_by_role("button", name=re.compile(r"Go to today"))
+        if await today_btn.count() > 0:
+            await today_btn.click()
+            await page.wait_for_timeout(2000)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 async def return_to_calendar(page: Page, iframe, force: bool = False, week_offset: int = 1):
@@ -66,14 +84,23 @@ async def return_to_calendar(page: Page, iframe, force: bool = False, week_offse
         except Exception:
             raise RuntimeError("Cannot navigate back to Calendar")
 
-    # Navigate back to the correct week offset
+    # Reset to current week first, THEN navigate back.
+    # Calendar button may return to the last-viewed week, not "today".
+    # Without this reset, navigate_weeks_back overshoots.
+    iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
     try:
-        iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
         await iframe_loc.get_by_role("button").first.wait_for(state="visible", timeout=10000)
+    except Exception:
+        await page.wait_for_timeout(3000)
+
+    await go_to_today(page, iframe_loc)
+
+    # Navigate back to the correct week offset
+    if week_offset > 0:
         await navigate_weeks_back(page, iframe_loc, week_offset)
-        log.info(f"  Calendar restored ({week_offset} week(s) back).")
-    except Exception as e:
-        log.warning(f"  Could not navigate to week offset {week_offset}: {e}")
+        # Wait for calendar to re-render after week navigation
+        await page.wait_for_timeout(2000)
+    log.info(f"  Calendar restored ({week_offset} week(s) back).")
 
 
 async def get_iframe_text(page: Page) -> str:
