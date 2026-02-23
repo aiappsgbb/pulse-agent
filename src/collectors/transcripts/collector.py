@@ -139,35 +139,60 @@ async def run_transcript_collection(client, config: dict):
             page = await own_context.new_page()
 
     try:
-        # Step 1: Navigate to Teams — fresh page, no stale SPA state
+        # Step 1: Navigate to Teams and wait for the SPA to fully load
         log.info("  Opening Teams...")
         await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
-        await page.wait_for_timeout(6000)
 
+        # Wait for Teams UI to actually render — look for the app bar / nav buttons
         try:
+            await page.get_by_role("button", name="Chat").wait_for(state="visible", timeout=20000)
+            log.info(f"  Teams loaded: {await page.title()}")
+        except Exception:
+            # App bar not found within 20s — wait a bit more and continue
+            await page.wait_for_timeout(8000)
+            log.info(f"  Teams slow load, continuing: {await page.title()}")
+
+        # Step 2: Click Calendar — retry up to 3 times with different approaches
+        log.info("  Navigating to Calendar...")
+        calendar_opened = False
+
+        for attempt in range(3):
+            # Try clicking the Calendar button in the left nav
+            try:
+                cal_btn = page.get_by_role("button", name="Calendar")
+                if await cal_btn.count() > 0:
+                    await cal_btn.click()
+                    await page.wait_for_timeout(3000)
+                    title = await page.title()
+                    if "Calendar" in title:
+                        calendar_opened = True
+                        break
+            except Exception:
+                pass
+
+            # Fallback: navigate directly to Teams calendar URL
+            if attempt >= 1:
+                log.info(f"  Calendar button failed (attempt {attempt + 1}), trying direct URL...")
+                try:
+                    await page.goto("https://teams.microsoft.com/v2/calendar", wait_until="domcontentloaded")
+                    await page.wait_for_timeout(5000)
+                    title = await page.title()
+                    if "Calendar" in title:
+                        calendar_opened = True
+                        break
+                except Exception:
+                    pass
+
+            if attempt < 2:
+                log.info(f"  Calendar nav attempt {attempt + 1} failed, waiting before retry...")
+                await page.wait_for_timeout(3000)
+
+        if not calendar_opened:
             title = await page.title()
-            log.info(f"  Page loaded: {title}")
-        except Exception:
-            log.info("  Page navigated during load (Teams SPA redirect) — continuing.")
-
-        # Step 2: Click Calendar in the left nav bar (works from any view)
-        log.info("  Clicking Calendar nav button...")
-        try:
-            cal_btn = page.get_by_role("button", name="Calendar")
-            await cal_btn.click()
-            await page.wait_for_timeout(3000)
-        except Exception:
-            # Fallback: keyboard shortcut
-            log.info("  Calendar button not found, trying Ctrl+Shift+3...")
-            await page.keyboard.press("Control+Shift+3")
-            await page.wait_for_timeout(3000)
-
-        title = await page.title()
-        log.info(f"  After nav: {title}")
-
-        if "Calendar" not in title:
-            log.warning(f"  Could not open Calendar view. Got: {title}")
+            log.warning(f"  Could not open Calendar view after 3 attempts. Got: {title}")
             return
+
+        log.info(f"  Calendar opened: {await page.title()}")
 
         # Step 3: Wait for the calendar iframe to fully load
         iframe = page.frame_locator('iframe[name="embedded-page-container"]')
