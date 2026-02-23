@@ -205,6 +205,10 @@ async def _navigate_to_teams(page) -> bool:
 
     Polls for strong UI indicators (chat tree, new-chat button) rather than
     proceeding on a timer.  Teams SPA can take 30s+ to hydrate.
+
+    Auth handling: Teams often does a transient redirect to microsoftonline.com
+    for silent token refresh, then redirects back. We allow up to 15s for this
+    before declaring the session expired.
     """
     log.info("  Navigating to Teams Chat...")
     await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
@@ -218,13 +222,26 @@ async def _navigate_to_teams(page) -> bool:
     max_wait = 120  # seconds
     poll_interval = 3  # seconds
     waited = 0
+    login_seen_at = -1  # track when we first saw a login redirect
 
     while waited < max_wait:
-        # Check for login redirect first
+        # Check for login redirect — but allow time for silent token refresh
         url = page.url.lower()
         if "login" in url or "oauth" in url or "microsoftonline" in url:
-            log.error("  Teams session expired — login page detected")
-            return False
+            if login_seen_at < 0:
+                login_seen_at = waited
+                log.info("  Login redirect detected — waiting for silent token refresh...")
+            elif waited - login_seen_at > 15:
+                # Still on login page after 15s — session is truly expired
+                log.error("  Teams session expired — login page did not resolve after 15s")
+                return False
+            # Don't evaluate JS on the login page — wait for redirect back
+            await page.wait_for_timeout(poll_interval * 1000)
+            waited += poll_interval
+            continue
+        else:
+            # URL is back on Teams — reset login tracker
+            login_seen_at = -1
 
         try:
             ready = await page.evaluate("""

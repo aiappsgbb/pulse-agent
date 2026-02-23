@@ -176,12 +176,17 @@ async def _do_reply(page, search_query: str, message: str) -> dict:
     except Exception:
         pass
 
-    await page.wait_for_timeout(3000)
-
-    # Check for login page
-    url = page.url.lower()
-    if "login" in url or "oauth" in url or "microsoftonline" in url:
-        return {"success": False, "detail": "Outlook session expired — login page detected"}
+    # Wait for auth redirects to settle — Outlook may do a silent token refresh
+    # that briefly passes through microsoftonline.com before landing back
+    for _ in range(6):  # up to 18s total (3s initial + 6*2.5s)
+        await page.wait_for_timeout(2500)
+        url = page.url.lower()
+        if "outlook.office" in url or "outlook.live" in url:
+            break  # landed on Outlook
+    else:
+        url = page.url.lower()
+        if "login" in url or "oauth" in url or "microsoftonline" in url:
+            return {"success": False, "detail": "Outlook session expired — login page detected"}
 
     # Step 2: Search for the email
     search_found = await page.evaluate(FIND_SEARCH_BOX_JS)

@@ -97,12 +97,12 @@ async def test_navigate_teams_never_loads():
 
 
 async def test_navigate_teams_login_detected():
-    """Login redirect detected mid-poll — should bail immediately."""
+    """Login redirect that doesn't resolve — should bail after 15s grace period."""
     page = _make_page(url="https://login.microsoftonline.com/something")
 
     result = await _navigate_to_teams(page)
     assert result is False
-    # Should not have tried to evaluate readiness
+    # Should not have tried to evaluate readiness (skips JS eval on login pages)
     page.evaluate.assert_not_called()
 
 

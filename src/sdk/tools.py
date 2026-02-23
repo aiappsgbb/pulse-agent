@@ -342,56 +342,67 @@ _TEXT_EXTENSIONS = {
 @define_tool(
     name="search_local_files",
     description=(
-        "Search local input files (transcripts, documents, emails) for a keyword or phrase. "
-        "Searches all text-based files (.md, .txt, .vtt, .eml, .csv, etc.) recursively. "
+        "Search local files for a keyword or phrase. Searches BOTH input/ (transcripts, "
+        "documents, emails) AND output/ (digests, intel reports, project files). "
+        "Searches all text-based files (.md, .txt, .json, .yaml, etc.) recursively. "
         "Use this to find context before responding — e.g., search for a person's name, "
-        "project name, or topic across recent meeting transcripts and documents. "
+        "project name, or topic across meeting transcripts, digests, and project memory. "
         "Returns matching snippets with surrounding context."
     ),
 )
 def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocation) -> str:
     from core.constants import INPUT_DIR
 
-    if not INPUT_DIR.exists():
-        return "No input directory found."
-
     # Prevent path traversal in glob pattern
     if ".." in params.file_pattern:
         return "ERROR: Invalid file pattern."
 
+    # Search both input/ and output/ directories
+    search_dirs = []
+    if INPUT_DIR.exists():
+        search_dirs.append(("input", INPUT_DIR))
+    if OUTPUT_DIR.exists():
+        search_dirs.append(("output", OUTPUT_DIR))
+
+    if not search_dirs:
+        return "No input or output directories found."
+
     query_lower = params.query.lower()
     results = []
 
-    # Search recursively across all input subdirs
-    for filepath in sorted(INPUT_DIR.rglob(params.file_pattern)):
-        if not filepath.is_file():
-            continue
-        # Skip binary files when using broad glob patterns
-        if filepath.suffix.lower() not in _TEXT_EXTENSIONS:
-            continue
-        try:
-            text = filepath.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
+    for dir_label, search_dir in search_dirs:
+        for filepath in sorted(search_dir.rglob(params.file_pattern)):
+            if not filepath.is_file():
+                continue
+            # Skip binary files when using broad glob patterns
+            if filepath.suffix.lower() not in _TEXT_EXTENSIONS:
+                continue
+            try:
+                text = filepath.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
 
-        if query_lower not in text.lower():
-            continue
+            if query_lower not in text.lower():
+                continue
 
-        # Extract matching lines with context (2 lines before/after)
-        lines = text.splitlines()
-        snippets = []
-        for i, line in enumerate(lines):
-            if query_lower in line.lower():
-                start = max(0, i - 2)
-                end = min(len(lines), i + 3)
-                snippet = "\n".join(lines[start:end])
-                snippets.append(snippet)
-                if len(snippets) >= 3:  # max 3 snippets per file
-                    break
+            # Extract matching lines with context (2 lines before/after)
+            lines = text.splitlines()
+            snippets = []
+            for i, line in enumerate(lines):
+                if query_lower in line.lower():
+                    start = max(0, i - 2)
+                    end = min(len(lines), i + 3)
+                    snippet = "\n".join(lines[start:end])
+                    snippets.append(snippet)
+                    if len(snippets) >= 3:  # max 3 snippets per file
+                        break
 
-        rel_path = filepath.relative_to(INPUT_DIR)
-        match_text = "\n---\n".join(snippets)
-        results.append(f"### {rel_path}\n{match_text}")
+            rel_path = filepath.relative_to(search_dir)
+            match_text = "\n---\n".join(snippets)
+            results.append(f"### {dir_label}/{rel_path}\n{match_text}")
+
+            if len(results) >= params.max_results:
+                break
 
         if len(results) >= params.max_results:
             break
