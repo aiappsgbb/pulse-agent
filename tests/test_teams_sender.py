@@ -269,10 +269,8 @@ async def test_new_chat_no_suggestions():
         "clicked new-message",
         # FIND_TO_FIELD_JS
         "found",
-        # EXTRACT_SUGGESTIONS_JS (first try)
-        [],
-        # EXTRACT_SUGGESTIONS_JS (after Enter)
-        [],
+        # _search_recipient: 3 retries, all empty
+        [], [], [],
     ])
 
     result = await _do_send_new_chat(page, "Nonexistent Person", "Hi")

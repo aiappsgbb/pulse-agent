@@ -10,6 +10,13 @@ Flow:
 4. Click Reply
 5. Type the reply message
 6. Click Send (or Ctrl+Enter)
+
+DOM structure verified 2026-02-23 via Playwright MCP inspection:
+- Search box: input[aria-label*="Search" i]
+- Mail items: [role="option"][data-convid] (also [role="listitem"] as fallback)
+- Reply button: button[aria-label="Reply" i] (also menuitem[name="Reply"] in email toolbar)
+- Compose body: [role="textbox"][aria-label*="Message body" i] (contenteditable div)
+- Send button: button[aria-label="Send" i] (title="Send (Ctrl+Enter)")
 """
 
 from core.logging import log, safe_encode
@@ -65,48 +72,30 @@ CLICK_SEARCH_RESULT_JS = """
 """
 
 # Find and click the Reply button (not Reply All)
+# Verified: button[aria-label="Reply" i] in ribbon, menuitem[name="Reply"] in email toolbar
 CLICK_REPLY_JS = """
 () => {
-    // Try specific reply buttons
+    // Ribbon reply button
     let btn = document.querySelector('button[aria-label="Reply" i]');
     if (btn) { btn.click(); return 'clicked reply button'; }
 
-    btn = document.querySelector('button[title="Reply" i]');
-    if (btn) { btn.click(); return 'clicked reply title'; }
-
-    // Look for reply icon buttons
-    const buttons = document.querySelectorAll('button');
-    for (const b of buttons) {
-        const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').toLowerCase();
-        if (label === 'reply' || label === 'reply (ctrl+r)') {
-            b.click();
-            return 'clicked: ' + label;
-        }
-    }
+    // Email toolbar reply (menuitem, not button)
+    btn = document.querySelector('[role="menuitem"][aria-label="Reply" i]');
+    if (btn) { btn.click(); return 'clicked reply menuitem'; }
 
     return null;
 }
 """
 
 # Find the reply compose area
+# Verified: [role="textbox"][aria-label*="Message body" i] with contenteditable="true"
 FIND_REPLY_COMPOSE_JS = """
 () => {
-    // Outlook reply compose — contenteditable div
     let box = document.querySelector('[role="textbox"][aria-label*="Message body" i]');
     if (box) return 'textbox-message-body';
 
     box = document.querySelector('[aria-label*="Message body" i][contenteditable="true"]');
     if (box) return 'contenteditable-message-body';
-
-    box = document.querySelector('div[contenteditable="true"][class*="draftEditor" i]');
-    if (box) return 'draft-editor';
-
-    // Generic contenteditable in compose area
-    box = document.querySelector(
-        '[class*="compose" i] [contenteditable="true"], ' +
-        '[class*="reply" i] [contenteditable="true"]'
-    );
-    if (box) return 'compose-area';
 
     return null;
 }
@@ -118,9 +107,6 @@ FOCUS_REPLY_COMPOSE_JS = """
     const selectors = [
         '[role="textbox"][aria-label*="Message body" i]',
         '[aria-label*="Message body" i][contenteditable="true"]',
-        'div[contenteditable="true"][class*="draftEditor" i]',
-        '[class*="compose" i] [contenteditable="true"]',
-        '[class*="reply" i] [contenteditable="true"]',
     ];
     for (const sel of selectors) {
         const el = document.querySelector(sel);
@@ -135,24 +121,12 @@ FOCUS_REPLY_COMPOSE_JS = """
 """
 
 # Click the Send button
+# Verified: button[aria-label="Send" i] (title="Send (Ctrl+Enter)")
 CLICK_SEND_JS = """
 () => {
     let btn = document.querySelector('button[aria-label="Send" i]');
     if (btn) { btn.click(); return 'clicked send'; }
 
-    btn = document.querySelector('button[title="Send" i]');
-    if (btn) { btn.click(); return 'clicked send title'; }
-
-    // Look for send button by text content
-    const buttons = document.querySelectorAll('button');
-    for (const b of buttons) {
-        const text = (b.innerText || '').trim().toLowerCase();
-        const label = (b.getAttribute('aria-label') || '').toLowerCase();
-        if (text === 'send' || label === 'send') {
-            b.click();
-            return 'clicked: ' + (text || label);
-        }
-    }
     return null;
 }
 """

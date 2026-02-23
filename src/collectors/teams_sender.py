@@ -7,12 +7,12 @@ Two flows:
 1. send_teams_message(recipient, message) — opens 1:1 chat via "New chat" button
 2. reply_to_chat(chat_name, message) — finds existing chat in sidebar and replies
 
-DOM structure notes (Teams 2026 web UI):
-- New chat button: button with compose/pen icon in the toolbar
-- "To:" field in new chat: combobox or input for recipient search
-- Autocomplete suggestions: listbox with person results
-- Message compose: contenteditable div or textbox
-- Send: Ctrl+Enter
+DOM structure verified 2026-02-23 via Playwright MCP inspection:
+- New message button: button[aria-label*="New message" i] (shortcut Alt+Shift+N)
+- To: field: input[placeholder*="Enter name" i] inside combobox[aria-label="To:"]
+- Autocomplete: listbox[aria-label="To:"] > option (standard ARIA listbox/option)
+- Compose box: [role="textbox"] with placeholder "Type a message"
+- Send: button[aria-label*="Send" i] or Ctrl+Enter
 """
 
 import re
@@ -22,41 +22,28 @@ from core.logging import log, safe_encode
 
 # --- JS Snippets ---
 
-# Find and click the "New message" button (Teams 2026 UI)
-# Verified: button[aria-label*="New message"] with shortcut Alt+Shift+N
+# Find and click the "New message" button
 FIND_NEW_CHAT_BUTTON_JS = """
 () => {
-    // Teams 2026: "New message (Alt+Shift+N)"
+    // Verified: button "New message (Alt+Shift+N)"
     let btn = document.querySelector('button[aria-label*="New message" i]');
     if (btn) { btn.click(); return 'clicked new-message'; }
 
-    // Fallback: "New chat" (older Teams versions)
+    // Fallback: older Teams versions
     btn = document.querySelector('button[aria-label*="New chat" i]');
     if (btn) { btn.click(); return 'clicked new-chat'; }
-
-    // Try data-tid
-    btn = document.querySelector('[data-tid="new-chat-button"]');
-    if (btn) { btn.click(); return 'clicked data-tid'; }
-
-    btn = document.querySelector('button[aria-label*="Compose" i]');
-    if (btn) { btn.click(); return 'clicked compose'; }
 
     return null;
 }
 """
 
-# Find the "To:" field in the new chat view
-# Verified Teams 2026: input[placeholder="Enter name, chat, channel, email or tag"]
+# Find and focus the "To:" field in the new chat view
+# Verified: input with placeholder "Enter name, chat, channel, email or tag"
 FIND_TO_FIELD_JS = """
 () => {
-    // Teams 2026: "Enter name, chat, channel, email or tag"
     let field = document.querySelector('input[placeholder*="Enter name" i]');
-    if (!field) field = document.querySelector('input[placeholder*="name" i][placeholder*="email" i]');
-    if (!field) field = document.querySelector('input[placeholder*="To" i]');
-    if (!field) field = document.querySelector('[data-tid="new-chat-to-line"] input');
-    if (!field) field = document.querySelector('[role="combobox"][aria-label*="To" i]');
+    if (!field) field = document.querySelector('[role="combobox"][aria-label="To:"] input');
     if (!field) field = document.querySelector('input[aria-label*="To" i]');
-    if (!field) field = document.querySelector('input[aria-label*="Add people" i]');
 
     if (field) {
         field.focus();
@@ -68,14 +55,11 @@ FIND_TO_FIELD_JS = """
 """
 
 # Extract autocomplete suggestions from the dropdown
+# Verified: standard [role="listbox"] > [role="option"] pattern
 EXTRACT_SUGGESTIONS_JS = """
 () => {
     const results = [];
-
-    // Look for listbox suggestions
-    const options = document.querySelectorAll(
-        '[role="listbox"] [role="option"], [role="list"] [role="listitem"]'
-    );
+    const options = document.querySelectorAll('[role="listbox"] [role="option"]');
     for (const opt of options) {
         const text = (opt.innerText || '').trim();
         if (text && text.length > 1) {
@@ -85,18 +69,6 @@ EXTRACT_SUGGESTIONS_JS = """
             });
         }
     }
-
-    // Also check suggestion containers
-    if (results.length === 0) {
-        const items = document.querySelectorAll(
-            '[class*="suggestion" i] [role="option"], [class*="Suggestion" i] [role="option"]'
-        );
-        for (const item of items) {
-            const text = (item.innerText || '').trim();
-            if (text) results.push({ text: text.substring(0, 200), index: results.length });
-        }
-    }
-
     return results;
 }
 """
@@ -104,17 +76,7 @@ EXTRACT_SUGGESTIONS_JS = """
 # Click the Nth suggestion (0-indexed)
 CLICK_SUGGESTION_JS = """
 (index) => {
-    const options = document.querySelectorAll(
-        '[role="listbox"] [role="option"], [role="list"] [role="listitem"]'
-    );
-    if (index < options.length) {
-        options[index].click();
-        return true;
-    }
-
-    const items = document.querySelectorAll(
-        '[class*="suggestion" i] [role="option"], [class*="Suggestion" i] [role="option"]'
-    );
+    const items = document.querySelectorAll('[role="listbox"] [role="option"]');
     if (index < items.length) {
         items[index].click();
         return true;
@@ -124,27 +86,20 @@ CLICK_SUGGESTION_JS = """
 """
 
 # Find the message compose box
+# Verified: [role="textbox"] with placeholder "Type a message"
 FIND_COMPOSE_BOX_JS = """
 () => {
-    // Teams compose box — contenteditable div or textbox
-    let box = document.querySelector('[data-tid="ckeditor"] [contenteditable="true"]');
-    if (box) return 'ckeditor';
+    let box = document.querySelector('[role="textbox"][aria-label*="Type a message" i]');
+    if (box) return 'textbox-type-message';
 
     box = document.querySelector('[role="textbox"][aria-label*="message" i]');
     if (box) return 'textbox-message';
 
+    box = document.querySelector('[data-tid="ckeditor"] [contenteditable="true"]');
+    if (box) return 'ckeditor';
+
     box = document.querySelector('[role="textbox"][contenteditable="true"]');
     if (box) return 'textbox-contenteditable';
-
-    box = document.querySelector('[contenteditable="true"][data-placeholder*="message" i]');
-    if (box) return 'contenteditable-placeholder';
-
-    // Broader search — any contenteditable in the compose area
-    box = document.querySelector(
-        '[class*="compose" i] [contenteditable="true"], ' +
-        '[class*="Compose" i] [contenteditable="true"]'
-    );
-    if (box) return 'compose-area';
 
     return null;
 }
@@ -154,12 +109,10 @@ FIND_COMPOSE_BOX_JS = """
 FOCUS_COMPOSE_BOX_JS = """
 () => {
     const selectors = [
-        '[data-tid="ckeditor"] [contenteditable="true"]',
+        '[role="textbox"][aria-label*="Type a message" i]',
         '[role="textbox"][aria-label*="message" i]',
+        '[data-tid="ckeditor"] [contenteditable="true"]',
         '[role="textbox"][contenteditable="true"]',
-        '[contenteditable="true"][data-placeholder*="message" i]',
-        '[class*="compose" i] [contenteditable="true"]',
-        '[class*="Compose" i] [contenteditable="true"]',
     ];
     for (const sel of selectors) {
         const el = document.querySelector(sel);
@@ -304,6 +257,23 @@ async def _navigate_to_teams(page) -> bool:
     return False
 
 
+async def _search_recipient(page, search_text: str) -> list:
+    """Type a name into the To: field and wait for autocomplete suggestions.
+
+    Retries with increasing wait times. Returns the suggestion list (may be empty).
+    """
+    await page.keyboard.type(search_text, delay=80)
+
+    # Try multiple times with increasing wait — autocomplete can be slow
+    for wait_ms in [2000, 3000, 4000]:
+        await page.wait_for_timeout(wait_ms)
+        suggestions = await page.evaluate(EXTRACT_SUGGESTIONS_JS)
+        if suggestions:
+            return suggestions
+
+    return []
+
+
 async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
     """Open new chat, search recipient, send message."""
     if not await _navigate_to_teams(page):
@@ -340,17 +310,8 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
     log.info(f"  'To:' field found: {to_found}")
     await page.wait_for_timeout(500)
 
-    # Step 3: Type the recipient name
-    await page.keyboard.type(recipient, delay=50)
-    await page.wait_for_timeout(2000)  # Wait for autocomplete
-
-    # Step 4: Read autocomplete suggestions
-    suggestions = await page.evaluate(EXTRACT_SUGGESTIONS_JS)
-    if not suggestions:
-        # Try pressing Enter to search
-        await page.keyboard.press("Enter")
-        await page.wait_for_timeout(2000)
-        suggestions = await page.evaluate(EXTRACT_SUGGESTIONS_JS)
+    # Step 3: Type the recipient name and wait for autocomplete
+    suggestions = await _search_recipient(page, recipient)
 
     if not suggestions:
         return {
@@ -362,7 +323,7 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
     for s in suggestions[:5]:
         log.info(f"    - {safe_encode(s.get('text', ''))}")
 
-    # Step 5: Click the best suggestion
+    # Step 4: Click the best suggestion
     # ONLY select if the recipient name actually appears in the suggestion text.
     # Never default to suggestion #0 — that sends to the wrong person.
     recipient_lower = recipient.lower()
@@ -400,7 +361,7 @@ async def _do_send_new_chat(page, recipient: str, message: str) -> dict:
     log.info(f"  Selected: {safe_encode(matched_name)} (suggestion #{best_idx})")
     await page.wait_for_timeout(1500)
 
-    # Step 6: Type the message
+    # Step 5: Type the message
     return await _type_and_send(page, message, recipient)
 
 
