@@ -87,7 +87,7 @@ class UpdateProjectParams(BaseModel):
 
 class SearchLocalFilesParams(BaseModel):
     query: str
-    file_pattern: str = "*.txt"  # glob pattern to filter files
+    file_pattern: str = "*.*"  # glob pattern to filter files
     max_results: int = 5
 
 
@@ -333,10 +333,17 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
 
 # --- Local file search ---
 
+_TEXT_EXTENSIONS = {
+    ".txt", ".md", ".vtt", ".csv", ".json", ".yaml", ".yml",
+    ".eml", ".html", ".htm", ".xml", ".log", ".rst", ".ini", ".cfg",
+}
+
+
 @define_tool(
     name="search_local_files",
     description=(
         "Search local input files (transcripts, documents, emails) for a keyword or phrase. "
+        "Searches all text-based files (.md, .txt, .vtt, .eml, .csv, etc.) recursively. "
         "Use this to find context before responding — e.g., search for a person's name, "
         "project name, or topic across recent meeting transcripts and documents. "
         "Returns matching snippets with surrounding context."
@@ -358,6 +365,9 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
     # Search recursively across all input subdirs
     for filepath in sorted(INPUT_DIR.rglob(params.file_pattern)):
         if not filepath.is_file():
+            continue
+        # Skip binary files when using broad glob patterns
+        if filepath.suffix.lower() not in _TEXT_EXTENSIONS:
             continue
         try:
             text = filepath.read_text(encoding="utf-8", errors="replace")

@@ -254,6 +254,31 @@ async def test_search_local_files_context_lines(tmp_dir):
     assert "line4" in text  # context after
 
 
+async def test_search_local_files_finds_md_by_default(tmp_dir):
+    """Default pattern (*.*) should find .md files — transcripts are .md."""
+    input_dir = tmp_dir / "input" / "transcripts"
+    input_dir.mkdir(parents=True)
+    (input_dir / "meeting.md").write_text("Claude security launch announced today.", encoding="utf-8")
+    with patch("core.constants.INPUT_DIR", tmp_dir / "input"):
+        result = await search_local_files.handler({"arguments": {"query": "Claude security"}})
+    assert result["resultType"] == "success"
+    assert "Claude security" in result["textResultForLlm"]
+    assert "meeting.md" in result["textResultForLlm"]
+
+
+async def test_search_local_files_skips_binary(tmp_dir):
+    """Binary files (.pptx, .pdf, etc.) should be skipped even with *.*."""
+    input_dir = tmp_dir / "input"
+    input_dir.mkdir(parents=True)
+    (input_dir / "deck.pptx").write_bytes(b"\x00\x01binary content with keyword")
+    (input_dir / "notes.md").write_text("The keyword is here.", encoding="utf-8")
+    with patch("core.constants.INPUT_DIR", input_dir):
+        result = await search_local_files.handler({"arguments": {"query": "keyword"}})
+    text = result["textResultForLlm"]
+    assert "notes.md" in text
+    assert "deck.pptx" not in text
+
+
 # --- update_project ---
 
 
