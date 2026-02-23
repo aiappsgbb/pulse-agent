@@ -66,6 +66,28 @@ def check_missed_digest(job_queue: asyncio.Queue):
     log.info("Catch-up: no recent digest found — queued")
 
 
+def check_missed_intel(job_queue: asyncio.Queue):
+    """Queue a catch-up intel brief if none exists for today or yesterday."""
+    intel_dir = OUTPUT_DIR / "intel"
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    today_exists = (intel_dir / f"{today}.md").exists()
+    yesterday_exists = (intel_dir / f"{yesterday}.md").exists()
+
+    if today_exists or yesterday_exists:
+        return
+
+    from tg.bot import get_proactive_chat_id
+    chat_id = get_proactive_chat_id()
+    job_queue.put_nowait({
+        "type": "intel",
+        "_source": "catch-up",
+        "_chat_id": chat_id,
+    })
+    log.info("Catch-up: no recent intel brief found — queued")
+
+
 async def heartbeat(config: dict, job_queue: asyncio.Queue, shutdown_event: asyncio.Event):
     """Periodic heartbeat — enqueues triage during office hours."""
     from tg.bot import get_proactive_chat_id

@@ -136,9 +136,18 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         priorities = digest_cfg.get("priorities", [])
         variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
 
-        # Dismissed items
+        # Dismissed items (auto-expire after 30 days)
         actions = load_actions()
-        dismissed = actions.get("dismissed", [])
+        dismissed_raw = actions.get("dismissed", [])
+        dismissed = []
+        for d in dismissed_raw:
+            try:
+                dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
+                if (datetime.now() - dismissed_at).days > 30:
+                    continue
+            except (ValueError, TypeError):
+                pass
+            dismissed.append(d)
         notes = actions.get("notes", {})
 
         if dismissed:
@@ -507,25 +516,29 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     log.info("Phase 0: Scanning Teams inbox for unread messages...")
     items = await scan_teams_inbox(config)
-    formatted = format_inbox_for_prompt(items)
     if items is None:
-        log.warning(f"  Teams inbox: UNAVAILABLE — browser not running")
+        formatted = "**Teams inbox scan UNAVAILABLE** — browser not running."
+        log.warning("  Teams inbox: UNAVAILABLE — browser not running")
     elif items:
-        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
+        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(items)}"
         log.info(f"  Found {len(items)} unread Teams messages (scanned at {scan_time})")
     else:
-        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{formatted}"
+        formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(items)}"
         log.info(f"  No unread Teams messages detected (scanned at {scan_time}).")
 
     log.info("Phase 0b: Scanning Outlook inbox for unread emails...")
     outlook_items = await scan_outlook_inbox(config)
-    outlook_block = format_outlook_for_prompt(outlook_items)
-    if outlook_items is not None:
-        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+    if outlook_items is None:
+        outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running."
+    else:
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
 
     log.info("Phase 0c: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
-    calendar_block = format_calendar_for_prompt(cal_events)
+    if cal_events is None:
+        calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
+    else:
+        calendar_block = format_calendar_for_prompt(cal_events)
 
     return {
         "teams_inbox": formatted,
@@ -546,14 +559,27 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     from collectors.outlook_inbox import scan_outlook_inbox, format_outlook_for_prompt
     from collectors.calendar import scan_calendar, format_calendar_for_prompt
     from collectors.transcripts.compressor import compress_existing_transcripts
+    from collectors.transcripts import run_transcript_collection
+    from core.browser import get_browser_manager
 
-    # Phase 0: Compress any raw .txt transcripts before content collection
+    # Phase 0a: Collect fresh transcripts from Teams (multi-week lookback)
+    browser_mgr = get_browser_manager()
+    if browser_mgr and browser_mgr.context:
+        log.info("Phase 0a: Collecting fresh transcripts from Teams...")
+        try:
+            await run_transcript_collection(client, config)
+        except Exception as e:
+            log.warning(f"  Transcript collection failed (non-fatal): {e}")
+    else:
+        log.info("Phase 0a: Skipping transcript collection (no browser)")
+
+    # Phase 0b: Compress any raw .txt transcripts before content collection
     if client:
         transcripts_dir = PROJECT_ROOT / "input" / "transcripts"
         if transcripts_dir.exists() and list(transcripts_dir.glob("*.txt")):
             tc_models = config.get("models", {})
             compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
-            log.info("Phase 0: Compressing raw transcripts via GHCP SDK...")
+            log.info("Phase 0b: Compressing raw transcripts via GHCP SDK...")
             compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
             log.info(f"  Compressed {compressed_count} transcripts")
 
@@ -569,13 +595,14 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
 
     log.info("\nPhase 1b: Fetching RSS feeds...")
     articles = collect_feeds(config)
+    articles_filtered = True  # assume filtered unless proven otherwise
     if articles:
         log.info(f"  Collected {len(articles)} new articles")
         # Pre-filter via SDK — only keep articles worth reading
         if client:
             from collectors.article_filter import filter_articles
             intel_cfg = config.get("intelligence", {})
-            articles = await filter_articles(
+            articles, articles_filtered = await filter_articles(
                 client, articles,
                 topics=intel_cfg.get("topics"),
                 competitors=intel_cfg.get("competitors"),
@@ -587,35 +614,35 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     log.info("\nPhase 1c: Scanning Teams inbox for unread messages...")
     teams_items = await scan_teams_inbox(config)
     scan_time = datetime.now().strftime("%H:%M:%S")
-    teams_inbox_block = format_inbox_for_prompt(teams_items)
-    # Prepend timestamp so the agent knows when this snapshot was taken
     if teams_items is None:
-        log.warning(f"  Teams inbox: UNAVAILABLE — browser not running")
+        teams_inbox_block = "**Teams inbox scan UNAVAILABLE** — browser not running. Cannot verify unread messages."
+        log.warning("  Teams inbox: UNAVAILABLE — browser not running")
     elif teams_items:
-        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
+        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(teams_items)}"
         log.info(f"  Teams inbox: {len(teams_items)} unread (scanned at {scan_time})")
     else:
-        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{teams_inbox_block}"
+        teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(teams_items)}"
         log.info(f"  Teams inbox: no unread messages (scanned at {scan_time})")
 
     log.info("\nPhase 1d: Scanning Outlook inbox for unread emails...")
     outlook_items = await scan_outlook_inbox(config)
-    outlook_block = format_outlook_for_prompt(outlook_items)
     if outlook_items is None:
-        log.warning(f"  Outlook inbox: UNAVAILABLE — browser not running")
+        outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running. Cannot verify unread emails."
+        log.warning("  Outlook inbox: UNAVAILABLE — browser not running")
     elif outlook_items:
-        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
         log.info(f"  Outlook inbox: {len(outlook_items)} unread (scanned at {scan_time})")
     else:
-        outlook_block = f"*(Scanned at {scan_time})*\n\n{outlook_block}"
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
         log.info(f"  Outlook inbox: no unread emails (scanned at {scan_time})")
 
     log.info("\nPhase 1e: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
-    calendar_block = format_calendar_for_prompt(cal_events)
     if cal_events is None:
-        log.warning(f"  Calendar: UNAVAILABLE — browser not running")
+        calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
+        log.warning("  Calendar: UNAVAILABLE — browser not running")
     else:
+        calendar_block = format_calendar_for_prompt(cal_events)
         active_count = len([e for e in cal_events if not e.get("is_declined")])
         log.info(f"  Calendar: {active_count} active events")
 
@@ -652,12 +679,21 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
             if why:
                 line += f" — {why}"
             article_lines.append(line)
-        articles_block = (
-            f"\n## Part C — External Intel ({len(articles)} pre-filtered articles)\n"
-            f"These articles have already been filtered for relevance. Include any that "
-            f"affect active customers, competitive positioning, or upcoming conversations.\n\n"
-            + "\n".join(article_lines) + "\n"
-        )
+        if articles_filtered:
+            articles_block = (
+                f"\n## Part C — External Intel ({len(articles)} pre-filtered articles)\n"
+                f"These articles have already been filtered for relevance. Include any that "
+                f"affect active customers, competitive positioning, or upcoming conversations.\n\n"
+                + "\n".join(article_lines) + "\n"
+            )
+        else:
+            articles_block = (
+                f"\n## Part C — External Intel ({len(articles)} UNFILTERED articles)\n"
+                f"**WARNING: Article filter failed.** These articles are raw and unfiltered. "
+                f"Most are noise. Only include articles that DIRECTLY affect active customers, "
+                f"competitive positioning, or upcoming conversations. Be very selective.\n\n"
+                + "\n".join(article_lines) + "\n"
+            )
 
     return {
         "content_block": content_block,
@@ -686,7 +722,7 @@ async def _pre_process_intel(config: dict, client: CopilotClient | None = None) 
         if client:
             from collectors.article_filter import filter_articles
             intel_cfg = config.get("intelligence", {})
-            articles = await filter_articles(
+            articles, _ = await filter_articles(
                 client, articles,
                 topics=intel_cfg.get("topics"),
                 competitors=intel_cfg.get("competitors"),

@@ -172,9 +172,10 @@ async def main():
     from daemon.sync import sync_jobs_from_onedrive
     sync_jobs_from_onedrive(config, job_queue)
 
-    # Check for missed digests (runs before worker starts processing)
-    from daemon.heartbeat import heartbeat, check_missed_digest
+    # Check for missed digests and intel (runs before worker starts processing)
+    from daemon.heartbeat import heartbeat, check_missed_digest, check_missed_intel
     check_missed_digest(job_queue)
+    check_missed_intel(job_queue)
 
     # Start worker, heartbeat, and scheduler
     from daemon.worker import job_worker

@@ -47,7 +47,7 @@ async def filter_articles(
     topics: list[str] | None = None,
     competitors: list[dict] | None = None,
     model: str = "gpt-4.1",
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Filter articles via SDK, keeping only the relevant ones.
 
     Args:
@@ -58,10 +58,11 @@ async def filter_articles(
         model: Model to use for filtering
 
     Returns:
-        Filtered articles with 'why' field added. Falls back to unfiltered on error.
+        Tuple of (articles, was_filtered). was_filtered=False means the filter
+        failed and all unfiltered articles are returned — callers should warn.
     """
     if not articles:
-        return []
+        return [], True
 
     log.info(f"  Filtering {len(articles)} articles via SDK...")
 
@@ -111,16 +112,16 @@ async def filter_articles(
             await asyncio.wait_for(handler.done.wait(), timeout=120)
         except asyncio.TimeoutError:
             log.warning("  Article filter timed out — using unfiltered articles")
-            return articles
+            return articles, False
 
         if handler.error:
             log.warning(f"  Article filter error: {handler.error}")
-            return articles
+            return articles, False
 
         raw_response = (handler.final_text or "").strip()
         if not raw_response:
             log.warning("  Article filter returned empty — using unfiltered articles")
-            return articles
+            return articles, False
 
         # Parse JSON — strip markdown code blocks if the model wraps them
         json_text = raw_response
@@ -133,7 +134,7 @@ async def filter_articles(
         kept_items = json.loads(json_text)
         if not isinstance(kept_items, list):
             log.warning("  Article filter returned non-list — using unfiltered articles")
-            return articles
+            return articles, False
 
         # Build lookup of kept IDs -> why
         kept_map = {item["id"]: item.get("why", "") for item in kept_items if "id" in item}
@@ -146,14 +147,14 @@ async def filter_articles(
                 filtered.append(a)
 
         log.info(f"  Filtered: {len(articles)} -> {len(filtered)} articles ({len(articles) - len(filtered)} dropped)")
-        return filtered
+        return filtered, True
 
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         log.warning(f"  Article filter parse error: {e} — using unfiltered articles")
-        return articles
+        return articles, False
     except Exception as e:
         log.warning(f"  Article filter failed: {e} — using unfiltered articles")
-        return articles
+        return articles, False
     finally:
         if session:
             try:

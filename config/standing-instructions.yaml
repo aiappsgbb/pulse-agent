@@ -58,6 +58,7 @@ digest:
 
 transcripts:
   lookback_days: 7
+  lookback_weeks: 2
   max_per_run: 20
   output_dir: "input/transcripts"
   playwright:

@@ -439,3 +439,32 @@ def test_trigger_variables_digest_defaults_projects(sample_config, tmp_dir):
         result = _build_trigger_variables("digest", sample_config, {})
     assert result["projects_block"] == ""
     assert result["commitments_summary"] == ""
+
+
+def test_trigger_variables_digest_dismissed_ttl(sample_config, tmp_dir):
+    """Dismissed items older than 30 days are auto-expired."""
+    from datetime import datetime, timedelta
+    old_ts = (datetime.now() - timedelta(days=45)).isoformat()
+    fresh_ts = (datetime.now() - timedelta(days=5)).isoformat()
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir), \
+         patch("sdk.runner.load_actions", return_value={
+             "dismissed": [
+                 {"item": "old-thing", "dismissed_at": old_ts},
+                 {"item": "fresh-thing", "dismissed_at": fresh_ts},
+             ],
+             "notes": {},
+         }):
+        result = _build_trigger_variables("digest", sample_config, {})
+    assert "fresh-thing" in result["dismissed_block"]
+    assert "old-thing" not in result["dismissed_block"]
+
+
+async def test_pre_process_monitor_none_returns_unavailable():
+    """When all scanners return None, output contains UNAVAILABLE (not crash)."""
+    with patch("collectors.teams_inbox.scan_teams_inbox", new_callable=AsyncMock, return_value=None), \
+         patch("collectors.outlook_inbox.scan_outlook_inbox", new_callable=AsyncMock, return_value=None), \
+         patch("collectors.calendar.scan_calendar", new_callable=AsyncMock, return_value=None):
+        result = await _pre_process_monitor({})
+    assert "UNAVAILABLE" in result["teams_inbox"]
+    assert "UNAVAILABLE" in result["outlook_inbox_block"]
+    assert "UNAVAILABLE" in result["calendar_block"]

@@ -25,12 +25,26 @@ SKIP_KEYWORDS = [
 ]
 
 
-async def return_to_calendar(page: Page, iframe, force: bool = False):
+async def navigate_weeks_back(page: Page, iframe, weeks: int = 1):
+    """Click 'Go to previous week' N times to navigate backward in the calendar."""
+    for i in range(weeks):
+        try:
+            prev_btn = iframe.get_by_role("button", name=re.compile(r"Go to previous week"))
+            await prev_btn.click()
+            await page.wait_for_timeout(2000)
+        except Exception as e:
+            _print(f"  WARNING: Could not navigate to previous week (step {i + 1}/{weeks}): {e}")
+            break
+
+
+async def return_to_calendar(page: Page, iframe, force: bool = False, week_offset: int = 1):
     """Return to calendar view after processing a meeting.
 
     Two cases:
     1. Simple popup (no recap) — Escape closes it, still on calendar
     2. Recap view (force=True) — navigated away, must go back via Calendar button
+
+    week_offset: how many weeks back to navigate (used for multi-week collection).
     """
     if not force:
         # Simple popup — just Escape to close it
@@ -57,16 +71,14 @@ async def return_to_calendar(page: Page, iframe, force: bool = False):
         except Exception:
             raise RuntimeError("Cannot navigate back to Calendar")
 
-    # Go to previous week (calendar defaults to current week)
+    # Navigate back to the correct week offset
     try:
         iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
         await iframe_loc.get_by_role("button").first.wait_for(state="visible", timeout=15000)
-        prev_btn = iframe_loc.get_by_role("button", name=re.compile(r"Go to previous week"))
-        await prev_btn.click()
-        await page.wait_for_timeout(5000)
-        _print("  Calendar restored (previous week).")
+        await navigate_weeks_back(page, iframe_loc, week_offset)
+        _print(f"  Calendar restored ({week_offset} week(s) back).")
     except Exception as e:
-        _print(f"  WARNING: Could not navigate to previous week: {e}")
+        _print(f"  WARNING: Could not navigate to week offset {week_offset}: {e}")
 
 
 async def get_iframe_text(page: Page) -> str:
