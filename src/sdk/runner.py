@@ -563,25 +563,11 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     from core.browser import get_browser_manager
 
     # Phase 0a: Collect fresh transcripts from Teams (multi-week lookback)
-    # Skip if we already collected transcripts recently (within 6 hours)
+    # The collector already deduplicates by slug — it skips meetings that have
+    # already been collected. No freshness check needed here.
     browser_mgr = get_browser_manager()
-    transcripts_dir = PROJECT_ROOT / "input" / "transcripts"
-    recent_cutoff_hours = 6
-    skip_transcripts = False
 
-    if transcripts_dir.exists():
-        from datetime import timedelta
-        cutoff = datetime.now() - timedelta(hours=recent_cutoff_hours)
-        recent = [
-            f for f in transcripts_dir.iterdir()
-            if f.suffix in (".md", ".txt")
-            and datetime.fromtimestamp(f.stat().st_mtime) > cutoff
-        ]
-        if recent:
-            log.info(f"Phase 0a: Skipping transcript collection ({len(recent)} transcripts collected within {recent_cutoff_hours}h)")
-            skip_transcripts = True
-
-    if not skip_transcripts and browser_mgr and browser_mgr.context:
+    if browser_mgr and browser_mgr.context:
         log.info("Phase 0a: Collecting fresh transcripts from Teams...")
         try:
             await asyncio.wait_for(
@@ -592,7 +578,7 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
             log.warning("  Transcript collection timed out after 10 minutes (non-fatal, continuing with what was saved)")
         except Exception as e:
             log.warning(f"  Transcript collection failed (non-fatal): {e}")
-    elif not skip_transcripts:
+    else:
         log.info("Phase 0a: Skipping transcript collection (no browser)")
 
     # Phase 0b: Compress any raw .txt transcripts before content collection
