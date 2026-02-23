@@ -11,7 +11,10 @@ import re
 
 import yaml
 
-from core.constants import LOGS_DIR, OUTPUT_DIR, TASKS_DIR, PROJECTS_DIR
+from core.constants import (
+    LOGS_DIR, OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME,
+    TRANSCRIPTS_DIR, DOCUMENTS_DIR, EMAILS_DIR, DIGESTS_DIR, INTEL_DIR,
+)
 from core.state import load_json_state, save_json_state
 
 
@@ -143,7 +146,7 @@ def write_output(params: WriteOutputParams, invocation: ToolInvocation) -> str:
     description="Add a job to the queue. The daemon picks it up next cycle. Set type to 'research', 'digest', 'transcripts', or 'intel'.",
 )
 def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
-    pending_dir = TASKS_DIR / "pending"
+    pending_dir = JOBS_DIR / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d")
     slug = params.task.lower().replace(" ", "-")[:50]
@@ -168,7 +171,7 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
 
 # --- Digest actions (dismiss/note) ---
 
-ACTIONS_FILE = OUTPUT_DIR / ".digest-actions.json"
+ACTIONS_FILE = PULSE_HOME / ".digest-actions.json"
 
 
 def load_actions() -> dict:
@@ -319,8 +322,7 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
     jobs_dir.mkdir(parents=True, exist_ok=True)
 
     # Build reply_to path (this agent's own incoming jobs folder)
-    onedrive_path = Path(config.get("onedrive", {}).get("path", ""))
-    reply_to = str(onedrive_path / "Jobs") if onedrive_path and str(onedrive_path) != "." else ""
+    reply_to = str(JOBS_DIR)
 
     # Build this agent's identity
     user_cfg = config.get("user", {})
@@ -368,8 +370,8 @@ _TEXT_EXTENSIONS = {
 @define_tool(
     name="search_local_files",
     description=(
-        "Search local files for a keyword or phrase. Searches BOTH input/ (transcripts, "
-        "documents, emails) AND output/ (digests, intel reports, project files). "
+        "Search local files for a keyword or phrase. Searches transcripts, documents, "
+        "emails, digests, intel reports, and project files. "
         "Searches all text-based files (.md, .txt, .json, .yaml, etc.) recursively. "
         "Use this to find context before responding — e.g., search for a person's name, "
         "project name, or topic across meeting transcripts, digests, and project memory. "
@@ -377,21 +379,25 @@ _TEXT_EXTENSIONS = {
     ),
 )
 def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocation) -> str:
-    from core.constants import INPUT_DIR
-
     # Prevent path traversal in glob pattern
     if ".." in params.file_pattern:
         return "ERROR: Invalid file pattern."
 
-    # Search both input/ and output/ directories
+    # Search all named data directories
     search_dirs = []
-    if INPUT_DIR.exists():
-        search_dirs.append(("input", INPUT_DIR))
-    if OUTPUT_DIR.exists():
-        search_dirs.append(("output", OUTPUT_DIR))
+    for label, d in [
+        ("transcripts", TRANSCRIPTS_DIR),
+        ("documents", DOCUMENTS_DIR),
+        ("emails", EMAILS_DIR),
+        ("digests", DIGESTS_DIR),
+        ("intel", INTEL_DIR),
+        ("projects", PROJECTS_DIR),
+    ]:
+        if d.exists():
+            search_dirs.append((label, d))
 
     if not search_dirs:
-        return "No input or output directories found."
+        return "No data directories found."
 
     query_lower = params.query.lower()
     results = []
@@ -484,7 +490,7 @@ def update_project(params: UpdateProjectParams, invocation: ToolInvocation) -> s
 # These queue browser actions for the worker to execute.
 # The worker runs in the main async event loop where Playwright lives.
 
-PENDING_ACTIONS_DIR = OUTPUT_DIR / ".pending-actions"
+PENDING_ACTIONS_DIR = PULSE_HOME / ".pending-actions"
 
 
 @define_tool(

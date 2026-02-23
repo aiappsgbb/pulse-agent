@@ -12,7 +12,7 @@ import yaml
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, TASKS_DIR, CONFIG_DIR
+from core.constants import PROJECT_ROOT, OUTPUT_DIR, JOBS_DIR, CONFIG_DIR, PULSE_HOME
 from core.state import load_json_state, save_json_state
 from core.logging import safe_encode
 
@@ -25,9 +25,12 @@ def test_project_root_exists():
 
 
 def test_path_relationships():
-    assert OUTPUT_DIR == PROJECT_ROOT / "output"
-    assert TASKS_DIR == PROJECT_ROOT / "tasks"
+    # When PULSE_HOME not set, defaults to PROJECT_ROOT
     assert CONFIG_DIR == PROJECT_ROOT / "config"
+    # OUTPUT_DIR is an alias for PULSE_HOME
+    assert OUTPUT_DIR == PULSE_HOME
+    # JOBS_DIR is under PULSE_HOME
+    assert JOBS_DIR == PULSE_HOME / "jobs"
 
 
 # --- core/state ---

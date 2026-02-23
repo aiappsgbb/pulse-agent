@@ -176,7 +176,7 @@ def test_find_action_draft_from_json(tmp_dir):
     (tmp_dir / "monitoring-2026-02-20T10-00.json").write_text(json.dumps(triage_data), encoding="utf-8")
 
     bot = TelegramBot.__new__(TelegramBot)
-    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+    with patch("tg.bot.PULSE_HOME", tmp_dir):
         result = bot._find_action_draft("reply-sarah-havas", 0)
     assert result is not None
     assert result["draft"] == "Hey Sarah, we pivoted to Y."
@@ -192,7 +192,7 @@ def test_find_action_draft_missing_item(tmp_dir):
     (tmp_dir / "monitoring-2026-02-20T10-00.json").write_text(json.dumps(triage_data), encoding="utf-8")
 
     bot = TelegramBot.__new__(TelegramBot)
-    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+    with patch("tg.bot.PULSE_HOME", tmp_dir):
         result = bot._find_action_draft("nonexistent", 0)
     assert result is None
 
@@ -202,7 +202,7 @@ def test_find_action_draft_no_json(tmp_dir):
     from unittest.mock import patch
 
     bot = TelegramBot.__new__(TelegramBot)
-    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+    with patch("tg.bot.PULSE_HOME", tmp_dir):
         result = bot._find_action_draft("any-id", 0)
     assert result is None
 
@@ -238,7 +238,7 @@ def test_find_action_draft_from_digest_json(tmp_dir):
     (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
 
     bot = TelegramBot.__new__(TelegramBot)
-    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+    with patch("tg.bot.PULSE_HOME", tmp_dir):
         result = bot._find_action_draft("reply-esther-qbe", 0)
     assert result is not None
     assert result["draft"] == "Hi Esther, I'll prioritize this today."
@@ -268,7 +268,7 @@ def test_find_action_draft_monitoring_takes_precedence(tmp_dir):
     (digests_dir / "2026-02-20.json").write_text(json.dumps(digest_data), encoding="utf-8")
 
     bot = TelegramBot.__new__(TelegramBot)
-    with patch("tg.bot.OUTPUT_DIR", tmp_dir):
+    with patch("tg.bot.PULSE_HOME", tmp_dir):
         result = bot._find_action_draft("reply-bob", 0)
     assert result["draft"] == "from monitoring"
 

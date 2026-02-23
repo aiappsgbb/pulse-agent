@@ -15,7 +15,7 @@ from copilot import (
     PermissionRequestResult,
 )
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR
+from core.constants import PROJECT_ROOT, PULSE_HOME, CONFIG_DIR
 from core.logging import log
 from sdk.prompts import load_prompt
 from sdk.agents import load_agents, _mcp_config
@@ -140,7 +140,7 @@ def build_session_config(
 
     # Working directory
     wd = mode_cfg.get("working_dir", "root")
-    working_dir = str(OUTPUT_DIR) if wd == "output" else str(PROJECT_ROOT)
+    working_dir = str(PULSE_HOME) if wd == "output" else str(PROJECT_ROOT)
 
     # MCP servers
     mcp_servers = {}

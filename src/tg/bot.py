@@ -28,7 +28,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, ContextTypes, filters
 
-from core.constants import OUTPUT_DIR
+from core.constants import PULSE_HOME, DIGESTS_DIR
 from core.logging import log
 from tg.confirmations import has_pending_confirmation, resolve_confirmation
 from tg.pii_filter import scrub as scrub_pii
@@ -188,13 +188,8 @@ class TelegramBot:
         self.state_file = self._resolve_state_file()
 
     def _resolve_state_file(self) -> Path:
-        """Determine where to save chat state."""
-        onedrive_cfg = self.config.get("onedrive", {})
-        if onedrive_cfg.get("sync_enabled", False):
-            path = Path(onedrive_cfg.get("path", ""))
-            if path and str(path) != ".":
-                return path / ".chat-state.json"
-        return OUTPUT_DIR / ".chat-state.json"
+        """Determine where to save chat state (always PULSE_HOME)."""
+        return PULSE_HOME / ".chat-state.json"
 
     def _load_chat_id(self) -> int | None:
         """Load saved chat_id from state file."""
@@ -290,7 +285,7 @@ class TelegramBot:
         """Send the most recent digest to a chat, with inline action buttons."""
         if self.app is None:
             return
-        digests_dir = OUTPUT_DIR / "digests"
+        digests_dir = DIGESTS_DIR
         if not digests_dir.exists():
             await self.app.bot.send_message(chat_id=chat_id, text="No digests yet.")
             return
@@ -707,7 +702,7 @@ class TelegramBot:
         """Find a specific action draft from the latest triage or digest JSON."""
         # Search monitoring JSONs first, then digest JSONs
         for pattern in ("monitoring-*.json", "digests/*.json"):
-            reports = sorted(OUTPUT_DIR.glob(pattern), reverse=True)
+            reports = sorted(PULSE_HOME.glob(pattern), reverse=True)
             if not reports:
                 continue
             try:

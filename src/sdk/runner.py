@@ -9,7 +9,7 @@ import yaml
 
 from copilot import CopilotClient
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR
+from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR, DIGESTS_DIR, TRANSCRIPTS_DIR, PULSE_HOME
 from core.logging import log
 from sdk.prompts import load_prompt
 from sdk.session import agent_session
@@ -247,7 +247,7 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
 
 def _load_previous_digest() -> dict | None:
     """Load the most recent digest JSON for carry-forward."""
-    digests_dir = OUTPUT_DIR / "digests"
+    digests_dir = DIGESTS_DIR
     if not digests_dir.exists():
         return None
     json_files = sorted(digests_dir.glob("*.json"), reverse=True)
@@ -468,7 +468,7 @@ def _validate_digest_json(date_str: str):
     Checks that the file exists, is valid JSON, and each item has the
     required fields for carry-forward to work correctly.
     """
-    digest_file = OUTPUT_DIR / "digests" / f"{date_str}.json"
+    digest_file = DIGESTS_DIR / f"{date_str}.json"
     if not digest_file.exists():
         log.warning(f"  Digest validation: {date_str}.json was not written by agent")
         return
@@ -583,7 +583,7 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
 
     # Phase 0b: Compress any raw .txt transcripts before content collection
     if client:
-        transcripts_dir = PROJECT_ROOT / "input" / "transcripts"
+        transcripts_dir = TRANSCRIPTS_DIR
         if transcripts_dir.exists() and list(transcripts_dir.glob("*.txt")):
             tc_models = config.get("models", {})
             compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))

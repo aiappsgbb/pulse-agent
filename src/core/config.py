@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import CONFIG_DIR, TASKS_DIR
+from core.constants import CONFIG_DIR, JOBS_DIR, PULSE_HOME
 
 
 def _expand_env_vars(obj):
@@ -53,12 +53,19 @@ def validate_config(config: dict) -> list[str]:
 def load_config() -> dict:
     """Load standing instructions from YAML config.
 
-    Expands environment variables and validates required fields.
-    Uses PULSE_CONFIG env var if set, otherwise defaults to
-    config/standing-instructions.yaml.
+    Resolution order:
+    1. --config CLI flag / PULSE_CONFIG env var (explicit override)
+    2. $PULSE_HOME/standing-instructions.yaml (user's OneDrive copy)
+    3. config/standing-instructions.yaml (repo template fallback)
     """
     override = os.environ.get("PULSE_CONFIG")
-    config_path = Path(override) if override else CONFIG_DIR / "standing-instructions.yaml"
+    if override:
+        config_path = Path(override)
+    elif (PULSE_HOME / "standing-instructions.yaml").exists():
+        config_path = PULSE_HOME / "standing-instructions.yaml"
+    else:
+        config_path = CONFIG_DIR / "standing-instructions.yaml"
+
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -72,8 +79,8 @@ def load_config() -> dict:
 
 
 def load_pending_tasks() -> list[dict]:
-    """Load all pending research tasks from tasks/pending/."""
-    pending_dir = TASKS_DIR / "pending"
+    """Load all pending jobs from jobs/pending/."""
+    pending_dir = JOBS_DIR / "pending"
     tasks = []
     if not pending_dir.exists():
         return tasks
@@ -88,6 +95,6 @@ def load_pending_tasks() -> list[dict]:
 def mark_task_completed(task: dict):
     """Move a task file from pending/ to completed/."""
     src = Path(task["_file"])
-    dest = TASKS_DIR / "completed" / src.name
+    dest = JOBS_DIR / "completed" / src.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     src.rename(dest)

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from core.constants import PROJECT_ROOT, INSTRUCTIONS_DIR
+from core.constants import PROJECT_ROOT, INSTRUCTIONS_DIR, PULSE_HOME
 
 
 def load_prompt(path: str, variables: dict | None = None) -> str:
@@ -21,17 +21,13 @@ def load_prompt(path: str, variables: dict | None = None) -> str:
 
 
 def load_instruction(name: str, config: dict) -> str:
-    """Load an instruction file — checks OneDrive first, then local defaults.
+    """Load an instruction file — checks PULSE_HOME first, then local defaults.
 
-    Users can edit instructions from OneDrive; changes are picked up next run.
+    Users can edit instructions from their data folder; changes are picked up next run.
     """
-    onedrive_cfg = config.get("onedrive", {})
-    if onedrive_cfg.get("sync_enabled", False):
-        onedrive_path = Path(onedrive_cfg.get("path", ""))
-        if onedrive_path and str(onedrive_path) != ".":
-            onedrive_file = onedrive_path / "Agent Instructions" / f"{name}.md"
-            if onedrive_file.exists():
-                return onedrive_file.read_text(encoding="utf-8")
+    pulse_file = PULSE_HOME / "Agent Instructions" / f"{name}.md"
+    if pulse_file.exists():
+        return pulse_file.read_text(encoding="utf-8")
 
     local_file = INSTRUCTIONS_DIR / f"{name}.md"
     if local_file.exists():

@@ -3,7 +3,7 @@
 import shutil
 from pathlib import Path
 
-from core.constants import OUTPUT_DIR, LOGS_DIR
+from core.constants import DIGESTS_DIR, LOGS_DIR
 from core.logging import log
 
 
@@ -29,8 +29,8 @@ def run_diagnostics(config: dict) -> list[str]:
     if not shutil.which("workiq"):
         warnings.append("WorkIQ MCP server not found on PATH (optional)")
 
-    # Output directories
-    for d in [OUTPUT_DIR, LOGS_DIR]:
+    # Data directories
+    for d in [DIGESTS_DIR, LOGS_DIR]:
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception as e:

@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from core.constants import PROJECT_ROOT
+from core.constants import PULSE_HOME
 from core.logging import log
 from core.state import load_json_state, save_json_state
 from collectors.extractors import extract_text
@@ -25,7 +25,7 @@ def collect_content(config: dict) -> list[dict]:
                                         [".vtt", ".txt", ".md", ".docx", ".pptx",
                                          ".pdf", ".xlsx", ".csv", ".eml"]))
     incremental = digest_cfg.get("incremental", True)
-    state_file = PROJECT_ROOT / digest_cfg.get("state_file", "output/.digest-state.json")
+    state_file = PULSE_HOME / digest_cfg.get("state_file", ".digest-state.json")
 
     state = load_json_state(state_file, {"processed": {}}) if incremental else {"processed": {}}
     processed = state.get("processed", {})
@@ -34,9 +34,9 @@ def collect_content(config: dict) -> list[dict]:
 
     for path_cfg in input_paths:
         folder = Path(path_cfg["path"])
-        # Support both absolute and relative (to project root) paths
+        # Support both absolute and relative (to PULSE_HOME) paths
         if not folder.is_absolute():
-            folder = PROJECT_ROOT / folder
+            folder = PULSE_HOME / folder
         content_type = path_cfg.get("type", "unknown")
 
         if not folder.exists():

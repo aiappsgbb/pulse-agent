@@ -26,32 +26,30 @@ monitoring:
 
 digest:
   input_paths:
-    - path: "input/transcripts"
+    - path: "transcripts"
       type: "transcripts"
   supported_extensions: [".txt", ".md"]
   incremental: true
-  state_file: "output/.digest-state-alpha.json"
+  state_file: ".digest-state-alpha.json"
   priorities:
     - "Inter-agent requests"
 
 transcripts:
   lookback_days: 7
   max_per_run: 5
-  output_dir: "input/transcripts"
+  output_dir: "transcripts"
   playwright:
     user_data_dir: "$LOCALAPPDATA/ms-playwright/mcp-msedge-profile"
 
 intelligence:
   lookback_hours: 48
   max_articles: 10
-  state_file: "output/.intel-state-alpha.json"
+  state_file: ".intel-state-alpha.json"
   topics: ["AI"]
   competitors: []
   feeds: []
 
-onedrive:
-  sync_enabled: true
-  path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse-Team/agent-alpha"
+# PULSE_HOME env var should point to: $USERPROFILE/OneDrive - Microsoft/Documents/Pulse-Team/agent-alpha
 
 team:
   - name: "Artur Zielinski"

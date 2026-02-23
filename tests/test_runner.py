@@ -99,7 +99,7 @@ def test_load_previous_digest_valid_json(tmp_dir):
     digests_dir.mkdir()
     data = {"date": "2026-02-17", "items": [{"title": "Test"}]}
     (digests_dir / "2026-02-17.json").write_text(json.dumps(data), encoding="utf-8")
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", digests_dir):
         result = _load_previous_digest()
     assert result["date"] == "2026-02-17"
 
@@ -117,7 +117,7 @@ def test_load_previous_digest_picks_latest(tmp_dir):
     digests_dir.mkdir()
     for d in ["2026-02-15", "2026-02-17", "2026-02-16"]:
         (digests_dir / f"{d}.json").write_text(json.dumps({"date": d}), encoding="utf-8")
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", digests_dir):
         result = _load_previous_digest()
     assert result["date"] == "2026-02-17"
 
@@ -153,7 +153,7 @@ def test_trigger_variables_digest_with_previous(sample_config, tmp_dir):
     digests_dir = tmp_dir / "digests"
     digests_dir.mkdir()
     (digests_dir / "2026-02-17.json").write_text(json.dumps({"date": "2026-02-17", "items": []}))
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", digests_dir):
         result = _build_trigger_variables("digest", sample_config, {})
     assert result["workiq_window"] == "since 2026-02-17"
 

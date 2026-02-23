@@ -17,11 +17,11 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 
-from core.constants import OUTPUT_DIR
+from core.constants import PULSE_HOME
 from core.logging import log
 from core.state import load_json_state, save_json_state
 
-SCHEDULER_FILE = OUTPUT_DIR / ".scheduler.json"
+SCHEDULER_FILE = PULSE_HOME / ".scheduler.json"
 MIN_INTERVAL_MINUTES = 5  # guard against runaway schedules
 
 

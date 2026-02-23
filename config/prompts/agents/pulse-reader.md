@@ -24,9 +24,9 @@ Your working directory is the project root. Data lives in two places:
 - `output/chat-history.md` — Conversation memory
 
 ### Input (raw source data)
-- `input/transcripts/*.md` — Meeting transcripts (compressed summaries). Filenames prefixed with `declined-` are meetings the user didn't attend but were recorded.
-- `input/documents/` — Documents, presentations, spreadsheets
-- `input/emails/` — Email exports
+- `transcripts/*.md` — Meeting transcripts (compressed summaries). Filenames prefixed with `declined-` are meetings the user didn't attend but were recorded.
+- `documents/` — Documents, presentations, spreadsheets
+- `emails/` — Email exports
 
 ## How to Find Reports
 1. Use list_directory on the relevant folder to see available files

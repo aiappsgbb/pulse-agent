@@ -1,10 +1,15 @@
-"""OneDrive sync — pull jobs in, push output out."""
+"""Sync — enqueue pending jobs, seed instructions, clean up completed jobs.
+
+With PULSE_HOME pointing to OneDrive, data is already synced by OneDrive client.
+This module handles: (1) enqueuing pending job files, (2) seeding instruction
+defaults from the repo, (3) cleaning up completed jobs.
+"""
 
 import asyncio
 import shutil
 from pathlib import Path
 
-from core.constants import PROJECT_ROOT, TASKS_DIR
+from core.constants import PULSE_HOME, JOBS_DIR, INSTRUCTIONS_DIR
 from core.config import load_pending_tasks
 from core.logging import log
 
@@ -19,33 +24,11 @@ def _get_enqueued_files(job_queue: asyncio.Queue) -> set[str]:
 
 
 def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
-    """Pull new job files from OneDrive Jobs/ into tasks/pending/ and enqueue them."""
-    onedrive_cfg = config.get("onedrive", {})
-    if not onedrive_cfg.get("sync_enabled", False):
-        return
+    """Enqueue any pending job files from JOBS_DIR/pending/.
 
-    dest_root = Path(onedrive_cfg.get("path", ""))
-    if not dest_root or str(dest_root) == ".":
-        return
-
-    jobs_src = dest_root / "Jobs"
-    if not jobs_src.exists():
-        jobs_src.mkdir(parents=True, exist_ok=True)
-        return
-
-    pending_dir = TASKS_DIR / "pending"
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    pulled = 0
-
-    for f in jobs_src.glob("*.yaml"):
-        dest_file = pending_dir / f.name
-        if not dest_file.exists():
-            shutil.copy2(f, dest_file)
-            pulled += 1
-
-    if pulled:
-        log.info(f"Pulled {pulled} new job(s) from OneDrive")
-
+    Inter-agent requests land directly in JOBS_DIR (which IS on OneDrive).
+    This function just checks for new files and enqueues them.
+    """
     # Enqueue any pending file-based jobs
     enqueued_files = _get_enqueued_files(job_queue)
     for job in load_pending_tasks():
@@ -59,41 +42,32 @@ def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
 
 
 def sync_to_onedrive(config: dict):
-    """Seed instructions and clean up completed jobs on OneDrive.
+    """Seed instructions and clean up completed jobs.
 
-    Output files (digests, intel, monitoring, etc.) are on OneDrive automatically
-    via NTFS junctions — no explicit copy needed.
+    Data already lives on OneDrive (PULSE_HOME) — no copy needed.
     """
-    onedrive_cfg = config.get("onedrive", {})
-    if not onedrive_cfg.get("sync_enabled", False):
-        return
-
-    dest_root = Path(onedrive_cfg.get("path", ""))
-    if not dest_root or str(dest_root) == ".":
-        log.warning("OneDrive sync enabled but no path configured")
-        return
-
     synced = 0
 
-    # Seed Agent Instructions (local defaults -> OneDrive, never overwrite)
-    instructions_src = PROJECT_ROOT / "config" / "instructions"
-    instructions_dest = dest_root / "Agent Instructions"
-    if instructions_src.exists():
+    # Seed Agent Instructions (repo defaults -> PULSE_HOME, never overwrite)
+    instructions_dest = PULSE_HOME / "Agent Instructions"
+    if INSTRUCTIONS_DIR.exists():
         instructions_dest.mkdir(parents=True, exist_ok=True)
-        for f in instructions_src.glob("*.md"):
+        for f in INSTRUCTIONS_DIR.glob("*.md"):
             dest_file = instructions_dest / f.name
             if not dest_file.exists():
                 shutil.copy2(f, dest_file)
                 synced += 1
 
-    # Clean up completed jobs from OneDrive Jobs/ folder
-    jobs_onedrive = dest_root / "Jobs"
-    completed_dir = TASKS_DIR / "completed"
-    if jobs_onedrive.exists() and completed_dir.exists():
-        for f in list(jobs_onedrive.glob("*.yaml")):
+    # Clean up completed jobs
+    jobs_dir = JOBS_DIR
+    completed_dir = JOBS_DIR / "completed"
+    pending_dir = JOBS_DIR / "pending"
+    if pending_dir.exists() and completed_dir.exists():
+        for f in list(pending_dir.glob("*.yaml")):
             if (completed_dir / f.name).exists():
+                # Job was completed — remove from pending
                 f.unlink()
                 synced += 1
 
     if synced:
-        log.info(f"Synced {synced} file(s) to OneDrive: {dest_root}")
+        log.info(f"Synced {synced} file(s)")

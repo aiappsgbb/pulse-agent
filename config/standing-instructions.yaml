@@ -55,15 +55,15 @@ monitoring:
 
 digest:
   input_paths:
-    - path: "input/transcripts"
+    - path: "transcripts"
       type: "transcripts"
-    - path: "input/documents"
+    - path: "documents"
       type: "documents"
-    - path: "input/emails"
+    - path: "emails"
       type: "emails"
   supported_extensions: [".vtt", ".txt", ".md", ".docx", ".pptx", ".pdf", ".xlsx", ".csv", ".eml"]
   incremental: true
-  state_file: "output/.digest-state.json"
+  state_file: ".digest-state.json"
   priorities:
     - "Revenue deals and customer escalations — active engagements tracked in project memory (any movement, blockers, or deadlines)"
     - "Unreplied messages where someone is waiting for MY response (not CC, not FYI)"
@@ -74,14 +74,14 @@ transcripts:
   lookback_days: 7
   lookback_weeks: 2
   max_per_run: 20
-  output_dir: "input/transcripts"
+  output_dir: "transcripts"
   playwright:
     user_data_dir: "$LOCALAPPDATA/ms-playwright/mcp-msedge-profile"
 
 intelligence:
   lookback_hours: 48
   max_articles: 200
-  state_file: "output/.intel-state.json"
+  state_file: ".intel-state.json"
   topics:
     - "Azure OpenAI"
     - "GitHub Copilot"
@@ -150,10 +150,6 @@ intelligence:
       name: "Hacker News — Microsoft AI"
     - url: "https://hnrss.org/newest?q=Anthropic+OR+OpenAI+OR+Gemini+OR+Llama&count=20"
       name: "Hacker News — AI Companies"
-
-onedrive:
-  sync_enabled: true
-  path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse"
 
 team:
   - name: "Agent Alpha"

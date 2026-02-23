@@ -89,7 +89,7 @@ async def test_write_output_path_traversal_blocked(tmp_dir):
 
 
 async def test_queue_task_creates_yaml(tmp_dir):
-    with patch("sdk.tools.TASKS_DIR", tmp_dir):
+    with patch("sdk.tools.JOBS_DIR", tmp_dir):
         result = await queue_task.handler({"arguments": {"type": "research", "task": "Test Research", "description": "A test"}})
     assert result["resultType"] == "success"
     pending = tmp_dir / "pending"
@@ -247,11 +247,16 @@ async def test_cancel_schedule_not_found(tmp_dir):
 
 
 async def test_search_local_files_finds_match(tmp_dir):
-    input_dir = tmp_dir / "input" / "transcripts"
-    input_dir.mkdir(parents=True)
-    (input_dir / "meeting.txt").write_text("Alice discussed the Havas project timeline.\nBob agreed.", encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", tmp_dir / "input"), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (transcripts_dir / "meeting.txt").write_text("Alice discussed the Havas project timeline.\nBob agreed.", encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
     assert result["resultType"] == "success"
     assert "Havas" in result["textResultForLlm"]
@@ -259,38 +264,58 @@ async def test_search_local_files_finds_match(tmp_dir):
 
 
 async def test_search_local_files_no_match(tmp_dir):
-    input_dir = tmp_dir / "input" / "transcripts"
-    input_dir.mkdir(parents=True)
-    (input_dir / "meeting.txt").write_text("Nothing relevant here.", encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", tmp_dir / "input"), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (transcripts_dir / "meeting.txt").write_text("Nothing relevant here.", encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
     assert "No matches" in result["textResultForLlm"]
 
 
 async def test_search_local_files_no_dirs(tmp_dir):
-    with patch("core.constants.INPUT_DIR", tmp_dir / "nonexistent"), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "also-nonexistent"):
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent / "t"), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent / "d"), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent / "e"), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent / "di"), \
+         patch("sdk.tools.INTEL_DIR", nonexistent / "i"), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent / "p"):
         result = await search_local_files.handler({"arguments": {"query": "test"}})
-    assert "No input or output" in result["textResultForLlm"]
+    assert "No data directories" in result["textResultForLlm"]
 
 
 async def test_search_local_files_path_traversal_blocked(tmp_dir):
-    input_dir = tmp_dir / "input"
-    input_dir.mkdir(parents=True)
-    with patch("core.constants.INPUT_DIR", input_dir), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "test", "file_pattern": "../../*.txt"}})
     assert "ERROR" in result["textResultForLlm"]
 
 
 async def test_search_local_files_context_lines(tmp_dir):
-    input_dir = tmp_dir / "input"
-    input_dir.mkdir(parents=True)
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
     lines = ["line1", "line2", "line3 has TARGET word", "line4", "line5", "line6"]
-    (input_dir / "doc.txt").write_text("\n".join(lines), encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", input_dir), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    (transcripts_dir / "doc.txt").write_text("\n".join(lines), encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "TARGET"}})
     text = result["textResultForLlm"]
     assert "line2" in text  # context before
@@ -299,11 +324,16 @@ async def test_search_local_files_context_lines(tmp_dir):
 
 async def test_search_local_files_finds_md_by_default(tmp_dir):
     """Default pattern (*.*) should find .md files — transcripts are .md."""
-    input_dir = tmp_dir / "input" / "transcripts"
-    input_dir.mkdir(parents=True)
-    (input_dir / "meeting.md").write_text("Claude security launch announced today.", encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", tmp_dir / "input"), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (transcripts_dir / "meeting.md").write_text("Claude security launch announced today.", encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "Claude security"}})
     assert result["resultType"] == "success"
     assert "Claude security" in result["textResultForLlm"]
@@ -312,29 +342,39 @@ async def test_search_local_files_finds_md_by_default(tmp_dir):
 
 async def test_search_local_files_skips_binary(tmp_dir):
     """Binary files (.pptx, .pdf, etc.) should be skipped even with *.*."""
-    input_dir = tmp_dir / "input"
-    input_dir.mkdir(parents=True)
-    (input_dir / "deck.pptx").write_bytes(b"\x00\x01binary content with keyword")
-    (input_dir / "notes.md").write_text("The keyword is here.", encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", input_dir), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "nonexistent"):
+    documents_dir = tmp_dir / "documents"
+    documents_dir.mkdir(parents=True)
+    (documents_dir / "deck.pptx").write_bytes(b"\x00\x01binary content with keyword")
+    (documents_dir / "notes.md").write_text("The keyword is here.", encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent), \
+         patch("sdk.tools.DOCUMENTS_DIR", documents_dir), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "keyword"}})
     text = result["textResultForLlm"]
     assert "notes.md" in text
     assert "deck.pptx" not in text
 
 
-async def test_search_local_files_searches_output_dir(tmp_dir):
-    """Tool should search output/ too — digests, intel, project files live there."""
-    output_dir = tmp_dir / "output" / "digests"
-    output_dir.mkdir(parents=True)
-    (output_dir / "2026-02-23.md").write_text("# Digest\nQBE Foundry resolution plan urgent.", encoding="utf-8")
-    with patch("core.constants.INPUT_DIR", tmp_dir / "nonexistent"), \
-         patch("sdk.tools.OUTPUT_DIR", tmp_dir / "output"):
+async def test_search_local_files_searches_digests_dir(tmp_dir):
+    """Tool should search digests dir — digest files live there."""
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir(parents=True)
+    (digests_dir / "2026-02-23.md").write_text("# Digest\nQBE Foundry resolution plan urgent.", encoding="utf-8")
+    nonexistent = tmp_dir / "nonexistent"
+    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent), \
+         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
+         patch("sdk.tools.EMAILS_DIR", nonexistent), \
+         patch("sdk.tools.DIGESTS_DIR", digests_dir), \
+         patch("sdk.tools.INTEL_DIR", nonexistent), \
+         patch("sdk.tools.PROJECTS_DIR", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "QBE Foundry"}})
     assert result["resultType"] == "success"
     assert "QBE Foundry" in result["textResultForLlm"]
-    assert "output/" in result["textResultForLlm"]
+    assert "digests/" in result["textResultForLlm"]
 
 
 # --- update_project ---

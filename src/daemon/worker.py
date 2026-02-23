@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import OUTPUT_DIR
+from core.constants import PULSE_HOME
 from core.config import mark_task_completed
 from core.logging import log
 
@@ -300,7 +300,7 @@ async def _notify(telegram_app, chat_id: int, text: str):
 async def _send_triage_actions(chat_id: int):
     """Send inline action buttons from the latest triage JSON."""
     import json
-    reports = sorted(OUTPUT_DIR.glob("monitoring-*.json"), reverse=True)
+    reports = sorted(PULSE_HOME.glob("monitoring-*.json"), reverse=True)
     if not reports:
         return
     try:
@@ -389,7 +389,7 @@ def _write_agent_response(config: dict, original_job: dict, result_text: str):
 
 def get_latest_monitoring_report() -> str | None:
     """Read the most recent monitoring report."""
-    reports = sorted(OUTPUT_DIR.glob("monitoring-*.md"), reverse=True)
+    reports = sorted(PULSE_HOME.glob("monitoring-*.md"), reverse=True)
     if not reports:
         return None
     try:

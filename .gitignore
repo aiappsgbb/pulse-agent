@@ -2,10 +2,6 @@
 __pycache__/
 *.pyc
 .env
-logs/
-output/
-input/
-tasks/completed/
 *.egg-info/
 dist/
 build/
@@ -13,6 +9,29 @@ build/
 nul
 src/diagnose_transcript.py
 CLAUDE.md
-config/standing-instructions.yaml
 Contestant - GitHub Copilot SDK Enterprise Challenge.pdf
 config/standing-instructions.yaml
+
+# Data directories (appear when PULSE_HOME defaults to PROJECT_ROOT during dev)
+transcripts/
+documents/
+emails/
+digests/
+intel/
+projects/
+pulse-signals/
+jobs/
+logs/
+
+# State files
+.scheduler.json
+.digest-state.json
+.intel-state.json
+.digest-actions.json
+.pending-actions/
+.chat-state.json
+
+# Legacy (may still exist in old checkouts)
+input/
+output/
+tasks/completed/

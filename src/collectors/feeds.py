@@ -7,7 +7,7 @@ from time import mktime
 
 import feedparser
 
-from core.constants import PROJECT_ROOT
+from core.constants import PULSE_HOME
 from core.logging import log
 from core.state import load_json_state, save_json_state
 
@@ -24,7 +24,7 @@ def collect_feeds(config: dict) -> list[dict]:
     lookback_hours = intel_cfg.get("lookback_hours", 48)
     max_articles = intel_cfg.get("max_articles", 100)
     per_feed_max = intel_cfg.get("per_feed_max", 20)
-    state_file = PROJECT_ROOT / intel_cfg.get("state_file", "output/.intel-state.json")
+    state_file = PULSE_HOME / intel_cfg.get("state_file", ".intel-state.json")
 
     state = load_json_state(state_file, {"seen": {}})
     seen = state.get("seen", {})

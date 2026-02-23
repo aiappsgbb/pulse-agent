@@ -7,7 +7,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from core.constants import INPUT_DIR
+from core.constants import TRANSCRIPTS_DIR
 from core.logging import log
 from collectors.transcripts.navigation import (
     return_to_calendar, find_meeting_buttons, navigate_weeks_back,
@@ -75,7 +75,7 @@ async def run_transcript_collection(client, config: dict):
     tc = config.get("transcripts", {})
     max_meetings = tc.get("max_per_run", 20)
     lookback_weeks = tc.get("lookback_weeks", 2)
-    output_dir = Path(tc.get("output_dir", str(INPUT_DIR / "transcripts")))
+    output_dir = Path(tc.get("output_dir", str(TRANSCRIPTS_DIR)))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     playwright_cfg = tc.get("playwright", {})

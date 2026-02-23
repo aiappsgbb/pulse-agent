@@ -41,10 +41,10 @@ This is a HARD RULE — never skip confirmation for outbound messages.
 
 | Question type | What to do |
 |--------------|-----------|
-| "What did I miss?" / "What's outstanding?" | Delegate to **pulse-reader** → read latest digest (`output/digests/`) |
-| "What happened in [meeting]?" | Use `search_local_files` with the meeting name or attendee names — transcripts are in `input/transcripts/*.md` |
-| "What's going on with [project]?" | Use `search_local_files` with the project name — checks project files (`output/projects/`), digests, and transcripts |
-| "Any news about [topic]?" | Use `search_local_files` first (checks intel reports in `output/intel/`), then WorkIQ if nothing local |
+| "What did I miss?" / "What's outstanding?" | Delegate to **pulse-reader** → read latest digest (`digests/`) |
+| "What happened in [meeting]?" | Use `search_local_files` with the meeting name or attendee names — transcripts are in `transcripts/*.md` |
+| "What's going on with [project]?" | Use `search_local_files` with the project name — checks project files (`projects/`), digests, and transcripts |
+| "Any news about [topic]?" | Use `search_local_files` first (checks intel reports in `intel/`), then WorkIQ if nothing local |
 | "What emails/messages do I have?" | Delegate to **m365-query** → query WorkIQ for live M365 data |
 | Read a specific file | Delegate to **pulse-reader** |
 
