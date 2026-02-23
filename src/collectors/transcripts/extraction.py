@@ -5,18 +5,13 @@ import re
 
 from playwright.async_api import Page, Frame
 
-from core.logging import safe_encode
+from core.logging import log
 from collectors.transcripts.js_snippets import (
     COLLECT_VISIBLE_JS,
     FIND_SCROLL_CONTAINER_JS,
     SCROLL_TO_JS,
     GET_TOTAL_ITEMS_JS,
 )
-
-
-def _print(text: str):
-    """Print with ASCII-safe encoding to avoid charmap errors on Windows."""
-    print(safe_encode(text))
 
 
 async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> tuple[str | None, bool]:
@@ -29,21 +24,20 @@ async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> t
     try:
         btn = iframe.get_by_role("button", name=meeting_name)
         await btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(1500)
     except Exception as e:
-        _print(f"    Could not click meeting: {e}")
+        log.warning(f"    Could not click meeting: {e}")
         return None, False
 
     # Look for "View recap" button — ONLY recap, not "View event"
     try:
         recap_btn = iframe.get_by_role("button", name="View recap")
         if await recap_btn.count() == 0:
-            _print("    No 'View recap' button — skipping (no recording).")
             return None, False
         await recap_btn.click()
-        await page.wait_for_timeout(4000)
+        await page.wait_for_timeout(3000)
     except Exception as e:
-        _print(f"    Could not click recap: {e}")
+        log.warning(f"    Could not click recap: {e}")
         return None, False
 
     # Find and click Transcript tab — may be hidden behind overflow menu
@@ -64,7 +58,7 @@ async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> t
             overflow = page.get_by_role("button", name=re.compile(r"show \d+ more"))
             if await overflow.count() > 0:
                 await overflow.click()
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
                 menuitem = page.get_by_role("menuitem", name="Transcript")
                 if await menuitem.count() > 0:
                     await menuitem.click()
@@ -92,25 +86,25 @@ async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> t
             pass
 
     if not transcript_clicked:
-        _print("    Transcript tab not found.")
+        log.info("    Transcript tab not found.")
         return None, True  # opened recap but no transcript tab
 
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(2000)
 
     # Find the transcript frame and extract text by scrolling the FocusZone
     transcript_frame = await find_transcript_frame(page)
     if not transcript_frame:
-        _print("    Transcript frame not found.")
+        log.info("    Transcript frame not found.")
         return None, True
 
     try:
         transcript = await scroll_and_extract(transcript_frame)
         if not transcript:
-            _print("    No transcript entries found.")
+            log.info("    No transcript entries found.")
             return None, True
         return transcript, True
     except Exception as e:
-        _print(f"    Extraction failed: {e}")
+        log.warning(f"    Extraction failed: {e}")
         return None, True
 
 
@@ -127,17 +121,15 @@ async def scroll_and_extract(frame: Frame) -> str | None:
     # Step 1: Find the scroll container
     container_info = await frame.evaluate(FIND_SCROLL_CONTAINER_JS)
     if not container_info or not container_info.get("found"):
-        _print("    ERROR: Could not find scroll container (FocusZone ancestor).")
+        log.warning("    Could not find scroll container (FocusZone ancestor).")
         return None
 
     scroll_height = container_info["scrollHeight"]
     client_height = container_info["clientHeight"]
-    _print(f"    Scroll container: {container_info['tag']}.{container_info['className'][:40]}")
-    _print(f"    scrollHeight={scroll_height}, clientHeight={client_height}")
 
     # Step 2: Check expected total from aria-setsize
     expected_total = await frame.evaluate(GET_TOTAL_ITEMS_JS)
-    _print(f"    Expected items (aria-setsize): {expected_total}")
+    log.info(f"    Scrolling transcript: scrollHeight={scroll_height}, expected={expected_total} items")
 
     # Step 3: Scroll through the container in steps, collecting at each position
     entries: dict[str, str] = {}
@@ -150,7 +142,6 @@ async def scroll_and_extract(frame: Frame) -> str | None:
     new_items = await frame.evaluate(COLLECT_VISIBLE_JS)
     for text in new_items:
         entries[text[:120]] = text
-    _print(f"    Initial entries: {len(entries)}")
 
     while stale_count < max_stale:
         prev_count = len(entries)
@@ -162,7 +153,7 @@ async def scroll_and_extract(frame: Frame) -> str | None:
             break
 
         # Wait for ms-List to re-render new items at this scroll position
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
 
         # Collect visible items
         new_items = await frame.evaluate(COLLECT_VISIBLE_JS)
@@ -174,18 +165,12 @@ async def scroll_and_extract(frame: Frame) -> str | None:
         else:
             stale_count = 0
 
-        # Progress logging
-        actual_scroll = result.get("scrollTop", position) if isinstance(result, dict) else position
-        current_sh = result.get("scrollHeight", scroll_height) if isinstance(result, dict) else scroll_height
-        if len(entries) % 20 == 0 and len(entries) != prev_count:
-            _print(f"    ... {len(entries)} entries, scrollTop={actual_scroll}/{current_sh}")
-
         # Safety: if we've scrolled well past the scrollHeight, stop
+        current_sh = result.get("scrollHeight", scroll_height) if isinstance(result, dict) else scroll_height
         if position > current_sh + step * 2:
             break
 
-    _print(f"    Extraction complete: {len(entries)} entries collected "
-           f"(expected {expected_total}), scroll pos={position}")
+    log.info(f"    Extracted {len(entries)} entries (expected {expected_total})")
 
     if not entries:
         return None

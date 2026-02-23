@@ -1,5 +1,6 @@
 """Main transcript collection orchestrator — launch browser, iterate meetings, save."""
 
+import asyncio
 import re
 from datetime import datetime
 from pathlib import Path
@@ -7,17 +8,16 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 from core.constants import INPUT_DIR
-from core.logging import safe_encode
+from core.logging import log
 from collectors.transcripts.navigation import (
     return_to_calendar, find_meeting_buttons, navigate_weeks_back,
 )
 from collectors.transcripts.extraction import extract_meeting_transcript
 from collectors.transcripts.compressor import compress_transcript
 
-
-def _print(text: str):
-    """Print with ASCII-safe encoding to avoid charmap errors on Windows."""
-    print(safe_encode(text))
+# Per-meeting timeout (extraction + compression). Prevents one stuck meeting
+# from eating the entire transcript collection budget.
+PER_MEETING_TIMEOUT = 180  # 3 minutes
 
 
 def _slugify(text: str) -> str:
@@ -26,6 +26,39 @@ def _slugify(text: str) -> str:
     text = re.sub(r'[^a-z0-9\s-]', '', text)
     text = re.sub(r'[\s]+', '-', text)
     return text[:60]
+
+
+async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config):
+    """Extract and compress a single meeting transcript. Returns result dict."""
+    transcript, opened_recap = await extract_meeting_transcript(page, iframe, meeting_name)
+    if not transcript:
+        return {"collected": False, "opened_recap": opened_recap}
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    compressed = None
+    if client:
+        tc_models = config.get("models", {})
+        compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
+        compressed = await compress_transcript(client, transcript, meeting_name, model=compress_model)
+
+    if compressed:
+        filename = f"{date_str}_{slug}.md"
+        filepath = output_dir / filename
+        header = (
+            f"# {meeting_name}\n"
+            f"**Date**: {date_str} | "
+            f"**Original length**: {len(transcript)} chars | "
+            f"**Compressed**: {len(compressed)} chars\n\n"
+        )
+        filepath.write_text(header + compressed, encoding="utf-8")
+        log.info(f"  SAVED (compressed): {filename} ({len(compressed)} chars from {len(transcript)})")
+    else:
+        filename = f"{date_str}_{slug}.txt"
+        filepath = output_dir / filename
+        filepath.write_text(transcript, encoding="utf-8")
+        log.info(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
+
+    return {"collected": True, "opened_recap": opened_recap}
 
 
 async def run_transcript_collection(client, config: dict):
@@ -37,7 +70,7 @@ async def run_transcript_collection(client, config: dict):
     Uses the shared BrowserManager when available (daemon mode).
     Falls back to launching its own browser (CLI --once mode).
     """
-    _print("\n=== Transcript collection start ===")
+    log.info("Transcript collection start")
 
     tc = config.get("transcripts", {})
     max_meetings = tc.get("max_per_run", 20)
@@ -58,11 +91,11 @@ async def run_transcript_collection(client, config: dict):
     browser_mgr = get_browser_manager()
 
     if browser_mgr and browser_mgr.context:
-        _print("  Using shared browser instance")
+        log.info("  Using shared browser instance")
         page = await browser_mgr.new_page()
         own_context = None
     else:
-        _print("  Launching standalone browser (no shared instance)")
+        log.info("  Launching standalone browser (no shared instance)")
         _pw = await async_playwright().__aenter__()
         own_context = await _pw.chromium.launch_persistent_context(
             user_data_dir,
@@ -79,44 +112,42 @@ async def run_transcript_collection(client, config: dict):
 
     try:
         # Step 1: Navigate to Teams — fresh page, no stale SPA state
-        _print("  Opening Teams...")
+        log.info("  Opening Teams...")
         await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
-        await page.wait_for_timeout(10000)
+        await page.wait_for_timeout(6000)
 
         try:
             title = await page.title()
-            _print(f"  Page loaded: {title}")
+            log.info(f"  Page loaded: {title}")
         except Exception:
-            _print("  Page navigated during load (Teams SPA redirect) — continuing.")
+            log.info("  Page navigated during load (Teams SPA redirect) — continuing.")
 
         # Step 2: Click Calendar in the left nav bar (works from any view)
-        _print("  Clicking Calendar nav button...")
+        log.info("  Clicking Calendar nav button...")
         try:
             cal_btn = page.get_by_role("button", name="Calendar")
             await cal_btn.click()
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(3000)
         except Exception:
             # Fallback: keyboard shortcut
-            _print("  Calendar button not found, trying Ctrl+Shift+3...")
+            log.info("  Calendar button not found, trying Ctrl+Shift+3...")
             await page.keyboard.press("Control+Shift+3")
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(3000)
 
         title = await page.title()
-        _print(f"  After nav: {title}")
+        log.info(f"  After nav: {title}")
 
         if "Calendar" not in title:
-            _print(f"  ERROR: Could not open Calendar view. Got: {title}")
+            log.warning(f"  Could not open Calendar view. Got: {title}")
             return
 
         # Step 3: Wait for the calendar iframe to fully load
-        _print("  Waiting for calendar iframe to load...")
         iframe = page.frame_locator('iframe[name="embedded-page-container"]')
         try:
-            await iframe.get_by_role("button").first.wait_for(state="visible", timeout=30000)
-            _print("  Calendar iframe loaded.")
+            await iframe.get_by_role("button").first.wait_for(state="visible", timeout=15000)
         except Exception:
-            _print("  WARNING: Calendar iframe slow to load, waiting 10 more seconds...")
-            await page.wait_for_timeout(10000)
+            log.warning("  Calendar iframe slow to load, waiting 5 more seconds...")
+            await page.wait_for_timeout(5000)
 
         # Step 3b: Multi-week lookback — process each week from most recent to oldest
         current_week_offset = 0
@@ -125,22 +156,20 @@ async def run_transcript_collection(client, config: dict):
             if collected >= max_meetings:
                 break
 
-            _print(f"\n  --- Week {week_num} of {lookback_weeks} ---")
+            log.info(f"  --- Week {week_num} of {lookback_weeks} ---")
 
             # Navigate one week further back
             await navigate_weeks_back(page, iframe, 1)
             current_week_offset += 1
 
-            # Step 4: Find meetings — wait for async meeting renders
-            _print("  Scanning for meetings...")
+            # Step 4: Find meetings
             meeting_buttons = await find_meeting_buttons(page, iframe)
 
             # If few meetings found, calendar may still be loading — retry
             if len(meeting_buttons) < 3:
-                _print("  Few meetings found, waiting 5s for calendar to finish rendering...")
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(3000)
                 meeting_buttons = await find_meeting_buttons(page, iframe)
-            _print(f"  Found {len(meeting_buttons)} meeting buttons in calendar.")
+            log.info(f"  Found {len(meeting_buttons)} meeting buttons in calendar.")
 
             # Step 5: Process each meeting — try all, most won't have transcripts
             for meeting_name in meeting_buttons:
@@ -154,49 +183,28 @@ async def run_transcript_collection(client, config: dict):
                 # Check if already collected
                 existing = list(output_dir.glob(f"*_{slug}*"))
                 if existing:
-                    _print(f"  SKIP (already exists): {meeting_name[:50]}")
                     skipped += 1
                     continue
 
-                _print(f"\n  Processing: {meeting_name[:60]}...")
+                log.info(f"  Processing: {meeting_name[:60]}...")
                 opened_recap = False
                 try:
-                    transcript, opened_recap = await extract_meeting_transcript(page, iframe, meeting_name)
-                    if transcript:
-                        date_str = datetime.now().strftime("%Y-%m-%d")
-
-                        # Compress via GHCP SDK if client is available
-                        compressed = None
-                        if client:
-                            tc_models = config.get("models", {})
-                            compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
-                            compressed = await compress_transcript(client, transcript, meeting_name, model=compress_model)
-
-                        if compressed:
-                            filename = f"{date_str}_{slug}.md"
-                            filepath = output_dir / filename
-                            # Prepend metadata header
-                            header = (
-                                f"# {meeting_name}\n"
-                                f"**Date**: {date_str} | "
-                                f"**Original length**: {len(transcript)} chars | "
-                                f"**Compressed**: {len(compressed)} chars\n\n"
-                            )
-                            filepath.write_text(header + compressed, encoding="utf-8")
-                            _print(f"  SAVED (compressed): {filename} ({len(compressed)} chars from {len(transcript)})")
-                        else:
-                            filename = f"{date_str}_{slug}.txt"
-                            filepath = output_dir / filename
-                            filepath.write_text(transcript, encoding="utf-8")
-                            _print(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
-
+                    result = await asyncio.wait_for(
+                        _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config),
+                        timeout=PER_MEETING_TIMEOUT,
+                    )
+                    opened_recap = result.get("opened_recap", False)
+                    if result.get("collected"):
                         collected += 1
                     else:
-                        _print(f"  No transcript available for this meeting.")
                         skipped += 1
+                except asyncio.TimeoutError:
+                    log.warning(f"  TIMEOUT: {meeting_name[:40]} exceeded {PER_MEETING_TIMEOUT}s")
+                    errors.append(f"{meeting_name[:40]}: timeout after {PER_MEETING_TIMEOUT}s")
+                    opened_recap = True  # assume we navigated away
                 except Exception as e:
                     err_msg = f"{meeting_name[:40]}: {e}"
-                    _print(f"  ERROR: {err_msg}")
+                    log.warning(f"  ERROR: {err_msg}")
                     errors.append(err_msg)
 
                 # Navigate back to calendar for next meeting
@@ -204,7 +212,7 @@ async def run_transcript_collection(client, config: dict):
                     await return_to_calendar(page, iframe, force=opened_recap,
                                              week_offset=current_week_offset)
                 except Exception:
-                    _print("  FATAL: Cannot return to calendar, stopping collection.")
+                    log.warning("  FATAL: Cannot return to calendar, stopping collection.")
                     break
 
     finally:
@@ -215,10 +223,6 @@ async def run_transcript_collection(client, config: dict):
             await page.close()
 
     # Summary
-    _print(f"\n=== Transcript collection end ===")
-    _print(f"  Weeks scanned: {lookback_weeks}")
-    _print(f"  Collected: {collected}")
-    _print(f"  Skipped: {skipped}")
-    _print(f"  Errors: {len(errors)}")
+    log.info(f"Transcript collection end — collected: {collected}, skipped: {skipped}, errors: {len(errors)}")
     for err in errors:
-        _print(f"    - {err}")
+        log.warning(f"  Transcript error: {err}")
