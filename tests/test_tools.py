@@ -18,6 +18,7 @@ from sdk.tools import (
     list_schedules_tool,
     cancel_schedule,
     search_local_files,
+    update_project,
     send_teams_message,
     send_email_reply,
     send_task_to_agent,
@@ -129,12 +130,13 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 12
+    assert len(tools) == 13
     names = {t.name for t in tools}
     assert names == {
         "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
         "schedule_task", "list_schedules", "cancel_schedule",
-        "search_local_files", "send_teams_message", "send_email_reply",
+        "search_local_files", "update_project",
+        "send_teams_message", "send_email_reply",
         "send_task_to_agent",
     }
 
@@ -250,6 +252,113 @@ async def test_search_local_files_context_lines(tmp_dir):
     text = result["textResultForLlm"]
     assert "line2" in text  # context before
     assert "line4" in text  # context after
+
+
+# --- update_project ---
+
+
+async def test_update_project_creates_file(tmp_dir):
+    yaml_content = "project: Test Project\nstatus: active\ncommitments: []\n"
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "test-project",
+            "yaml_content": yaml_content,
+        }})
+    assert result["resultType"] == "success"
+    assert "updated" in result["textResultForLlm"].lower()
+    project_file = tmp_dir / "test-project.yaml"
+    assert project_file.exists()
+    data = yaml.safe_load(project_file.read_text())
+    assert data["project"] == "Test Project"
+    assert data["status"] == "active"
+    assert "updated_at" in data
+
+
+async def test_update_project_overwrites_existing(tmp_dir):
+    existing = tmp_dir / "existing.yaml"
+    existing.write_text("project: Old\nstatus: stalled\n")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "existing",
+            "yaml_content": "project: Updated\nstatus: active\nrisk_level: high\n",
+        }})
+    assert result["resultType"] == "success"
+    data = yaml.safe_load(existing.read_text())
+    assert data["project"] == "Updated"
+    assert data["status"] == "active"
+    assert data["risk_level"] == "high"
+
+
+async def test_update_project_invalid_id_path_traversal(tmp_dir):
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "../../etc/passwd",
+            "yaml_content": "project: Evil\n",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+
+
+async def test_update_project_invalid_id_uppercase(tmp_dir):
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "MyProject",
+            "yaml_content": "project: Test\n",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+
+
+async def test_update_project_invalid_yaml(tmp_dir):
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "bad-yaml",
+            "yaml_content": "{{invalid yaml: [unclosed",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+    assert "Invalid YAML" in result["textResultForLlm"]
+
+
+async def test_update_project_yaml_must_be_dict(tmp_dir):
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "list-test",
+            "yaml_content": "- item1\n- item2\n",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
+    assert "mapping" in result["textResultForLlm"]
+
+
+async def test_update_project_auto_sets_updated_at(tmp_dir):
+    from datetime import datetime
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        await update_project.handler({"arguments": {
+            "project_id": "ts-test",
+            "yaml_content": "project: Timestamp Test\n",
+        }})
+    data = yaml.safe_load((tmp_dir / "ts-test.yaml").read_text())
+    assert "updated_at" in data
+    datetime.fromisoformat(data["updated_at"])  # validates format
+
+
+async def test_update_project_with_commitments(tmp_dir):
+    yaml_content = (
+        "project: QBE Migration\n"
+        "status: active\n"
+        "commitments:\n"
+        "  - id: commit-send-plan\n"
+        "    what: Send resolution plan\n"
+        "    to: Esther\n"
+        '    due: "2026-02-21"\n'
+        "    status: open\n"
+    )
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "qbe-migration",
+            "yaml_content": yaml_content,
+        }})
+    assert result["resultType"] == "success"
+    data = yaml.safe_load((tmp_dir / "qbe-migration.yaml").read_text())
+    assert len(data["commitments"]) == 1
+    assert data["commitments"][0]["id"] == "commit-send-plan"
 
 
 # --- send_teams_message ---

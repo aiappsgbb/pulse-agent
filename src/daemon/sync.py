@@ -72,7 +72,7 @@ def sync_to_onedrive(config: dict):
     synced = 0
 
     # Sync output subdirectories
-    for subdir in ("digests", "intel", "pulse-signals"):
+    for subdir in ("digests", "intel", "pulse-signals", "projects"):
         src = OUTPUT_DIR / subdir
         if not src.exists():
             continue

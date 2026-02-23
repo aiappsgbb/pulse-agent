@@ -15,7 +15,7 @@ digest:
   model_key: digest
   working_dir: root
   mcp_servers: [workiq]
-  agents: [m365-query, digest-writer, signal-drafter]
+  agents: [m365-query, project-researcher, digest-writer, signal-drafter]
   system_prompt: config/prompts/system/digest.md
   system_prompt_mode: append
   trigger_prompt: config/prompts/triggers/digest.md

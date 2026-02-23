@@ -50,7 +50,7 @@ This is the #1 reason this mode exists. The owner is bad at responding to Teams 
 Keep it SHORT — this runs every 30 minutes. If nothing happened, say "All quiet — no new items" and move on. Don't pad it.
 
 Example item:
-- **[TEAMS] Jason Chen** (15 min ago, 1:1 chat) — "Hey Artur, can you share the MAF timeline?" → *Suggest: Reply with ETA from last week's planning doc*
-- **[EMAIL] Frank Miller** (42 min ago, TO: me) — Re: Colt MWC pricing — asking me to confirm Thursday meeting → *Suggest: Reply confirming attendance*
+- **[TEAMS] Colleague** (15 min ago, 1:1 chat) — "Can you share the project timeline?" → *Suggest: Reply with ETA from last week's planning doc*
+- **[EMAIL] Colleague** (42 min ago, TO: me) — Re: Project X pricing — asking me to confirm Thursday meeting → *Suggest: Reply confirming attendance*
 
 REMEMBER: Make 5+ WorkIQ queries minimum. Drill into context for each message. The value is the SUGGESTIONS, not just listing what happened.

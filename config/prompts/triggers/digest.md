@@ -26,6 +26,41 @@ These come from real-time browser scans. They show what is ACTUALLY happening ri
 ### This Week's Calendar
 {{calendar_block}}
 
+{{commitments_summary}}
+{{projects_block}}
+
+### Project Discovery & Update Instructions
+
+As you process content, look for **projects** — recurring customer engagements, deals, initiatives. For any project activity you find:
+
+1. **Check existing project files** (loaded above in Part D) before creating new ones
+2. **Discover new projects** from patterns: same customer across multiple sources, active deals with timelines, recurring meeting series
+3. **Update commitments**: who promised what to whom, by when. Mark overdue items.
+4. **Use `update_project`** tool to persist changes. Always read existing content first, merge new info, write full YAML back.
+5. **Link digest items** to projects using the `project` field in JSON output.
+
+Project YAML schema:
+```yaml
+project: "Human-readable name"
+status: active  # active | blocked | on-hold | completed
+risk_level: medium  # low | medium | high | critical
+summary: "1-2 sentence context"
+stakeholders:
+  - name: "Full Name"
+    role: "PM"
+commitments:
+  - what: "Send pricing proposal"
+    who: "You"
+    to: "Customer Name"
+    due: "2026-02-28"
+    status: open  # open | done | overdue | cancelled
+    source: "Feb 20 standup transcript"
+next_meeting: "2026-02-25 14:00"
+key_dates:
+  - date: "2026-03-01"
+    event: "Contract renewal deadline"
+```
+
 ## WorkIQ Queries
 
 Try these WorkIQ queries. The query window is **{{workiq_window}}**.
@@ -135,6 +170,7 @@ You MUST produce TWO outputs using `write_output`:
       "source": "Email from <name> | Teams: <channel/person> | Meeting: <title> | RSS: <source>",
       "title": "<short title — max 80 chars>",
       "summary": "<1-2 sentence description of what needs attention>",
+      "project": "<project-id or null if not linked to a project>",
       "date": "<YYYY-MM-DD when this originated>",
       "age": "<human-readable age, e.g. '2 days', '18 hours', 'today'>",
       "verified": true,
@@ -168,7 +204,7 @@ You MUST produce TWO outputs using `write_output`:
 }
 ```
 
-Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g. `reply-esther-enact-user-base`, `action-vodafone-voice-quality`, `intel-github-copilot-sdk-cli`.
+Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g. `reply-sender-subject-slug`, `action-project-task-slug`, `intel-source-topic-slug`.
 
 Rules for `age` and `verified`:
 - `age`: human-readable relative time from the item's origin date to today. E.g. "2 days", "18 hours", "today", "5 days".
@@ -191,16 +227,30 @@ Rules for `suggested_actions`:
 {X new items, Y carried forward, Z resolved since last digest.}
 {If WorkIQ unavailable or scans failed, state data source caveat here.}
 
+## Overdue Commitments
+(OMIT if none. Surface overdue commitments from project files FIRST — these are the most time-sensitive.)
+- **[OVERDUE {N}d]** {project}: {what} — committed to {person} by {date}
+
 ## Coming Up
 - **{day, time}**: {meeting title} — {what to prep if known}
 - **{deadline}**: {what's due} — {current status}
 (Only non-routine meetings. No personal blocks, recurring commutes, childcare, etc.)
 
-## Still Outstanding
-- **[URGENT REPLY]** {sender} — {subject} — {what they need} *({N days/hours ago — no reply yet})*
+## By Project
+(Group items by project. Each project header shows status + risk.)
+
+### {Project Name} ({status}, {risk})
 - **[REPLY]** {sender} — {subject} — {what they need} *({aging})*
-- **[ACTION]** {what} — {deadline} — {context} *({aging})* {if unverified: "(unverified — may already be handled)"}
+- **[ACTION]** {what} — {deadline} *({aging})*
 - **[DECISION]** {what needs deciding} — {by when}
+
+### {Another Project}
+- ...
+
+## Other Items
+(Items not linked to any project. Still grouped by priority.)
+- **[URGENT REPLY]** {sender} — {subject} — {what they need} *({N days/hours ago — no reply yet})*
+- **[ACTION]** {what} — {deadline} — {context} *({aging})* {if unverified: "(unverified — may already be handled)"}
 
 ## Key Takeaways
 (OMIT this section if empty. Only include if a meeting decision changes what you do next.)

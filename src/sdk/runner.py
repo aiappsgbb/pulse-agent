@@ -9,7 +9,7 @@ import yaml
 
 from copilot import CopilotClient
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR
+from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR
 from core.logging import log
 from sdk.prompts import load_prompt
 from sdk.session import agent_session
@@ -188,6 +188,10 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         # Calendar scan
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
 
+        # Project memory & commitments
+        variables["projects_block"] = context.get("projects_block", "")
+        variables["commitments_summary"] = context.get("commitments_summary", "")
+
     elif mode == "intel":
         variables["date"] = date_str
         articles = context.get("articles", [])
@@ -245,6 +249,142 @@ def _load_previous_digest() -> dict | None:
     except Exception as e:
         log.warning(f"Could not load previous digest: {e}")
         return None
+
+
+def _load_projects() -> list[dict]:
+    """Load all project memory files from output/projects/*.yaml.
+
+    Returns list of parsed project dicts. Skips files with YAML errors.
+    """
+    if not PROJECTS_DIR.exists():
+        return []
+
+    projects = []
+    for path in sorted(PROJECTS_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["_file"] = path.name
+                projects.append(data)
+        except Exception as e:
+            log.warning(f"  Skipping corrupt project file {path.name}: {e}")
+    return projects
+
+
+def _build_projects_block(projects: list[dict]) -> str:
+    """Format project data for injection into the digest trigger prompt."""
+    if not projects:
+        return ""
+
+    lines = [
+        "## Part D -- Active Projects & Engagements\n",
+        "These are your known active projects with tracked commitments.",
+        "For each project: verify status, update commitments, add new findings from today's content.",
+        "Use the `update_project` tool to save changes to any project file.\n",
+    ]
+
+    active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
+    other = [p for p in projects if p.get("status") not in ("active", "blocked", None)]
+
+    for project in active:
+        name = project.get("project", project.get("_file", "unnamed"))
+        status = project.get("status", "active")
+        risk = project.get("risk_level", "unknown")
+        pid = project.get("_file", "").replace(".yaml", "")
+        lines.append(f"### {name} (status: {status}, risk: {risk}, file: {pid})")
+
+        stakeholders = project.get("stakeholders", [])
+        if stakeholders:
+            contacts = ", ".join(
+                f"{s.get('name', '?')} ({s.get('role', '?')})" if s.get("role") else s.get("name", "?")
+                for s in stakeholders
+            )
+            lines.append(f"  Stakeholders: {contacts}")
+
+        summary = project.get("summary", "")
+        if summary:
+            lines.append(f"  Context: {summary}")
+
+        commitments = project.get("commitments", [])
+        if commitments:
+            lines.append("  Commitments:")
+            for c in commitments:
+                c_status = c.get("status", "open")
+                what = c.get("what", "?")
+                to = c.get("to", "?")
+                due = c.get("due", "no deadline")
+                lines.append(f"    - [{c_status.upper()}] {what} (to: {to}, due: {due})")
+
+        next_mtg = project.get("next_meeting", "")
+        if next_mtg:
+            lines.append(f"  Next meeting: {next_mtg}")
+
+        lines.append("")
+
+    if other:
+        statuses = ", ".join(sorted(set(p.get("status", "?") for p in other)))
+        lines.append(f"({len(other)} other project(s) with status: {statuses})\n")
+
+    return "\n".join(lines)
+
+
+def _extract_commitments_summary(projects: list[dict]) -> str:
+    """Build a global commitment summary across all projects.
+
+    Highlights overdue and approaching-deadline commitments.
+    """
+    if not projects:
+        return ""
+
+    today = datetime.now().date()
+    overdue = []
+    upcoming = []
+    open_count = 0
+
+    for project in projects:
+        project_name = project.get("project", project.get("_file", "?"))
+        for c in project.get("commitments", []):
+            if c.get("status") == "done":
+                continue
+            open_count += 1
+            what = c.get("what", "?")
+            to = c.get("to", "?")
+            due_str = c.get("due", "")
+
+            try:
+                due_date = datetime.strptime(str(due_str), "%Y-%m-%d").date()
+                days_until = (due_date - today).days
+            except (ValueError, TypeError):
+                days_until = None
+
+            entry = f"- **{what}** (to: {to}, project: {project_name}, due: {due_str})"
+
+            if days_until is not None and days_until < 0:
+                entry += f" -- **{abs(days_until)} days OVERDUE**"
+                overdue.append(entry)
+            elif days_until is not None and days_until <= 3:
+                entry += f" -- due in {days_until} day(s)"
+                upcoming.append(entry)
+
+    if not overdue and not upcoming:
+        if open_count:
+            return f"({open_count} open commitment(s), none overdue or due soon.)\n"
+        return ""
+
+    lines = ["## Commitment Status\n"]
+    if overdue:
+        lines.append(f"**OVERDUE ({len(overdue)}):**")
+        lines.extend(overdue)
+        lines.append("")
+    if upcoming:
+        lines.append(f"**Due soon ({len(upcoming)}):**")
+        lines.extend(upcoming)
+        lines.append("")
+    if open_count > len(overdue) + len(upcoming):
+        remaining = open_count - len(overdue) - len(upcoming)
+        lines.append(f"({remaining} other open commitment(s) with no imminent deadline.)\n")
+
+    return "\n".join(lines)
 
 
 MAX_CARRY_FORWARD_DAYS = 5
@@ -479,6 +619,15 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         active_count = len([e for e in cal_events if not e.get("is_declined")])
         log.info(f"  Calendar: {active_count} active events")
 
+    log.info("\nPhase 1f: Loading active project files...")
+    projects = _load_projects()
+    projects_block = _build_projects_block(projects)
+    commitments_summary = _extract_commitments_summary(projects)
+    if projects:
+        log.info(f"  Loaded {len(projects)} project(s)")
+    else:
+        log.info("  No project files found")
+
     # Build content block
     by_type: dict[str, list[dict]] = {}
     for item in items:
@@ -517,6 +666,8 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         "teams_inbox_block": teams_inbox_block,
         "outlook_inbox_block": outlook_block,
         "calendar_block": calendar_block,
+        "projects_block": projects_block,
+        "commitments_summary": commitments_summary,
     }
 
 

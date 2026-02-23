@@ -10,7 +10,7 @@ user:
     closing complex AI deals, running hands-on workshops, and proving what's possible
     with production-grade AI solutions.
   what_matters:
-    - "Customer deals — especially Vodafone, Colt, QBE, Havas. Any movement, blockers, or deadlines."
+    - "Customer deals — any movement, blockers, or deadlines on active engagements (tracked in project memory)."
     - "Escalations from partners or field teams — these are time-sensitive and politically important."
     - "Azure OpenAI / GitHub Copilot / AI Agents announcements — these directly affect my conversations with customers."
     - "Competitor moves (AWS Bedrock, Google Vertex, Salesforce Agentforce) — customers ask me about these."
@@ -51,7 +51,7 @@ digest:
   incremental: true
   state_file: "output/.digest-state.json"
   priorities:
-    - "Revenue deals and customer escalations — Vodafone, Colt, QBE, Havas (any movement, blockers, or deadlines)"
+    - "Revenue deals and customer escalations — active engagements tracked in project memory (any movement, blockers, or deadlines)"
     - "Unreplied messages where someone is waiting for MY response (not CC, not FYI)"
     - "Commitments I made in meetings that I haven't delivered on yet"
     - "Key decisions made in meetings I missed or was distracted in"

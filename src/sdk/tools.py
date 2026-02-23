@@ -7,7 +7,11 @@ from pathlib import Path
 from pydantic import BaseModel
 from copilot import define_tool, Tool, ToolInvocation
 
-from core.constants import LOGS_DIR, OUTPUT_DIR, TASKS_DIR
+import re
+
+import yaml
+
+from core.constants import LOGS_DIR, OUTPUT_DIR, TASKS_DIR, PROJECTS_DIR
 from core.state import load_json_state, save_json_state
 
 
@@ -76,6 +80,11 @@ class SendTaskToAgentParams(BaseModel):
     description: str = ""
 
 
+class UpdateProjectParams(BaseModel):
+    project_id: str  # slug, e.g. "qbe-foundry-migration"
+    yaml_content: str  # full YAML content for the project file
+
+
 class SearchLocalFilesParams(BaseModel):
     query: str
     file_pattern: str = "*.txt"  # glob pattern to filter files
@@ -133,7 +142,6 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
     slug = params.task.lower().replace(" ", "-")[:50]
     task_file = pending_dir / f"{date_str}-{slug}.yaml"
 
-    import yaml
     task_data = {
         "type": params.type,
         "task": params.task,
@@ -254,7 +262,6 @@ def cancel_schedule(params: CancelScheduleParams, invocation: ToolInvocation) ->
 )
 def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation) -> str:
     import uuid
-    import yaml
     from core.config import load_config
 
     config = load_config()
@@ -296,7 +303,6 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
 
     request_id = str(uuid.uuid4())
     timestamp = datetime.now().isoformat()
-    import re
     slug = re.sub(r"[^a-z0-9-]", "", params.task.lower().replace(" ", "-"))[:40]
 
     task_data = {
@@ -386,6 +392,47 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
     return f"Found {len(results)} file(s) matching '{params.query}':\n\n" + "\n\n".join(results)
 
 
+# --- Project memory ---
+
+@define_tool(
+    name="update_project",
+    description=(
+        "Create or update a project memory file. Takes a project_id (slug) and the "
+        "full YAML content. Use this to track active projects, stakeholders, commitments, "
+        "and timeline. Read the existing file first (output/projects/{id}.yaml), modify, "
+        "then write back the full content. The tool auto-sets updated_at timestamp."
+    ),
+)
+def update_project(params: UpdateProjectParams, invocation: ToolInvocation) -> str:
+    # Validate project_id — lowercase alphanumeric + hyphens, no path traversal
+    if not re.match(r"^[a-z0-9][a-z0-9-]{0,80}$", params.project_id):
+        return "ERROR: project_id must be lowercase alphanumeric with hyphens (e.g. 'qbe-foundry-migration')"
+
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    project_path = (PROJECTS_DIR / f"{params.project_id}.yaml").resolve()
+
+    # Path traversal guard (same pattern as write_output)
+    if not str(project_path).startswith(str(PROJECTS_DIR.resolve())):
+        return f"ERROR: Path traversal blocked — '{params.project_id}' resolves outside projects/"
+
+    # Validate YAML content
+    try:
+        data = yaml.safe_load(params.yaml_content)
+    except yaml.YAMLError as e:
+        return f"ERROR: Invalid YAML — {e}"
+
+    if not isinstance(data, dict):
+        return "ERROR: YAML content must be a mapping (dict), not a list or scalar"
+
+    # Auto-set updated_at
+    data["updated_at"] = datetime.now().isoformat()
+
+    with open(project_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return f"Project '{params.project_id}' updated at {project_path}"
+
+
 # --- Browser action tools ---
 # These queue browser actions for the worker to execute.
 # The worker runs in the main async event loop where Playwright lives.
@@ -447,6 +494,7 @@ def get_tools() -> list[Tool]:
     return [
         log_action, write_output, queue_task, dismiss_item, add_note,
         schedule_task, list_schedules_tool, cancel_schedule,
-        search_local_files, send_teams_message, send_email_reply,
+        search_local_files, update_project,
+        send_teams_message, send_email_reply,
         send_task_to_agent,
     ]

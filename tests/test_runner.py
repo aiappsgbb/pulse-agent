@@ -9,6 +9,9 @@ from sdk.runner import (
     _build_carry_forward,
     _build_trigger_variables,
     _load_previous_digest,
+    _load_projects,
+    _build_projects_block,
+    _extract_commitments_summary,
     _pre_process_monitor,
     MAX_CARRY_FORWARD_DAYS,
 )
@@ -278,3 +281,161 @@ def test_trigger_variables_digest_defaults_outlook_calendar(sample_config, tmp_d
         result = _build_trigger_variables("digest", sample_config, {})
     assert "unavailable" in result["outlook_inbox_block"].lower()
     assert "unavailable" in result["calendar_block"].lower()
+
+
+# --- _load_projects ---
+
+
+def test_load_projects_no_dir(tmp_dir):
+    with patch("sdk.runner.PROJECTS_DIR", tmp_dir / "nonexistent"):
+        assert _load_projects() == []
+
+
+def test_load_projects_empty_dir(tmp_dir):
+    projects_dir = tmp_dir / "projects"
+    projects_dir.mkdir()
+    with patch("sdk.runner.PROJECTS_DIR", projects_dir):
+        assert _load_projects() == []
+
+
+def test_load_projects_reads_yaml(tmp_dir):
+    import yaml
+    projects_dir = tmp_dir / "projects"
+    projects_dir.mkdir()
+    data = {"project": "Acme Migration", "status": "active", "summary": "Cloud migration"}
+    (projects_dir / "acme-migration.yaml").write_text(
+        yaml.dump(data), encoding="utf-8"
+    )
+    with patch("sdk.runner.PROJECTS_DIR", projects_dir):
+        projects = _load_projects()
+    assert len(projects) == 1
+    assert projects[0]["project"] == "Acme Migration"
+    assert projects[0]["_file"] == "acme-migration.yaml"
+
+
+def test_load_projects_skips_corrupt(tmp_dir):
+    import yaml
+    projects_dir = tmp_dir / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "good.yaml").write_text(
+        yaml.dump({"project": "Good"}), encoding="utf-8"
+    )
+    (projects_dir / "bad.yaml").write_text("{{{{not yaml", encoding="utf-8")
+    with patch("sdk.runner.PROJECTS_DIR", projects_dir):
+        projects = _load_projects()
+    assert len(projects) == 1
+    assert projects[0]["project"] == "Good"
+
+
+# --- _build_projects_block ---
+
+
+def test_build_projects_block_empty():
+    assert _build_projects_block([]) == ""
+
+
+def test_build_projects_block_with_active_project():
+    projects = [{
+        "project": "Contoso Deal",
+        "status": "active",
+        "risk_level": "medium",
+        "_file": "contoso-deal.yaml",
+        "stakeholders": [
+            {"name": "Alice", "role": "PM"},
+            {"name": "Bob", "role": "Engineer"},
+        ],
+        "summary": "Enterprise license renewal",
+        "commitments": [
+            {"what": "Send pricing", "to": "Alice", "due": "2026-02-25", "status": "open"},
+        ],
+        "next_meeting": "2026-02-24 10:00",
+    }]
+    result = _build_projects_block(projects)
+    assert "Part D" in result
+    assert "Contoso Deal" in result
+    assert "Alice (PM)" in result
+    assert "Bob (Engineer)" in result
+    assert "Enterprise license renewal" in result
+    assert "[OPEN] Send pricing" in result
+    assert "Next meeting: 2026-02-24 10:00" in result
+
+
+def test_build_projects_block_separates_active_and_other():
+    projects = [
+        {"project": "Active One", "status": "active", "_file": "active.yaml"},
+        {"project": "Done One", "status": "completed", "_file": "done.yaml"},
+        {"project": "Blocked One", "status": "blocked", "_file": "blocked.yaml"},
+    ]
+    result = _build_projects_block(projects)
+    assert "Active One" in result
+    assert "Blocked One" in result
+    assert "Done One" not in result  # completed goes to "other"
+    assert "1 other project(s)" in result
+
+
+# --- _extract_commitments_summary ---
+
+
+def test_commitments_summary_no_projects():
+    assert _extract_commitments_summary([]) == ""
+
+
+def test_commitments_summary_overdue():
+    projects = [{
+        "project": "Acme Deal",
+        "_file": "acme.yaml",
+        "commitments": [
+            {"what": "Send proposal", "to": "Client", "due": "2026-01-01", "status": "open"},
+        ],
+    }]
+    result = _extract_commitments_summary(projects)
+    assert "OVERDUE" in result
+    assert "Send proposal" in result
+    assert "Acme Deal" in result
+
+
+def test_commitments_summary_upcoming():
+    from datetime import datetime, timedelta
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    projects = [{
+        "project": "Beta Launch",
+        "_file": "beta.yaml",
+        "commitments": [
+            {"what": "Final review", "to": "Team", "due": tomorrow, "status": "open"},
+        ],
+    }]
+    result = _extract_commitments_summary(projects)
+    assert "Due soon" in result
+    assert "Final review" in result
+
+
+def test_commitments_summary_skips_done():
+    projects = [{
+        "project": "Old Project",
+        "_file": "old.yaml",
+        "commitments": [
+            {"what": "Already handled", "to": "Someone", "due": "2026-01-01", "status": "done"},
+        ],
+    }]
+    result = _extract_commitments_summary(projects)
+    assert result == ""  # no open commitments at all
+
+
+def test_trigger_variables_digest_includes_projects(sample_config, tmp_dir):
+    """Digest trigger variables include projects_block and commitments_summary."""
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+        result = _build_trigger_variables("digest", sample_config, {
+            "content_block": "content",
+            "projects_block": "## Part D -- Projects\nSome project data",
+            "commitments_summary": "## Commitment Status\n1 overdue",
+        })
+    assert result["projects_block"] == "## Part D -- Projects\nSome project data"
+    assert result["commitments_summary"] == "## Commitment Status\n1 overdue"
+
+
+def test_trigger_variables_digest_defaults_projects(sample_config, tmp_dir):
+    """Digest trigger variables default to empty when no projects."""
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+        result = _build_trigger_variables("digest", sample_config, {})
+    assert result["projects_block"] == ""
+    assert result["commitments_summary"] == ""
