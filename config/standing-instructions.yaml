@@ -22,8 +22,22 @@ user:
     - "Meeting recaps for meetings I actively participated in and remember."
     - "Automated notifications from systems (JIRA, ADO, etc.) unless they're about my active deals."
 
+schedule:
+  - id: morning-digest
+    type: digest
+    pattern: "daily 07:00"
+    description: "Morning digest with transcript collection"
+  - id: triage
+    type: monitor
+    pattern: "every 30m"
+    description: "Inbox triage every 30 minutes"
+    office_hours_only: true
+  - id: daily-intel
+    type: intel
+    pattern: "daily 09:00"
+    description: "Morning intel brief"
+
 monitoring:
-  interval: "30m"
   office_hours:
     start: "08:00"
     end: "18:00"

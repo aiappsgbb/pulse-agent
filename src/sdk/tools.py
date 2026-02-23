@@ -61,6 +61,13 @@ class CancelScheduleParams(BaseModel):
     id: str
 
 
+class UpdateScheduleParams(BaseModel):
+    id: str
+    pattern: str = ""  # new pattern (leave empty to keep current)
+    description: str = ""  # new description (leave empty to keep current)
+    enabled: bool = True
+
+
 class SendTeamsMessageParams(BaseModel):
     recipient: str  # person name to message
     message: str
@@ -235,6 +242,25 @@ def list_schedules_tool(params: ListSchedulesParams, invocation: ToolInvocation)
         last = s.get("last_run", "never")
         lines.append(f"- [{status}] {s['id']}: {s['pattern']} ({s['type']}) — last run: {last}")
     return "\n".join(lines)
+
+
+@define_tool(
+    name="update_schedule",
+    description=(
+        "Update an existing schedule's pattern, description, or enabled status. "
+        "Example: update_schedule(id='triage', pattern='every 15m') to change triage frequency."
+    ),
+)
+def update_schedule_tool(params: UpdateScheduleParams, invocation: ToolInvocation) -> str:
+    from core.scheduler import update_schedule
+    try:
+        entry = update_schedule(params.id, params.pattern, params.description, params.enabled)
+        if entry:
+            status = "enabled" if entry.get("enabled", True) else "disabled"
+            return f"Updated: '{entry['id']}' — {entry['pattern']} [{status}]"
+        return f"Schedule '{params.id}' not found."
+    except ValueError as e:
+        return f"ERROR: {e}"
 
 
 @define_tool(
@@ -514,7 +540,7 @@ def get_tools() -> list[Tool]:
     """Return custom tools for registration on a session."""
     return [
         log_action, write_output, queue_task, dismiss_item, add_note,
-        schedule_task, list_schedules_tool, cancel_schedule,
+        schedule_task, list_schedules_tool, update_schedule_tool, cancel_schedule,
         search_local_files, update_project,
         send_teams_message, send_email_reply,
         send_task_to_agent,

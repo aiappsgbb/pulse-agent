@@ -172,26 +172,24 @@ async def main():
     from daemon.sync import sync_jobs_from_onedrive
     sync_jobs_from_onedrive(config, job_queue)
 
-    # Check for missed digests and intel (runs before worker starts processing)
-    from daemon.heartbeat import heartbeat, check_missed_digest, check_missed_intel
-    check_missed_digest(job_queue)
-    check_missed_intel(job_queue)
+    # Sync default schedules from config (digest, triage, intel patterns)
+    # Catch-up fires naturally: new schedules have last_run=None, so is_due()
+    # returns True for any daily schedule whose target time has already passed.
+    from core.scheduler import ensure_default_schedules, scheduler_loop
+    ensure_default_schedules(config)
 
-    # Start worker, heartbeat, and scheduler
+    # Start worker and scheduler (scheduler handles all periodic jobs)
     from daemon.worker import job_worker
-    from core.scheduler import scheduler_loop
     worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
-    heartbeat_task = asyncio.create_task(heartbeat(config, job_queue, shutdown_event))
     scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, shutdown_event))
 
-    log.info("Daemon running — Telegram + heartbeat + scheduler active. Ctrl+C to stop.")
+    log.info("Daemon running — Telegram + scheduler active. Ctrl+C to stop.")
 
     # Wait for shutdown
     await shutdown_event.wait()
 
     # Cleanup
     scheduler_task.cancel()
-    heartbeat_task.cancel()
     worker_task.cancel()
     await stop_telegram_bot(telegram_app)
     if browser:

@@ -16,6 +16,7 @@ from sdk.tools import (
     add_note,
     schedule_task,
     list_schedules_tool,
+    update_schedule_tool,
     cancel_schedule,
     search_local_files,
     update_project,
@@ -130,11 +131,11 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 13
+    assert len(tools) == 14
     names = {t.name for t in tools}
     assert names == {
         "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
-        "schedule_task", "list_schedules", "cancel_schedule",
+        "schedule_task", "list_schedules", "update_schedule", "cancel_schedule",
         "search_local_files", "update_project",
         "send_teams_message", "send_email_reply",
         "send_task_to_agent",
@@ -183,6 +184,43 @@ async def test_list_schedules_with_entries(tmp_dir):
         result = await list_schedules_tool.handler({"arguments": {}})
     assert "test-sched" in result["textResultForLlm"]
     assert "daily 18:00" in result["textResultForLlm"]
+
+
+# --- update_schedule ---
+
+
+async def test_update_schedule_changes_pattern(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        await schedule_task.handler({"arguments": {
+            "id": "triage", "type": "monitor", "pattern": "every 30m",
+        }})
+        result = await update_schedule_tool.handler({"arguments": {
+            "id": "triage", "pattern": "every 15m",
+        }})
+    assert "Updated" in result["textResultForLlm"]
+    assert "every 15m" in result["textResultForLlm"]
+
+
+async def test_update_schedule_not_found(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        result = await update_schedule_tool.handler({"arguments": {
+            "id": "nope", "pattern": "every 15m",
+        }})
+    assert "not found" in result["textResultForLlm"]
+
+
+async def test_update_schedule_invalid_pattern(tmp_dir):
+    sched_file = tmp_dir / ".scheduler.json"
+    with patch("core.scheduler.SCHEDULER_FILE", sched_file):
+        await schedule_task.handler({"arguments": {
+            "id": "triage", "type": "monitor", "pattern": "every 30m",
+        }})
+        result = await update_schedule_tool.handler({"arguments": {
+            "id": "triage", "pattern": "nope",
+        }})
+    assert "ERROR" in result["textResultForLlm"]
 
 
 # --- cancel_schedule ---

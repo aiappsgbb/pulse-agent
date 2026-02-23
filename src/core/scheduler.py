@@ -6,6 +6,10 @@ Supports schedule patterns:
   - "every 6h"            → every 6 hours from last run
   - "every 30m"           → every 30 minutes from last run
 
+Default schedules are defined in standing-instructions.yaml under `schedule:`.
+On daemon startup, `ensure_default_schedules()` syncs them into the state file.
+Config is authoritative for patterns/descriptions; state preserves last_run/enabled.
+
 State persists to scheduler.json so schedules survive restarts.
 """
 
@@ -28,6 +32,85 @@ def _load_schedules() -> list[dict]:
 
 def _save_schedules(schedules: list[dict]):
     save_json_state(SCHEDULER_FILE, {"schedules": schedules})
+
+
+def is_office_hours(config: dict) -> bool:
+    """Check if current time is within configured office hours."""
+    office = config.get("monitoring", {}).get("office_hours", {})
+    if not office:
+        return True  # No office hours configured = always on
+
+    now = datetime.now()
+    allowed_days = office.get("days", [1, 2, 3, 4, 5])
+    if now.isoweekday() not in allowed_days:
+        return False
+
+    start = office.get("start", "08:00")
+    end = office.get("end", "18:00")
+    start_h, start_m = map(int, start.split(":"))
+    end_h, end_m = map(int, end.split(":"))
+
+    now_mins = now.hour * 60 + now.minute
+    return (start_h * 60 + start_m) <= now_mins < (end_h * 60 + end_m)
+
+
+def ensure_default_schedules(config: dict):
+    """Sync default schedules from config into the persistent scheduler state.
+
+    Config schedules (standing-instructions.yaml `schedule:` section) are
+    authoritative for pattern, type, description, and office_hours_only.
+    The state file preserves last_run and enabled status across restarts.
+    Agent-created schedules (not in config) are left untouched.
+    """
+    config_schedules = config.get("schedule", [])
+    if not config_schedules:
+        return
+
+    current = _load_schedules()
+    current_by_id = {s["id"]: s for s in current}
+    changed = False
+
+    for cs in config_schedules:
+        sid = cs.get("id", "")
+        if not sid:
+            continue
+
+        pattern = cs.get("pattern", "")
+        if not validate_pattern(pattern):
+            log.warning(f"Scheduler: invalid pattern '{pattern}' for '{sid}', skipping")
+            continue
+
+        if sid in current_by_id:
+            # Update pattern/description from config, preserve state
+            existing = current_by_id[sid]
+            if (existing.get("pattern") != pattern
+                    or existing.get("type") != cs.get("type")
+                    or existing.get("description") != cs.get("description", "")
+                    or existing.get("office_hours_only") != cs.get("office_hours_only", False)):
+                existing["pattern"] = pattern
+                existing["type"] = cs["type"]
+                existing["description"] = cs.get("description", "")
+                existing["office_hours_only"] = cs.get("office_hours_only", False)
+                changed = True
+                log.info(f"Scheduler: updated '{sid}' from config ({pattern})")
+        else:
+            # New schedule — seed with last_run=None so catch-up fires naturally
+            entry = {
+                "id": sid,
+                "type": cs["type"],
+                "pattern": pattern,
+                "description": cs.get("description", ""),
+                "enabled": True,
+                "created_at": datetime.now().isoformat(),
+                "last_run": None,
+                "office_hours_only": cs.get("office_hours_only", False),
+            }
+            current.append(entry)
+            changed = True
+            log.info(f"Scheduler: added '{sid}' from config ({pattern})")
+
+    if changed:
+        _save_schedules(current)
 
 
 def list_schedules() -> list[dict]:
@@ -66,6 +149,23 @@ def add_schedule(
     schedules.append(entry)
     _save_schedules(schedules)
     return entry
+
+
+def update_schedule(schedule_id: str, pattern: str = "", description: str = "", enabled: bool = True) -> dict | None:
+    """Update an existing schedule. Returns the updated entry, or None if not found."""
+    schedules = _load_schedules()
+    for s in schedules:
+        if s["id"] == schedule_id:
+            if pattern:
+                if not validate_pattern(pattern):
+                    raise ValueError(f"Invalid schedule pattern: '{pattern}'")
+                s["pattern"] = pattern
+            if description:
+                s["description"] = description
+            s["enabled"] = enabled
+            _save_schedules(schedules)
+            return s
+    return None
 
 
 def remove_schedule(schedule_id: str) -> bool:
@@ -115,10 +215,21 @@ def parse_pattern(pattern: str) -> dict | None:
     return None
 
 
-def is_due(schedule: dict, now: datetime | None = None) -> bool:
-    """Check if a schedule is due to run."""
+def is_due(schedule: dict, now: datetime | None = None, config: dict | None = None) -> bool:
+    """Check if a schedule is due to run.
+
+    Args:
+        schedule: Schedule entry dict.
+        now: Override current time (for testing).
+        config: Standing instructions config — needed for office_hours_only check.
+    """
     if not schedule.get("enabled", True):
         return False
+
+    # Office hours gate — skip if outside configured hours
+    if schedule.get("office_hours_only", False) and config:
+        if not is_office_hours(config):
+            return False
 
     now = now or datetime.now()
     parsed = parse_pattern(schedule["pattern"])
@@ -188,7 +299,7 @@ async def scheduler_loop(
             now = datetime.now()
 
             for schedule in schedules:
-                if is_due(schedule, now):
+                if is_due(schedule, now, config=config):
                     chat_id = get_proactive_chat_id()
                     job = {
                         "type": schedule["type"],

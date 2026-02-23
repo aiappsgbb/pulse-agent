@@ -4,7 +4,7 @@ import asyncio
 import shutil
 from pathlib import Path
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, TASKS_DIR
+from core.constants import PROJECT_ROOT, TASKS_DIR
 from core.config import load_pending_tasks
 from core.logging import log
 
@@ -59,7 +59,11 @@ def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
 
 
 def sync_to_onedrive(config: dict):
-    """Copy output files to OneDrive so M365 Copilot can read them."""
+    """Seed instructions and clean up completed jobs on OneDrive.
+
+    Output files (digests, intel, monitoring, etc.) are on OneDrive automatically
+    via NTFS junctions — no explicit copy needed.
+    """
     onedrive_cfg = config.get("onedrive", {})
     if not onedrive_cfg.get("sync_enabled", False):
         return
@@ -70,27 +74,6 @@ def sync_to_onedrive(config: dict):
         return
 
     synced = 0
-
-    # Sync output subdirectories
-    for subdir in ("digests", "intel", "pulse-signals", "projects"):
-        src = OUTPUT_DIR / subdir
-        if not src.exists():
-            continue
-        dest = dest_root / subdir
-        dest.mkdir(parents=True, exist_ok=True)
-        for f in src.iterdir():
-            if f.is_file() and not f.name.startswith("."):
-                dest_file = dest / f.name
-                if not dest_file.exists() or f.stat().st_mtime > dest_file.stat().st_mtime:
-                    shutil.copy2(f, dest_file)
-                    synced += 1
-
-    # Sync monitoring reports
-    for f in OUTPUT_DIR.glob("monitoring-*.md"):
-        dest_file = dest_root / f.name
-        if not dest_file.exists() or f.stat().st_mtime > dest_file.stat().st_mtime:
-            shutil.copy2(f, dest_file)
-            synced += 1
 
     # Seed Agent Instructions (local defaults -> OneDrive, never overwrite)
     instructions_src = PROJECT_ROOT / "config" / "instructions"
