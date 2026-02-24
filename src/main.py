@@ -115,6 +115,9 @@ async def main():
         if args.mode == "transcripts":
             from collectors.transcripts import run_transcript_collection
             await run_transcript_collection(client, config)
+        elif args.mode == "knowledge":
+            from sdk.runner import run_knowledge_pipeline
+            await run_knowledge_pipeline(client, config)
         else:
             from sdk.runner import run_job
             await run_job(client, config, args.mode)

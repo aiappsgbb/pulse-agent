@@ -1,4 +1,4 @@
-"""Tests for knowledge mining mode — pre-process, trigger variables, search extension."""
+"""Tests for knowledge mining mode — pre-process, trigger variables, search extension, pipeline."""
 
 import json
 import tempfile
@@ -161,33 +161,46 @@ async def test_search_across_emails_and_teams(tmp_dir):
 # --- Knowledge trigger variables ---
 
 
-def test_trigger_variables_knowledge_mode():
-    """Knowledge mode builds correct trigger variables."""
+def test_trigger_variables_archive_mode():
+    """Knowledge-archive mode builds correct trigger variables."""
     config = {"user": {"name": "Test"}}
     context = {
-        "projects_block": "## Projects\nHSBC active",
-        "commitments_summary": "1 overdue",
         "recent_artifacts": "### Transcripts\n- meeting.md",
         "lookback_window": "48 hours",
         "lookback_note": "First run",
         "teams_inbox_block": "No unread",
         "outlook_inbox_block": "No unread",
     }
-    variables = _build_trigger_variables("knowledge", config, context)
+    variables = _build_trigger_variables("knowledge-archive", config, context)
     assert variables["date"] == datetime.now().strftime("%Y-%m-%d")
     assert variables["lookback_window"] == "48 hours"
-    assert "HSBC" in variables["projects_block"]
     assert "meeting.md" in variables["recent_artifacts"]
+    assert variables["teams_inbox_block"] == "No unread"
 
 
-def test_trigger_variables_knowledge_defaults():
-    """Knowledge mode defaults when context is empty."""
+def test_trigger_variables_project_mode():
+    """Knowledge-project mode builds correct trigger variables."""
     config = {"user": {"name": "Test"}}
-    variables = _build_trigger_variables("knowledge", config, {})
-    assert variables["date"]
-    assert variables["lookback_window"] == "48 hours"
-    assert "No project" in variables["projects_block"]
-    assert "No recent" in variables["recent_artifacts"]
+    context = {
+        "project_id": "hsbc-foundry",
+        "project_name": "HSBC Foundry",
+        "project_yaml": "project: HSBC Foundry\nstatus: active",
+        "recent_artifacts": "### Transcripts\n- hsbc.md",
+        "lookback_window": "since 2026-02-24T10:00:00",
+    }
+    variables = _build_trigger_variables("knowledge-project", config, context)
+    assert variables["project_id"] == "hsbc-foundry"
+    assert variables["project_name"] == "HSBC Foundry"
+    assert "HSBC Foundry" in variables["project_yaml"]
+    assert "hsbc.md" in variables["recent_artifacts"]
+
+
+def test_trigger_variables_project_defaults():
+    """Knowledge-project mode defaults when context is empty."""
+    config = {"user": {"name": "Test"}}
+    variables = _build_trigger_variables("knowledge-project", config, {})
+    assert variables["project_id"] == "unknown"
+    assert variables["project_name"] == "Unknown Project"
 
 
 # --- _pre_process_knowledge ---
@@ -256,18 +269,29 @@ async def test_pre_process_knowledge_uses_last_run(tmp_dir):
     assert "Last knowledge run" in result["lookback_note"]
 
 
-# --- modes.yaml includes knowledge ---
+# --- modes.yaml includes knowledge sub-modes ---
 
 
-def test_modes_yaml_has_knowledge_mode():
-    """modes.yaml should define the knowledge mode."""
+def test_modes_yaml_has_knowledge_modes():
+    """modes.yaml should define the knowledge pipeline and sub-modes."""
     from sdk.session import load_modes
     modes = load_modes()
+    # Pipeline entry
     assert "knowledge" in modes
-    km = modes["knowledge"]
-    assert km["pre_process"] == "collect_knowledge_context"
-    assert "knowledge-miner" in km["agents"]
-    assert "workiq" in km["mcp_servers"]
+    assert modes["knowledge"].get("standalone") is True
+
+    # Archive sub-mode
+    assert "knowledge-archive" in modes
+    ka = modes["knowledge-archive"]
+    assert ka["pre_process"] == "collect_knowledge_context"
+    assert "knowledge-miner" in ka["agents"]
+    assert "workiq" in ka["mcp_servers"]
+
+    # Per-project sub-mode
+    assert "knowledge-project" in modes
+    kp = modes["knowledge-project"]
+    assert "knowledge-miner" in kp["agents"]
+    assert "workiq" in kp["mcp_servers"]
 
 
 # --- Knowledge-miner agent definition loads ---
@@ -286,3 +310,4 @@ def test_knowledge_miner_agent_loads():
     assert "Archive" in body  # should mention archiving
     assert "watch_queries" in body  # should mention watch queries
     assert "timeline" in body  # should mention timeline enrichment
+    assert "contradiction" in body.lower()  # should mention contradiction detection

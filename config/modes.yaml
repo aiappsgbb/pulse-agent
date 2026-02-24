@@ -59,14 +59,27 @@ chat:
   user_input_handler: telegram
 
 knowledge:
+  standalone: true
+  description: "Pipeline mode — runs archive + per-project enrichment (see runner.py)"
+
+knowledge-archive:
   model_key: digest
   working_dir: root
   mcp_servers: [workiq]
   agents: [knowledge-miner]
   system_prompt: config/prompts/system/knowledge.md
   system_prompt_mode: append
-  trigger_prompt: config/prompts/triggers/knowledge.md
+  trigger_prompt: config/prompts/triggers/knowledge-archive.md
   pre_process: collect_knowledge_context
+
+knowledge-project:
+  model_key: digest
+  working_dir: root
+  mcp_servers: [workiq]
+  agents: [knowledge-miner]
+  system_prompt: config/prompts/system/knowledge.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/knowledge-project.md
 
 transcripts:
   standalone: true

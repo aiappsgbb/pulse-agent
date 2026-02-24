@@ -234,15 +234,21 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
 
-    elif mode == "knowledge":
+    elif mode == "knowledge-archive":
         variables["date"] = date_str
         variables["lookback_window"] = context.get("lookback_window", "48 hours")
         variables["lookback_note"] = context.get("lookback_note", "")
-        variables["projects_block"] = context.get("projects_block", "No project files found.")
-        variables["commitments_summary"] = context.get("commitments_summary", "")
         variables["recent_artifacts"] = context.get("recent_artifacts", "No recent artifacts found.")
         variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
+
+    elif mode == "knowledge-project":
+        variables["date"] = date_str
+        variables["lookback_window"] = context.get("lookback_window", "48 hours")
+        variables["project_id"] = context.get("project_id", "unknown")
+        variables["project_name"] = context.get("project_name", "Unknown Project")
+        variables["project_yaml"] = context.get("project_yaml", "# No project data")
+        variables["recent_artifacts"] = context.get("recent_artifacts", "No recent artifacts found.")
 
     elif mode == "research":
         task = context.get("task", {})
@@ -601,18 +607,18 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
             log.info(f"  Compressed {compressed_count} transcripts")
 
     # Phase 0c: Knowledge mining — archive emails/Teams via WorkIQ, enrich projects
-    # Runs as a separate agent session so the knowledge-miner agent has full WorkIQ access.
+    # Runs as a pipeline: archive once, then enrich per-project (prioritized by activity).
     if client:
-        log.info("Phase 0c: Running knowledge mining (email/Teams archival + project enrichment)...")
+        log.info("Phase 0c: Running knowledge pipeline...")
         try:
             await asyncio.wait_for(
-                run_job(client, config, "knowledge"),
-                timeout=900,  # 15 minute cap for knowledge mining
+                run_knowledge_pipeline(client, config),
+                timeout=900,  # 15 minute cap for full pipeline
             )
         except asyncio.TimeoutError:
-            log.warning("  Knowledge mining timed out after 15 minutes (non-fatal)")
+            log.warning("  Knowledge pipeline timed out after 15 minutes (non-fatal)")
         except Exception as e:
-            log.warning(f"  Knowledge mining failed (non-fatal): {e}")
+            log.warning(f"  Knowledge pipeline failed (non-fatal): {e}")
 
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
@@ -869,3 +875,82 @@ async def _pre_process_knowledge(config: dict) -> dict:
         "teams_inbox_block": teams_inbox_block,
         "outlook_inbox_block": outlook_block,
     }
+
+
+async def run_knowledge_pipeline(client, config: dict):
+    """Run the full knowledge mining pipeline: archive once, then enrich per-project.
+
+    This replaces the old monolithic knowledge session. Architecture:
+    1. One archive session: fetch emails/Teams via WorkIQ, discover new projects
+    2. N enrichment sessions: one per active/blocked project
+    Each project gets a focused session with just its context — the agent uses
+    WorkIQ and search_local_files to determine what's worth updating.
+    """
+    log.info("=== Knowledge pipeline start ===")
+
+    # Phase 1: Run archive session (global — emails, Teams messages, new project discovery)
+    log.info("  Phase 1: Archiving emails/Teams messages + discovering new projects...")
+    try:
+        await asyncio.wait_for(
+            run_job(client, config, "knowledge-archive"),
+            timeout=300,  # 5 min cap for archival
+        )
+        log.info("  Phase 1 complete.")
+    except asyncio.TimeoutError:
+        log.warning("  Archive phase timed out after 5 minutes (continuing to enrichment)")
+    except Exception as e:
+        log.warning(f"  Archive phase failed: {e} (continuing to enrichment)")
+
+    # Phase 2: Per-project enrichment — reload projects (archive may have created new ones)
+    projects = _load_projects()
+    if not projects:
+        log.info("  No projects to enrich. Pipeline done.")
+        return
+
+    # Only process active/blocked projects — completed/on-hold don't need enrichment
+    active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
+    if not active:
+        log.info(f"  {len(projects)} projects loaded but none are active/blocked. Skipping enrichment.")
+        return
+
+    recent_artifacts = _list_recent_artifacts(days=2)
+
+    # Determine lookback window for per-project context
+    state = load_json_state(KNOWLEDGE_STATE_FILE, {})
+    last_run = state.get("last_run")
+    lookback_window = f"since {last_run}" if last_run else "48 hours"
+
+    log.info(f"  Phase 2: Enriching {len(active)} active projects:")
+    for p in active:
+        pid = p.get("_file", "").replace(".yaml", "")
+        log.info(f"    - {p.get('project', pid)}")
+
+    enriched = 0
+    for project in active:
+        pid = project.get("_file", "").replace(".yaml", "")
+        pname = project.get("project", pid)
+        log.info(f"  Enriching: {pname} ({pid})...")
+
+        # Build per-project context
+        project_copy = {k: v for k, v in project.items() if k != "_file"}
+        project_context = {
+            "project_id": pid,
+            "project_name": pname,
+            "project_yaml": yaml.dump(project_copy, default_flow_style=False, allow_unicode=True),
+            "recent_artifacts": recent_artifacts,
+            "lookback_window": lookback_window,
+        }
+
+        try:
+            await asyncio.wait_for(
+                run_job(client, config, "knowledge-project", context=project_context),
+                timeout=180,  # 3 min per project
+            )
+            enriched += 1
+            log.info(f"    Done: {pname}")
+        except asyncio.TimeoutError:
+            log.warning(f"    Timeout enriching {pname} (3 min cap)")
+        except Exception as e:
+            log.warning(f"    Failed enriching {pname}: {e}")
+
+    log.info(f"=== Knowledge pipeline done — enriched {enriched}/{len(active)} projects ===")
