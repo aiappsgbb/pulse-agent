@@ -58,6 +58,16 @@ chat:
     - stop_powershell
   user_input_handler: telegram
 
+knowledge:
+  model_key: digest
+  working_dir: root
+  mcp_servers: [workiq]
+  agents: [knowledge-miner]
+  system_prompt: config/prompts/system/knowledge.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/knowledge.md
+  pre_process: collect_knowledge_context
+
 transcripts:
   standalone: true
   handler: collectors.transcripts

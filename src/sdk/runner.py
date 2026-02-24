@@ -9,8 +9,12 @@ import yaml
 
 from copilot import CopilotClient
 
-from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR, DIGESTS_DIR, TRANSCRIPTS_DIR, PULSE_HOME
+from core.constants import (
+    PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR, DIGESTS_DIR,
+    TRANSCRIPTS_DIR, EMAILS_DIR, TEAMS_MESSAGES_DIR, DOCUMENTS_DIR, PULSE_HOME,
+)
 from core.logging import log
+from core.state import load_json_state, save_json_state
 from sdk.prompts import load_prompt
 from sdk.session import agent_session, load_modes
 from sdk.tools import get_tools, load_actions
@@ -58,6 +62,8 @@ async def run_job(
         context.update(await _pre_process_intel(config, client))
     elif pre_process == "scan_teams_inbox":
         context.update(await _pre_process_monitor(config))
+    elif pre_process == "collect_knowledge_context":
+        context.update(await _pre_process_knowledge(config))
 
     # Build trigger prompt
     prompt = _build_trigger_prompt(mode_key, mode_cfg, config, context)
@@ -227,6 +233,16 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["teams_inbox"] = context.get("teams_inbox", "No Teams inbox data available.")
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
+
+    elif mode == "knowledge":
+        variables["date"] = date_str
+        variables["lookback_window"] = context.get("lookback_window", "48 hours")
+        variables["lookback_note"] = context.get("lookback_note", "")
+        variables["projects_block"] = context.get("projects_block", "No project files found.")
+        variables["commitments_summary"] = context.get("commitments_summary", "")
+        variables["recent_artifacts"] = context.get("recent_artifacts", "No recent artifacts found.")
+        variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
+        variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
 
     elif mode == "research":
         task = context.get("task", {})
@@ -584,6 +600,20 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
             compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
             log.info(f"  Compressed {compressed_count} transcripts")
 
+    # Phase 0c: Knowledge mining — archive emails/Teams via WorkIQ, enrich projects
+    # Runs as a separate agent session so the knowledge-miner agent has full WorkIQ access.
+    if client:
+        log.info("Phase 0c: Running knowledge mining (email/Teams archival + project enrichment)...")
+        try:
+            await asyncio.wait_for(
+                run_job(client, config, "knowledge"),
+                timeout=900,  # 15 minute cap for knowledge mining
+            )
+        except asyncio.TimeoutError:
+            log.warning("  Knowledge mining timed out after 15 minutes (non-fatal)")
+        except Exception as e:
+            log.warning(f"  Knowledge mining failed (non-fatal): {e}")
+
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
 
@@ -731,3 +761,111 @@ async def _pre_process_intel(config: dict, client: CopilotClient | None = None) 
             )
 
     return {"articles": articles}
+
+
+def _list_recent_artifacts(days: int = 2) -> str:
+    """List recently modified files across knowledge directories.
+
+    Returns a formatted string of recent artifacts for the knowledge-miner
+    agent to process. Pure file listing — no LLM, no content extraction.
+    """
+    from datetime import timedelta
+    cutoff = datetime.now().timestamp() - (days * 86400)
+
+    dirs = [
+        ("transcripts", TRANSCRIPTS_DIR),
+        ("emails", EMAILS_DIR),
+        ("teams-messages", TEAMS_MESSAGES_DIR),
+        ("documents", DOCUMENTS_DIR),
+    ]
+
+    lines = []
+    for label, directory in dirs:
+        if not directory.exists():
+            continue
+        files = []
+        for f in sorted(directory.rglob("*.*"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not f.is_file():
+                continue
+            try:
+                if f.stat().st_mtime >= cutoff:
+                    rel = f.relative_to(directory)
+                    size = f.stat().st_size
+                    files.append(f"  - {label}/{rel} ({size:,} bytes)")
+            except Exception:
+                continue
+
+        if files:
+            lines.append(f"### {label.title()} ({len(files)} recent files)")
+            lines.extend(files[:20])  # cap at 20 per dir to keep prompt manageable
+            if len(files) > 20:
+                lines.append(f"  ... and {len(files) - 20} more")
+            lines.append("")
+
+    if not lines:
+        return "No recent artifacts found in the last 48 hours."
+
+    return "\n".join(lines)
+
+
+KNOWLEDGE_STATE_FILE = PULSE_HOME / ".knowledge-state.json"
+
+
+async def _pre_process_knowledge(config: dict) -> dict:
+    """Lightweight pre-process for knowledge mode.
+
+    Loads project state and lists recent artifacts — everything else is
+    agent-driven via WorkIQ, write_output, and update_project tools.
+    """
+    from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
+    from collectors.outlook_inbox import scan_outlook_inbox, format_outlook_for_prompt
+
+    log.info("Knowledge pre-process: Loading projects and listing recent artifacts...")
+
+    # Load projects (reuse existing function)
+    projects = _load_projects()
+    projects_block = _build_projects_block(projects)
+    commitments_summary = _extract_commitments_summary(projects)
+    log.info(f"  Loaded {len(projects)} project(s)")
+
+    # List recent artifacts for agent context
+    recent_artifacts = _list_recent_artifacts(days=2)
+    log.info(f"  Listed recent artifacts")
+
+    # Determine lookback window from last knowledge run
+    state = load_json_state(KNOWLEDGE_STATE_FILE, {})
+    last_run = state.get("last_run")
+    if last_run:
+        lookback_note = f"Last knowledge run: {last_run}. Focus on content since then."
+        lookback_window = f"since {last_run}"
+    else:
+        lookback_note = "First knowledge run — archive last 48 hours of communications."
+        lookback_window = "48 hours"
+
+    # Update last_run timestamp
+    save_json_state(KNOWLEDGE_STATE_FILE, {"last_run": datetime.now().isoformat()})
+
+    # Quick inbox snapshots for cross-reference (same as monitor)
+    scan_time = datetime.now().strftime("%H:%M:%S")
+
+    teams_items = await scan_teams_inbox(config)
+    if teams_items is None:
+        teams_inbox_block = "**Teams inbox scan UNAVAILABLE** — browser not running."
+    else:
+        teams_inbox_block = f"*(Scanned at {scan_time})*\n\n{format_inbox_for_prompt(teams_items)}"
+
+    outlook_items = await scan_outlook_inbox(config)
+    if outlook_items is None:
+        outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running."
+    else:
+        outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
+
+    return {
+        "projects_block": projects_block,
+        "commitments_summary": commitments_summary,
+        "recent_artifacts": recent_artifacts,
+        "lookback_window": lookback_window,
+        "lookback_note": lookback_note,
+        "teams_inbox_block": teams_inbox_block,
+        "outlook_inbox_block": outlook_block,
+    }

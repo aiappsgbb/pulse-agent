@@ -34,7 +34,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Pulse Agent")
     parser.add_argument(
         "--mode",
-        choices=["monitor", "digest", "research", "transcripts", "intel"],
+        choices=["monitor", "digest", "research", "transcripts", "intel", "knowledge"],
         default=None,
         help="Run a specific stage (for dev/debugging). Default: daemon mode.",
     )

@@ -23,6 +23,7 @@ PULSE_HOME = Path(os.path.expandvars(_pulse_home_env)) if _pulse_home_env else P
 TRANSCRIPTS_DIR = PULSE_HOME / "transcripts"
 DOCUMENTS_DIR = PULSE_HOME / "documents"
 EMAILS_DIR = PULSE_HOME / "emails"
+TEAMS_MESSAGES_DIR = PULSE_HOME / "teams-messages"
 DIGESTS_DIR = PULSE_HOME / "digests"
 INTEL_DIR = PULSE_HOME / "intel"
 PROJECTS_DIR = PULSE_HOME / "projects"

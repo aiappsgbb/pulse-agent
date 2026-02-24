@@ -13,7 +13,8 @@ import yaml
 
 from core.constants import (
     OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME,
-    TRANSCRIPTS_DIR, DOCUMENTS_DIR, EMAILS_DIR, DIGESTS_DIR, INTEL_DIR,
+    TRANSCRIPTS_DIR, DOCUMENTS_DIR, EMAILS_DIR, TEAMS_MESSAGES_DIR,
+    DIGESTS_DIR, INTEL_DIR,
 )
 from core.state import load_json_state, save_json_state
 
@@ -342,11 +343,11 @@ _TEXT_EXTENSIONS = {
     name="search_local_files",
     description=(
         "Search local files for a keyword or phrase. Searches transcripts, documents, "
-        "emails, digests, intel reports, and project files. "
+        "emails, teams-messages, digests, intel reports, and project files. "
         "Searches all text-based files (.md, .txt, .json, .yaml, etc.) recursively. "
         "Use this to find context before responding — e.g., search for a person's name, "
-        "project name, or topic across meeting transcripts, digests, and project memory. "
-        "Returns matching snippets with surrounding context."
+        "project name, or topic across meeting transcripts, emails, Teams messages, "
+        "digests, and project memory. Returns matching snippets with surrounding context."
     ),
 )
 def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocation) -> str:
@@ -360,6 +361,7 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
         ("transcripts", TRANSCRIPTS_DIR),
         ("documents", DOCUMENTS_DIR),
         ("emails", EMAILS_DIR),
+        ("teams-messages", TEAMS_MESSAGES_DIR),
         ("digests", DIGESTS_DIR),
         ("intel", INTEL_DIR),
         ("projects", PROJECTS_DIR),

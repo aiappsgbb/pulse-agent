@@ -1,274 +1,268 @@
-"""Transcript extraction — scroll+collect virtualized list, clean text, find frame."""
+"""Transcript extraction from SharePoint Stream pages — click Transcript tab, scroll+collect."""
 
-import asyncio
 import re
 
-from playwright.async_api import Page, Frame
+from playwright.async_api import Page
 
 from core.logging import log
 from collectors.transcripts.js_snippets import (
-    COLLECT_VISIBLE_JS,
     FIND_SCROLL_CONTAINER_JS,
-    SCROLL_TO_JS,
-    GET_TOTAL_ITEMS_JS,
+    SCROLL_AND_COLLECT_JS,
 )
 
 
-async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> tuple[str | None, bool, bool]:
-    """Click into a meeting, find transcript, extract text.
+class TransientExtractionError(Exception):
+    """Raised when extraction fails due to transient issues (auth, page load).
 
-    Returns (transcript_text, opened_recap, should_persist) tuple.
-    opened_recap=True means we navigated to a recap page and need to go back.
-    should_persist=True means mark this meeting as "attempted" — the meeting
-    definitively has no transcript (no recap, no tab). False means transient
-    failure (frame didn't load) — should be retried next run.
+    These should NOT be marked as attempted — they'll be retried next run.
     """
-    # Click the meeting
-    try:
-        btn = iframe.get_by_role("button", name=meeting_name)
-        await btn.click()
-        await page.wait_for_timeout(1500)
-    except Exception as e:
-        log.warning(f"    Could not click meeting: {e}")
-        return None, False, False  # transient — couldn't even click
+    pass
 
-    # Look for "View recap" button — ONLY recap, not "View event"
-    try:
-        recap_btn = iframe.get_by_role("button", name="View recap")
-        if await recap_btn.count() == 0:
-            return None, False, True  # no recording — persist
-        await recap_btn.click()
-        await page.wait_for_timeout(3000)
-    except Exception as e:
-        log.warning(f"    Could not click recap: {e}")
-        return None, False, False  # transient
 
-    # Find and click Transcript tab — may be hidden behind overflow menu
-    transcript_clicked = False
-
-    # Try direct tab first
+async def _ext_diag(page, label: str):
+    """Save a diagnostic screenshot (imported from collector at runtime)."""
     try:
-        tab = page.get_by_role("tab", name="Transcript")
-        if await tab.count() > 0 and await tab.is_visible():
-            await tab.click()
-            transcript_clicked = True
+        from collectors.transcripts.collector import _diag
+        await _diag(page, label)
     except Exception:
         pass
 
-    # Try overflow "show N more items" button
-    if not transcript_clicked:
-        try:
-            overflow = page.get_by_role("button", name=re.compile(r"show \d+ more"))
-            if await overflow.count() > 0:
-                await overflow.click()
-                await page.wait_for_timeout(500)
-                menuitem = page.get_by_role("menuitem", name="Transcript")
-                if await menuitem.count() > 0:
-                    await menuitem.click()
-                    transcript_clicked = True
-        except Exception:
-            pass
 
-    # Last resort: JS click on hidden tab
-    if not transcript_clicked:
-        try:
-            clicked = await page.evaluate("""
-                () => {
-                    const tabs = document.querySelectorAll('[role="tab"]');
-                    for (const tab of tabs) {
-                        if (tab.textContent.includes('Transcript')) {
-                            tab.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-            """)
-            transcript_clicked = clicked
-        except Exception:
-            pass
+async def _handle_account_picker(page):
+    """Handle 'Pick an account' dialog on login.microsoftonline.com.
 
-    if not transcript_clicked:
-        log.info("    Transcript tab not found.")
-        return None, True, True  # no transcript tab — persist (recording but no transcription)
-
-    # Find the transcript frame — retry with backoff since the transcript
-    # content loads asynchronously after clicking the tab.
-    transcript_frame = None
-    for attempt in range(5):
-        wait_ms = [2000, 2000, 3000, 4000, 5000][attempt]
-        await page.wait_for_timeout(wait_ms)
-        transcript_frame = await find_transcript_frame(page)
-        if transcript_frame:
-            break
-        if attempt < 4:
-            log.info(f"    Transcript frame not found (attempt {attempt + 1}/5), waiting...")
-
-    if not transcript_frame:
-        log.warning("    Transcript frame not found after 5 attempts — will retry next run.")
-        return None, True, False  # TRANSIENT — don't persist, retry next run
-
-    try:
-        transcript = await scroll_and_extract(transcript_frame)
-        if not transcript:
-            log.info("    No transcript entries found.")
-            return None, True, False  # transient — frame loaded but empty, retry
-        return transcript, True, True  # success — persist
-    except Exception as e:
-        log.warning(f"    Extraction failed: {e}")
-        return None, True, False  # transient — retry next run
-
-
-async def scroll_and_extract(frame: Frame) -> str | None:
-    """Extract all transcript entries by scrolling the FocusZone scroll container.
-
-    Teams uses Fluent UI's ms-List inside a ms-FocusZone wrapper.
-    The FocusZone ancestor (with overflow-y: auto) is the real scroll container.
-    The list itself has scrollHeight == clientHeight (no overflow on the list).
-
-    We scroll the FocusZone in steps, collecting rendered listitems at each position.
-    The ms-List virtualizes rendering — only items near the viewport exist in the DOM.
+    Some SharePoint domains trigger an account picker instead of silent SSO.
+    Auto-clicks the @microsoft.com account to complete authentication.
     """
-    # Step 1: Find the scroll container
-    container_info = await frame.evaluate(FIND_SCROLL_CONTAINER_JS)
-    if not container_info or not container_info.get("found"):
-        log.warning("    Could not find scroll container (FocusZone ancestor).")
+    try:
+        # Look for account picker buttons (visible on "Pick an account" page)
+        ms_account = page.locator('[data-test-id*="@microsoft.com"]')
+        if await ms_account.count() > 0:
+            log.info("    Auto-selecting @microsoft.com account in account picker")
+            await ms_account.first.click()
+            await page.wait_for_timeout(3000)
+    except Exception:
+        pass
+
+
+def parse_aria_label(label: str) -> tuple[str, int]:
+    """Parse speaker name and time (in seconds) from a group aria-label.
+
+    aria-label format: "Speaker Name X minutes Y seconds"
+    Time is always at the end, parsed right-to-left: seconds, then minutes, then hours.
+    Everything before the time block is the speaker name.
+
+    Returns (speaker_name, time_in_seconds).
+    If parsing fails, returns ("Unknown", 0).
+    """
+    label = label.strip()
+
+    # Match "N seconds" at end (required — all transcript entries have seconds)
+    m = re.search(r'(\d+)\s+seconds?\s*$', label)
+    if not m:
+        return ("Unknown", 0)
+
+    seconds = int(m.group(1))
+    remaining = label[:m.start()].strip()
+
+    # Check for "N minutes" before seconds
+    minutes = 0
+    m2 = re.search(r'(\d+)\s+minutes?\s*$', remaining)
+    if m2:
+        minutes = int(m2.group(1))
+        remaining = remaining[:m2.start()].strip()
+
+    # Check for "N hours" before minutes
+    hours = 0
+    m3 = re.search(r'(\d+)\s+hours?\s*$', remaining)
+    if m3:
+        hours = int(m3.group(1))
+        remaining = remaining[:m3.start()].strip()
+
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    speaker = remaining if remaining else "Unknown"
+
+    return (speaker, total_seconds)
+
+
+def format_timestamp(seconds: int) -> str:
+    """Convert seconds to M:SS or H:MM:SS format."""
+    if seconds >= 3600:
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return f"{h}:{m:02d}:{s:02d}"
+    else:
+        m = seconds // 60
+        s = seconds % 60
+        return f"{m}:{s:02d}"
+
+
+async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) -> str | None:
+    """Navigate to SharePoint Stream URL, click Transcript tab, extract text.
+
+    The page should be a fresh tab — caller is responsible for creating/closing it.
+
+    Returns cleaned transcript text or None if extraction failed.
+    """
+    # Skip API URLs that trigger downloads instead of rendering pages
+    if "/_api/" in sharepoint_url or "/media/transcripts/" in sharepoint_url:
+        log.info(f"    Skipping API/transcript URL (not a viewable page): {sharepoint_url[:80]}")
         return None
 
-    scroll_height = container_info["scrollHeight"]
-    client_height = container_info["clientHeight"]
-
-    # Step 2: Check expected total from aria-setsize
-    expected_total = await frame.evaluate(GET_TOTAL_ITEMS_JS)
-    log.info(f"    Scrolling transcript: scrollHeight={scroll_height}, expected={expected_total} items")
-
-    # Step 3: Scroll through the container in steps, collecting at each position
-    entries: dict[str, str] = {}
-    step = max(client_height - 50, 200)  # Overlap by 50px to avoid missing items
-    stale_count = 0
-    max_stale = 8
-    position = 0
-
-    # Collect initial visible entries
-    new_items = await frame.evaluate(COLLECT_VISIBLE_JS)
-    for text in new_items:
-        entries[text[:120]] = text
-
-    while stale_count < max_stale:
-        prev_count = len(entries)
-        position += step
-
-        # Scroll to new position
-        result = await frame.evaluate(SCROLL_TO_JS, position)
-        if not result:
+    log.info(f"    Navigating to SharePoint Stream: {sharepoint_url[:100]}...")
+    try:
+        # Set up download handler to prevent crashes on download URLs
+        page.on("download", lambda dl: dl.cancel())
+        await page.goto(sharepoint_url, wait_until="domcontentloaded", timeout=30000)
+        # Wait for redirects to complete — sharing links redirect to stream.aspx,
+        # and SSO redirects through login.microsoftonline.com
+        for wait_attempt in range(15):
+            await page.wait_for_timeout(2000)
+            actual_url = page.url
+            # Success: landed on stream.aspx or similar viewable page
+            if "stream.aspx" in actual_url:
+                break
+            # Still on login page — check for "Pick an account" dialog
+            if "login.microsoftonline.com" in actual_url:
+                await _handle_account_picker(page)
+                continue
+            # Landed on AccessDenied or other error page
+            if "AccessDenied" in actual_url:
+                log.info(f"    Access denied for this recording")
+                return None
+            # Sharing link hasn't redirected yet — keep waiting
+            if ":v:" in actual_url:
+                continue
+            # On some other SharePoint page — might be OK
             break
 
-        # Wait for ms-List to re-render new items at this scroll position
-        await asyncio.sleep(0.2)
-
-        # Collect visible items
-        new_items = await frame.evaluate(COLLECT_VISIBLE_JS)
-        for text in new_items:
-            entries[text[:120]] = text
-
-        if len(entries) == prev_count:
-            stale_count += 1
+        actual_url = page.url
+        log.info(f"    Landed on: {actual_url[:100]}")
+        if "login.microsoftonline.com" in actual_url:
+            log.warning(f"    Still on login page after 30s — auth failed")
+            await _ext_diag(page, "sharepoint-auth-failed")
+            raise TransientExtractionError("Auth failed — still on login page")
+        await _ext_diag(page, "sharepoint-loaded")
+    except TransientExtractionError:
+        raise  # re-raise transient errors for caller to handle
+    except Exception as e:
+        err_msg = str(e)
+        if "Download" in err_msg:
+            log.info(f"    URL triggers download, not a viewable page — skipping")
         else:
-            stale_count = 0
+            log.warning(f"    Failed to load SharePoint page: {e}")
+            raise TransientExtractionError(f"Page load failed: {e}")
 
-        # Safety: if we've scrolled well past the scrollHeight, stop
-        current_sh = result.get("scrollHeight", scroll_height) if isinstance(result, dict) else scroll_height
-        if position > current_sh + step * 2:
-            break
+    # Click "Transcript" tab/menuitem — retry a few times as page loads
+    transcript_clicked = False
+    for attempt in range(5):
+        try:
+            # Try menuitem first (SharePoint Stream sidebar uses menuitems)
+            menuitem = page.get_by_role("menuitem", name="Transcript")
+            if await menuitem.count() > 0:
+                await menuitem.click()
+                transcript_clicked = True
+                break
+        except Exception:
+            pass
 
-    log.info(f"    Extracted {len(entries)} entries (expected {expected_total})")
+        try:
+            # Fallback: try tab role
+            tab = page.get_by_role("tab", name="Transcript")
+            if await tab.count() > 0:
+                await tab.click()
+                transcript_clicked = True
+                break
+        except Exception:
+            pass
+
+        if attempt < 4:
+            await page.wait_for_timeout(2000)
+
+    if not transcript_clicked:
+        # Dump page URL and available roles for debugging
+        try:
+            current_url = page.url
+            log.warning(f"    Transcript tab not found on: {current_url[:120]}")
+            roles = await page.evaluate("""
+                () => {
+                    const items = [];
+                    document.querySelectorAll('[role="menuitem"], [role="tab"]').forEach(el => {
+                        items.push({role: el.getAttribute('role'), name: el.textContent.trim().substring(0, 50)});
+                    });
+                    return items.slice(0, 15);
+                }
+            """)
+            for r in roles:
+                log.info(f"    [DIAG role] {r['role']}: {r['name']}")
+        except Exception:
+            pass
+        await _ext_diag(page, "no-transcript-tab")
+        return None
+
+    await page.wait_for_timeout(3000)
+    await _ext_diag(page, "transcript-tab-clicked")
+
+    # Wait for transcript list to render (may take 10-20s to load)
+    for attempt in range(12):
+        try:
+            container_info = await page.evaluate(FIND_SCROLL_CONTAINER_JS)
+            if container_info and container_info.get("found"):
+                log.info(f"    Scroll container found: scrollHeight={container_info['scrollHeight']}, clientHeight={container_info['clientHeight']}")
+                break
+        except Exception:
+            pass
+        await page.wait_for_timeout(2000)
+    else:
+        log.warning("    Scroll container not found after waiting")
+        await _ext_diag(page, "no-scroll-container")
+        return None
+
+    # Run the scroll-and-collect JS
+    try:
+        result = await page.evaluate(SCROLL_AND_COLLECT_JS)
+    except Exception as e:
+        log.warning(f"    Scroll-and-collect failed: {e}")
+        return None
+
+    if not result or result.get("error"):
+        log.warning(f"    Scroll-and-collect error: {result}")
+        return None
+
+    entries = result.get("entries", {})
+    expected = result.get("expectedTotal")
+    collected = result.get("totalCollected", 0)
+
+    log.info(f"    Extracted {collected} entries (expected {expected})")
 
     if not entries:
         return None
 
-    return clean_transcript(list(entries.values()))
+    return clean_transcript(entries)
 
 
-def clean_transcript(raw_entries: list[str]) -> str | None:
-    """Convert raw listitem texts into clean speaker-attributed transcript.
+def clean_transcript(entries: dict[str, str]) -> str | None:
+    """Convert raw {ariaLabel: text} entries into clean speaker-attributed transcript.
 
-    Raw entries from the DOM are either:
-      - Speaker header: "Name\\nN minutes N seconds\\nM:SS" (or "Name\\nN SS\\nM:SS")
-      - Text entry: just the spoken text
+    Input: dict where keys are aria-labels like "Speaker Name 5 minutes 30 seconds"
+    and values are the spoken text.
 
     Output format:
-      [0:13] Esther Dediashvili: Good morning. Nice to meet you.
-      [0:15] Dorota Zimnoch: Oh, I'm industry advisor...
+      [5:30] Speaker Name: Good morning. Nice to meet you.
+      [5:33] Other Person: Oh, I'm industry advisor...
     """
-    timestamp_re = re.compile(r'^\d+:\d+$')
-
-    # Parse entries into (speaker, timestamp, text) tuples
-    current_speaker = None
-    current_timestamp = None
     lines = []
 
-    for raw in raw_entries:
-        parts = raw.strip().split('\n')
-
-        # Check if this is a speaker header (has a visual timestamp like "0:13" as last line)
-        if len(parts) >= 2 and timestamp_re.match(parts[-1].strip()):
-            current_speaker = parts[0].strip()
-            current_timestamp = parts[-1].strip()
-        elif len(parts) == 1 and not timestamp_re.match(parts[0].strip()):
-            # Single line — could be a standalone speaker name or actual text
-            text = parts[0].strip()
-            if not text:
-                continue
-            # If this looks like a name (no punctuation except apostrophes/hyphens,
-            # title case) AND we don't have a current speaker yet, treat as speaker intro
-            if (current_speaker is None
-                    and text.replace("'", "").replace("-", "").replace(" ", "").isalpha()
-                    and text[0].isupper()):
-                current_speaker = text
-            else:
-                # It's actual transcript text
-                speaker = current_speaker or "Unknown"
-                ts = f"[{current_timestamp}] " if current_timestamp else ""
-                lines.append(f"{ts}{speaker}: {text}")
+    for aria_label, text in entries.items():
+        speaker, time_seconds = parse_aria_label(aria_label)
+        timestamp = format_timestamp(time_seconds)
+        lines.append((time_seconds, f"[{timestamp}] {speaker}: {text}"))
 
     if not lines:
         return None
 
-    return "\n".join(lines) + "\n"
+    # Sort by timestamp
+    lines.sort(key=lambda x: x[0])
 
-
-async def find_transcript_frame(page: Page) -> Frame | None:
-    """Find the iframe containing transcript list items.
-
-    Checks all frames (main + iframes) for [role="listitem"] elements.
-    Also tries ms-List as a fallback selector in case listitem roles changed.
-    """
-    best_frame = None
-    best_count = 0
-
-    for frame in page.frames:
-        try:
-            count = await frame.locator('[role="listitem"]').count()
-            if count > best_count:
-                best_count = count
-                best_frame = frame
-        except Exception:
-            continue
-
-    if best_count > 5:
-        return best_frame
-
-    # Fallback: look for ms-List class (Fluent UI virtualized list)
-    for frame in page.frames:
-        try:
-            has_list = await frame.locator('.ms-List [role="listitem"], .ms-List-cell').count()
-            if has_list > 0:
-                log.info(f"    Found transcript via ms-List fallback ({has_list} items)")
-                return frame
-        except Exception:
-            continue
-
-    if best_count > 0:
-        log.info(f"    Best frame had only {best_count} listitems (need >5)")
-
-    return None
+    return "\n".join(line for _, line in lines) + "\n"

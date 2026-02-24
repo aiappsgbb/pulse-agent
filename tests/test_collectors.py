@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from collectors.extractors import extract_text, EXTRACTORS
-from collectors.transcripts.extraction import clean_transcript
+from collectors.transcripts.extraction import clean_transcript, parse_aria_label, format_timestamp
 
 
 # --- extractors ---
@@ -47,16 +47,63 @@ def test_extract_unknown_extension():
         assert result is None
 
 
+# --- parse_aria_label ---
+
+def test_parse_aria_label_basic():
+    """Standard speaker + time format."""
+    speaker, seconds = parse_aria_label("Alice 5 minutes 30 seconds")
+    assert speaker == "Alice"
+    assert seconds == 330
+
+def test_parse_aria_label_with_hours():
+    """Speaker + hours + minutes + seconds."""
+    speaker, seconds = parse_aria_label("Bob Smith 1 hour 10 minutes 53 seconds")
+    assert speaker == "Bob Smith"
+    assert seconds == 4253
+
+def test_parse_aria_label_seconds_only():
+    """Speaker + seconds only."""
+    speaker, seconds = parse_aria_label("Charlie 45 seconds")
+    assert speaker == "Charlie"
+    assert seconds == 45
+
+def test_parse_aria_label_no_speaker():
+    """Time-only label — speaker becomes Unknown."""
+    speaker, seconds = parse_aria_label("11 minutes 20 seconds")
+    assert speaker == "Unknown"
+    assert seconds == 680
+
+def test_parse_aria_label_bad_format():
+    """Unrecognized format returns defaults."""
+    speaker, seconds = parse_aria_label("random text")
+    assert speaker == "Unknown"
+    assert seconds == 0
+
+
+# --- format_timestamp ---
+
+def test_format_timestamp_minutes():
+    assert format_timestamp(330) == "5:30"
+
+def test_format_timestamp_hours():
+    assert format_timestamp(4253) == "1:10:53"
+
+def test_format_timestamp_zero():
+    assert format_timestamp(0) == "0:00"
+
+def test_format_timestamp_seconds_only():
+    assert format_timestamp(45) == "0:45"
+
+
 # --- clean_transcript ---
 
 def test_clean_transcript_basic():
-    entries = [
-        "Alice\n5 minutes 30 seconds\n0:13",
-        "Hello everyone.",
-        "Welcome to the meeting.",
-        "Bob\n6 minutes 10 seconds\n1:05",
-        "I have an update.",
-    ]
+    """Dict-based entries with aria-label keys and text values."""
+    entries = {
+        "Alice 0 minutes 13 seconds": "Hello everyone.",
+        "Alice 0 minutes 15 seconds": "Welcome to the meeting.",
+        "Bob 1 minute 5 seconds": "I have an update.",
+    }
     result = clean_transcript(entries)
     assert result is not None
     assert "Alice" in result
@@ -66,26 +113,30 @@ def test_clean_transcript_basic():
 
 
 def test_clean_transcript_empty():
-    assert clean_transcript([]) is None
+    assert clean_transcript({}) is None
 
 
 def test_clean_transcript_no_speakers():
-    """Entries with no speaker headers — first entry treated as speaker."""
-    entries = ["Just some text without any context."]
-    # Should assign "Unknown" as speaker since no header detected
+    """Entries with time-only aria-labels — speaker becomes Unknown."""
+    entries = {"45 seconds": "Just some text without any context."}
     result = clean_transcript(entries)
     assert result is not None
     assert "Unknown" in result
 
 
-def test_clean_transcript_only_speakers():
-    """Only speaker headers, no text entries — should return None."""
-    entries = [
-        "Alice\n5 minutes\n0:00",
-        "Bob\n6 minutes\n0:30",
-    ]
+def test_clean_transcript_sorted_by_time():
+    """Entries should be sorted by timestamp."""
+    entries = {
+        "Bob 2 minutes 0 seconds": "Second entry.",
+        "Alice 0 minutes 30 seconds": "First entry.",
+        "Charlie 5 minutes 10 seconds": "Third entry.",
+    }
     result = clean_transcript(entries)
-    assert result is None
+    assert result is not None
+    lines = result.strip().split("\n")
+    assert "Alice" in lines[0]
+    assert "Bob" in lines[1]
+    assert "Charlie" in lines[2]
 
 
 # --- transcript compressor ---

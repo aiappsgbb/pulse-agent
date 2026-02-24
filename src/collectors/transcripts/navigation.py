@@ -1,13 +1,31 @@
-"""Calendar navigation, meeting discovery, and return-to-calendar logic."""
+"""Outlook Calendar navigation, meeting discovery, and SharePoint URL extraction."""
 
 import re
+from dataclasses import dataclass
 
 from playwright.async_api import Page
 
 from core.logging import log
 
 
-# Keywords to skip when scanning calendar buttons
+async def _nav_diag(page, label: str):
+    """Save a diagnostic screenshot (imported from collector at runtime to avoid circular)."""
+    try:
+        from collectors.transcripts.collector import _diag
+        await _diag(page, label)
+    except Exception:
+        pass
+
+
+@dataclass
+class MeetingInfo:
+    """Info about a meeting with a transcript available."""
+    title: str
+    sharepoint_url: str
+    slug: str
+
+
+# Keywords to skip when scanning calendar event buttons
 SKIP_KEYWORDS = [
     "my work plan", "go to today", "go to previous",
     "go to next", "jump to a specific", "new meeting",
@@ -19,112 +37,101 @@ SKIP_KEYWORDS = [
     "date selector", "skip to main",
 ]
 
+OUTLOOK_CALENDAR_URL = "https://outlook.cloud.microsoft/calendar/view/week"
 
-async def navigate_weeks_back(page: Page, iframe, weeks: int = 1):
-    """Click 'Go to previous week' N times to navigate backward in the calendar."""
+
+async def _dismiss_overlays(page: Page):
+    """Dismiss any promotional overlays/popups that block calendar interaction.
+
+    Outlook Calendar sometimes shows "Create bookable time" or other overlays
+    in fluent-default-layer-host that intercept pointer events.
+    """
+    # Try Escape first
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(500)
+
+    # Try to remove blocking overlay elements via JS
+    try:
+        await page.evaluate("""
+            () => {
+                // Remove fluent layer-host overlays that block clicks
+                const host = document.getElementById('fluent-default-layer-host');
+                if (host && host.children.length > 0) {
+                    host.innerHTML = '';
+                    return 'cleared';
+                }
+                return 'none';
+            }
+        """)
+    except Exception:
+        pass
+
+    # Also try clicking any "dismiss" or "close" buttons in overlays
+    try:
+        dismiss = page.get_by_role("button", name=re.compile(r"[Cc]lose|[Dd]ismiss|[Nn]ot now|[Gg]ot it"))
+        if await dismiss.count() > 0:
+            await dismiss.first.click()
+            await page.wait_for_timeout(500)
+    except Exception:
+        pass
+
+
+async def navigate_to_outlook_calendar(page: Page):
+    """Navigate to Outlook Calendar week view and wait for events to load."""
+    log.info("  Navigating to Outlook Calendar...")
+    await page.goto(OUTLOOK_CALENDAR_URL, wait_until="domcontentloaded")
+    await page.wait_for_timeout(5000)
+
+    # Wait for calendar events to render — look for buttons with time patterns
+    for attempt in range(10):
+        try:
+            count = await page.evaluate("""
+                () => {
+                    const els = document.querySelectorAll('button, [role="button"]');
+                    let count = 0;
+                    const timeRe = /\\d{1,2}:\\d{2}/;
+                    for (const btn of els) {
+                        const label = btn.getAttribute('aria-label') || '';
+                        if (timeRe.test(label)) count++;
+                    }
+                    return count;
+                }
+            """)
+            if count > 0:
+                log.info(f"    Outlook Calendar loaded ({count} event buttons)")
+                # Dismiss any promotional overlays before interacting
+                await _dismiss_overlays(page)
+                await _nav_diag(page, "outlook-calendar-loaded")
+                return
+        except Exception:
+            pass
+        await page.wait_for_timeout(2000)
+
+    log.warning("    Outlook Calendar: no event buttons found after waiting")
+    await _nav_diag(page, "outlook-calendar-no-events")
+
+
+async def navigate_weeks_back(page: Page, weeks: int = 1):
+    """Click 'Go to previous week' N times in Outlook Calendar."""
     for i in range(weeks):
         try:
-            prev_btn = iframe.get_by_role("button", name=re.compile(r"Go to previous week"))
-            await prev_btn.click()
-            # Wait for calendar iframe to re-render after navigation
-            await page.wait_for_timeout(2500)
+            prev_btn = page.get_by_role("button", name=re.compile(r"Go to previous week"))
+            try:
+                await prev_btn.click(timeout=5000)
+            except Exception:
+                # Overlay may be blocking — dismiss and force click
+                await _dismiss_overlays(page)
+                await prev_btn.click(force=True, timeout=5000)
+            await page.wait_for_timeout(3000)
+            await _nav_diag(page, f"nav-back-step{i+1}of{weeks}")
         except Exception as e:
             log.warning(f"  Could not navigate to previous week (step {i + 1}/{weeks}): {e}")
             break
 
 
-async def go_to_today(page: Page, iframe):
-    """Click 'Go to today' to reset the calendar to the current week.
-
-    After clicking Calendar in the left nav, Teams may return to the LAST
-    VIEWED week instead of the current week. This resets to today first.
-    """
-    try:
-        today_btn = iframe.get_by_role("button", name=re.compile(r"Go to today"))
-        if await today_btn.count() > 0:
-            await today_btn.click()
-            await page.wait_for_timeout(2000)
-            return True
-    except Exception:
-        pass
-    return False
-
-
-async def return_to_calendar(page: Page, iframe, force: bool = False, week_offset: int = 1):
-    """Return to calendar view after processing a meeting.
-
-    Two cases:
-    1. Simple popup (no recap) — Escape closes it, still on calendar
-    2. Recap view (force=True) — navigated away, must go back via Calendar button
-
-    week_offset: how many weeks back to navigate (used for multi-week collection).
-    """
-    if not force:
-        # Simple popup — just Escape to close it
-        try:
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(500)
-        except Exception:
-            pass
-        return
-
-    # We opened a recap page — always navigate back to Calendar
-    log.info("  Returning to calendar from recap view...")
-    try:
-        cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-        await cal_btn.click()
-        await page.wait_for_timeout(3000)
-    except Exception:
-        await page.goto("https://teams.cloud.microsoft/", wait_until="domcontentloaded")
-        await page.wait_for_timeout(5000)
-        try:
-            cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-            await cal_btn.click()
-            await page.wait_for_timeout(3000)
-        except Exception:
-            raise RuntimeError("Cannot navigate back to Calendar")
-
-    # Reset to current week first, THEN navigate back.
-    # Calendar button may return to the last-viewed week, not "today".
-    # Without this reset, navigate_weeks_back overshoots.
-    iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
-    try:
-        await iframe_loc.get_by_role("button").first.wait_for(state="visible", timeout=10000)
-    except Exception:
-        await page.wait_for_timeout(3000)
-
-    await go_to_today(page, iframe_loc)
-
-    # Navigate back to the correct week offset
-    if week_offset > 0:
-        await navigate_weeks_back(page, iframe_loc, week_offset)
-        # Wait for calendar to re-render after week navigation
-        await page.wait_for_timeout(2000)
-    log.info(f"  Calendar restored ({week_offset} week(s) back).")
-
-
-async def get_iframe_text(page: Page) -> str:
-    """Get text content from the embedded-page-container iframe."""
-    try:
-        frame = page.frame("embedded-page-container")
-        if frame:
-            return await frame.evaluate("() => document.body.innerText")
-    except Exception:
-        pass
-    return ""
-
-
-async def find_meeting_buttons(page: Page, iframe) -> list[str]:
-    """Find meeting button labels in the calendar iframe via a single JS call.
-
-    Gets all button aria-labels at once instead of N individual async round-trips.
-    """
-    frame_obj = page.frame("embedded-page-container")
-    if not frame_obj:
-        log.warning("    Could not get calendar frame for button scan")
-        return []
-
-    all_names = await frame_obj.evaluate("""
+async def find_meeting_buttons(page: Page) -> list[str]:
+    """Find meeting button labels in the Outlook Calendar via a single JS call."""
+    all_names = await page.evaluate("""
         () => {
             const els = document.querySelectorAll('button, [role="button"]');
             return Array.from(els)
@@ -141,10 +148,142 @@ async def find_meeting_buttons(page: Page, iframe) -> list[str]:
         has_time = bool(re.search(r'\d{1,2}:\d{2}', name))
         if not has_time and len(name) < 40:
             continue
-        if "recap" in name_lower:
-            meetings.insert(0, name)
-        else:
-            meetings.append(name)
+        meetings.append(name)
 
-    log.info(f"    {len(all_names)} buttons in iframe, {len(meetings)} meetings matched")
+    log.info(f"    {len(all_names)} buttons on page, {len(meetings)} meetings matched")
+    if len(meetings) == 0 and len(all_names) > 0:
+        sample = all_names[:10]
+        for i, name in enumerate(sample):
+            log.info(f"    [DIAG btn {i}] {name[:100]}")
     return meetings
+
+
+async def discover_meetings_with_recaps(
+    page: Page,
+    skip_slugs: set[str],
+    slugify_fn,
+) -> list[MeetingInfo]:
+    """Click each meeting event, check for 'View recap', extract SharePoint URLs.
+
+    For each meeting with a recap:
+    1. Click the meeting event button to open popup
+    2. Look for "View recap" button
+    3. Click "View recap" — opens Teams launcher in a new tab
+    4. Extract sitePath from launcher URL params
+    5. Close launcher tab, return to calendar tab
+    6. Close popup (Escape)
+
+    Returns list of MeetingInfo with SharePoint URLs.
+
+    skip_slugs: set of slugs to skip (already collected/attempted).
+    slugify_fn: function to convert meeting title to slug.
+    """
+    meeting_buttons = await find_meeting_buttons(page)
+    log.info(f"  Scanning {len(meeting_buttons)} meetings for recaps...")
+    await _nav_diag(page, "discover-start")
+
+    results = []
+    seen_slugs = set()
+
+    for meeting_name in meeting_buttons:
+        slug = slugify_fn(meeting_name)
+        if not slug or slug in seen_slugs or slug in skip_slugs:
+            continue
+        seen_slugs.add(slug)
+
+        # Click the meeting event to open popup
+        try:
+            btn = page.get_by_role("button", name=meeting_name)
+            await btn.click()
+            await page.wait_for_timeout(1500)
+        except Exception as e:
+            log.warning(f"    Could not click meeting '{meeting_name[:50]}': {e}")
+            continue
+
+        # Look for "View recap" button in the popup
+        try:
+            recap_btn = page.get_by_role("button", name="View recap")
+            has_recap = await recap_btn.count() > 0
+        except Exception:
+            has_recap = False
+
+        if not has_recap:
+            # No recap — close popup and continue
+            try:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(500)
+            except Exception:
+                pass
+            continue
+
+        # Click "View recap" — should open Teams launcher in a new tab
+        log.info(f"    Found recap: {meeting_name[:60]}")
+        launcher_page = None
+        sharepoint_url = ""
+
+        try:
+            # Listen for new page (popup/tab) before clicking
+            async with page.context.expect_page(timeout=10000) as new_page_info:
+                await recap_btn.click()
+            launcher_page = await new_page_info.value
+            # Don't wait for full load — launcher may redirect forever.
+            # Just wait a few seconds for the URL to settle.
+            await launcher_page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    View recap did not open new tab: {e}")
+            # Maybe it navigated in the same tab — check URL
+            current_url = page.url
+            if "launcher" in current_url or "teams.microsoft.com" in current_url:
+                log.info(f"    Recap opened in same tab: {current_url[:80]}")
+                # Extract from same page, then navigate back
+                try:
+                    from collectors.transcripts.js_snippets import EXTRACT_LAUNCHER_PARAMS_JS
+                    params = await page.evaluate(EXTRACT_LAUNCHER_PARAMS_JS)
+                    sharepoint_url = params.get("sitePath", "")
+                except Exception:
+                    pass
+                # Navigate back to calendar
+                await page.goto(OUTLOOK_CALENDAR_URL, wait_until="domcontentloaded")
+                await page.wait_for_timeout(5000)
+                if sharepoint_url:
+                    results.append(MeetingInfo(
+                        title=meeting_name, sharepoint_url=sharepoint_url, slug=slug,
+                    ))
+                    log.info(f"    -> SharePoint URL: {sharepoint_url[:80]}...")
+                continue
+
+        # Extract SharePoint URL from launcher page
+        if launcher_page:
+            try:
+                from collectors.transcripts.js_snippets import EXTRACT_LAUNCHER_PARAMS_JS
+                params = await launcher_page.evaluate(EXTRACT_LAUNCHER_PARAMS_JS)
+                sharepoint_url = params.get("sitePath", "")
+            except Exception as e:
+                log.warning(f"    Could not extract launcher params: {e}")
+
+            # Close launcher tab
+            try:
+                await launcher_page.close()
+            except Exception:
+                pass
+
+        # Close popup on calendar page
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        if sharepoint_url:
+            results.append(MeetingInfo(
+                title=meeting_name,
+                sharepoint_url=sharepoint_url,
+                slug=slug,
+            ))
+            log.info(f"    → SharePoint URL: {sharepoint_url[:80]}...")
+        else:
+            log.warning(f"    No SharePoint URL found for: {meeting_name[:50]}")
+
+    log.info(f"  Discovery complete: {len(results)} meetings with recaps")
+    await _nav_diag(page, "discover-end")
+    return results

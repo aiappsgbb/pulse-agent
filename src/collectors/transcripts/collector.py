@@ -1,4 +1,4 @@
-"""Main transcript collection orchestrator — launch browser, iterate meetings, save."""
+"""Main transcript collection orchestrator — Outlook Calendar + SharePoint Stream."""
 
 import asyncio
 import re
@@ -11,15 +11,35 @@ from core.constants import PULSE_HOME, TRANSCRIPTS_DIR
 from core.logging import log
 from core.state import load_json_state, save_json_state
 from collectors.transcripts.navigation import (
-    return_to_calendar, find_meeting_buttons, navigate_weeks_back,
+    navigate_to_outlook_calendar,
+    navigate_weeks_back,
+    discover_meetings_with_recaps,
 )
-from collectors.transcripts.extraction import extract_meeting_transcript
-# Per-meeting timeout (extraction only — compression deferred to Phase 0b).
-# Budget: up to ~16s for frame-detection retries + scroll extraction.
-PER_MEETING_TIMEOUT = 90  # 90 seconds (no inline compression)
+from collectors.transcripts.extraction import (
+    extract_transcript_from_sharepoint,
+    TransientExtractionError,
+)
 
-# Max retries when returning to calendar fails (stale iframe recovery)
-MAX_CALENDAR_RETRIES = 2
+# Screenshot diagnostics — saves to PULSE_HOME/logs/screenshots/
+_SCREENSHOT_DIR = PULSE_HOME / "logs" / "screenshots"
+_screenshot_seq = 0
+
+
+async def _diag(page, label: str):
+    """Save a diagnostic screenshot with sequential numbering."""
+    global _screenshot_seq
+    _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    _screenshot_seq += 1
+    fname = f"{_screenshot_seq:03d}_{label}.png"
+    try:
+        await page.screenshot(path=str(_SCREENSHOT_DIR / fname), full_page=False)
+        log.info(f"  [DIAG] {fname}")
+    except Exception as e:
+        log.warning(f"  [DIAG] screenshot failed ({label}): {e}")
+
+
+# Per-meeting timeout (extraction only — compression deferred to Phase 0b).
+PER_MEETING_TIMEOUT = 120  # 120 seconds for SharePoint page load + scroll extraction
 
 # Persistent state — tracks slugs we've already attempted (success or failure).
 # Avoids re-clicking meetings that have no transcript every single run.
@@ -53,178 +73,26 @@ def _slugify(text: str) -> str:
     return text[:60]
 
 
-async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir):
-    """Extract a single meeting transcript (raw only — compression deferred to Phase 0b).
-
-    Returns result dict with collected, opened_recap, should_persist.
-    """
-    transcript, opened_recap, should_persist = await extract_meeting_transcript(page, iframe, meeting_name)
-    if not transcript:
-        return {"collected": False, "opened_recap": opened_recap, "should_persist": should_persist}
-
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{date_str}_{slug}.txt"
-    filepath = output_dir / filename
-    filepath.write_text(transcript, encoding="utf-8")
-    log.info(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
-
-    return {"collected": True, "opened_recap": opened_recap, "should_persist": True}
-
-
-async def _navigate_to_calendar(page) -> object:
-    """Navigate to Teams Calendar and return the calendar iframe locator.
-
-    teams.microsoft.com/v2/calendar redirects to teams.cloud.microsoft/ (Chat
-    view, NOT Calendar) since early 2026.  Primary strategy: load Teams root,
-    then click the Calendar button in the left app-bar.  Fall back to the new
-    /calendar URL on teams.cloud.microsoft for later retries.
-
-    Verifies success by checking for buttons inside the calendar iframe —
-    NOT page.title() which crashes during SPA redirects.
-
-    Raises RuntimeError if calendar cannot be opened after all retries.
-    """
-    iframe = None
-
-    for attempt in range(4):
-        try:
-            if attempt == 0:
-                # Primary: load Teams root, then click Calendar button
-                log.info("  Opening Teams via root + Calendar button...")
-                await page.goto("https://teams.cloud.microsoft/",
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(8000)
-                try:
-                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-                    if await cal_btn.count() > 0:
-                        await cal_btn.click()
-                        await page.wait_for_timeout(5000)
-                except Exception:
-                    pass
-            elif attempt == 1:
-                # Try direct calendar URL on the new domain
-                log.info(f"  Calendar attempt {attempt + 1}: direct URL on new domain...")
-                await page.goto("https://teams.cloud.microsoft/calendar",
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(8000)
-            elif attempt == 2:
-                # Reload root with longer settle, then button click
-                log.info(f"  Calendar attempt {attempt + 1}: root + button with long wait...")
-                await page.goto("https://teams.cloud.microsoft/",
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(12000)
-                try:
-                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-                    if await cal_btn.count() > 0:
-                        await cal_btn.click()
-                        await page.wait_for_timeout(5000)
-                except Exception:
-                    pass
-            else:
-                # Last resort: old URL (may still work via redirect chain)
-                log.info(f"  Calendar attempt {attempt + 1}: legacy URL fallback...")
-                await page.goto("https://teams.microsoft.com/v2/calendar",
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(10000)
-                try:
-                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-                    if await cal_btn.count() > 0:
-                        await cal_btn.click()
-                        await page.wait_for_timeout(5000)
-                except Exception:
-                    pass
-
-            # Verify: look for the calendar iframe with buttons inside
-            iframe = page.frame_locator('iframe[name="embedded-page-container"]')
-            try:
-                await iframe.get_by_role("button").first.wait_for(
-                    state="visible", timeout=15000
-                )
-                # Success — iframe has rendered buttons
-                log.info("  Calendar loaded (iframe has buttons).")
-                return iframe
-            except Exception:
-                log.warning(f"  Calendar iframe not ready (attempt {attempt + 1}/4)")
-
-        except Exception as e:
-            log.warning(f"  Calendar navigation error (attempt {attempt + 1}/4): {e}")
-            await page.wait_for_timeout(3000)
-
-    raise RuntimeError("Cannot open Calendar view after 4 attempts")
-
-
-async def _return_to_calendar_with_retry(page, iframe, week_offset: int):
-    """Return to calendar with retry on stale iframe.
-
-    When the calendar iframe goes stale after recap navigation, a simple
-    return_to_calendar fails. This function retries with a full page reload
-    to recover.
-
-    Returns the (possibly refreshed) iframe locator on success, or None if
-    all retries failed.  Callers MUST use the returned iframe for subsequent
-    operations — the old iframe locator may be stale after page reloads.
-    """
-    for attempt in range(MAX_CALENDAR_RETRIES + 1):
-        try:
-            if attempt > 0:
-                # Full reload — the iframe is stale, need to start fresh
-                log.info(f"  Stale iframe recovery (attempt {attempt + 1})...")
-                await page.goto("https://teams.cloud.microsoft/",
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(5000)
-                # Click Calendar button to get to Calendar view
-                try:
-                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
-                    if await cal_btn.count() > 0:
-                        await cal_btn.click()
-                        await page.wait_for_timeout(3000)
-                except Exception:
-                    pass
-
-                # Re-acquire the iframe after reload
-                iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
-                try:
-                    await iframe_loc.get_by_role("button").first.wait_for(
-                        state="visible", timeout=15000
-                    )
-                except Exception:
-                    await page.wait_for_timeout(5000)
-
-                # Navigate back to correct week
-                from collectors.transcripts.navigation import navigate_weeks_back, go_to_today
-                await go_to_today(page, iframe_loc)
-                if week_offset > 0:
-                    await navigate_weeks_back(page, iframe_loc, week_offset)
-                    await page.wait_for_timeout(2000)
-            else:
-                await return_to_calendar(page, iframe, force=True,
-                                         week_offset=week_offset)
-                # After return_to_calendar, re-acquire iframe in case it changed
-                iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
-
-            # Verify calendar is actually usable
-            buttons = await find_meeting_buttons(page, iframe_loc)
-            if len(buttons) > 0:
-                return iframe_loc
-            log.warning(f"  Calendar returned 0 buttons (attempt {attempt + 1})")
-
-        except Exception as e:
-            log.warning(f"  Return to calendar failed (attempt {attempt + 1}): {e}")
-
-    return None
-
-
 async def run_transcript_collection(client, config: dict):
-    """Collect meeting transcripts from Teams web using Playwright directly.
+    """Collect meeting transcripts via Outlook Calendar + SharePoint Stream.
+
+    Flow:
+    1. Launch headful browser (SharePoint SSO requires visible browser)
+    2. Navigate to Outlook Calendar week view
+    3. For each week in lookback range:
+       a. Scan all meeting events for "View recap" buttons
+       b. Extract SharePoint Stream URLs from Teams launcher pages
+    4. For each meeting with a transcript:
+       a. Open new tab with SharePoint Stream URL
+       b. Click Transcript tab, scroll-extract all entries
+       c. Save raw .txt file
+       d. Close tab
 
     No LLM involved — deterministic navigation script.
-    Uses multi-week lookback (config: transcripts.lookback_weeks, default 2).
-    Saves raw .txt files only — compression is deferred to Phase 0b.
-
-    Uses the shared BrowserManager when available (daemon mode).
-    Falls back to launching its own browser (CLI --once mode).
+    Launches its own headful browser because SharePoint SSO doesn't work in
+    headless mode (login.microsoftonline.com OAuth redirect requires visible browser).
     """
-    log.info("Transcript collection start")
+    log.info("Transcript collection start (Outlook+SharePoint)")
 
     tc = config.get("transcripts", {})
     max_meetings = tc.get("max_per_run", 50)
@@ -246,153 +114,195 @@ async def run_transcript_collection(client, config: dict):
     attempted_history = _load_attempted_slugs()
     log.info(f"  Transcript state: {len(attempted_history)} previously attempted slugs (TTL={ATTEMPT_TTL_DAYS}d)")
 
-    # Use shared browser if available, otherwise launch our own
-    from core.browser import get_browser_manager
-    browser_mgr = get_browser_manager()
+    # Try to connect to an existing authenticated browser via CDP.
+    # The Playwright MCP server's browser (mcp-msedge-profile) has SharePoint cookies.
+    # SharePoint SSO doesn't work with fresh profiles — needs cookies from prior auth.
+    _pw_cm = async_playwright()
+    _pw = await _pw_cm.__aenter__()
+    context = None
+    browser = None
+    own_context = False
 
-    if browser_mgr and browser_mgr.context:
-        log.info("  Using shared browser instance")
-        page = await browser_mgr.new_page()
-        own_context = None
-    else:
-        log.info("  Launching standalone browser (no shared instance)")
-        _pw = await async_playwright().__aenter__()
-        own_context = await _pw.chromium.launch_persistent_context(
-            user_data_dir,
-            channel="msedge",
-            headless=True,
-            viewport={"width": 1280, "height": 900},
-        )
-        if own_context.pages:
-            page = own_context.pages[0]
-            for old_page in own_context.pages[1:]:
-                await old_page.close()
-        else:
-            page = await own_context.new_page()
-
-    try:
-        # Navigate to Calendar and wait for the iframe to be usable.
-        # Verification is done by checking for the calendar iframe with buttons
-        # inside it — NOT page.title() which crashes during SPA redirects.
+    # Strategy 1: Connect to existing MCP browser via CDP
+    cdp_port = await _find_cdp_port()
+    if cdp_port:
         try:
-            iframe = await _navigate_to_calendar(page)
-        except RuntimeError as e:
-            log.warning(f"  {e}")
+            log.info(f"  Connecting to authenticated browser via CDP :{cdp_port}")
+            browser = await _pw.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
+            contexts = browser.contexts
+            context = contexts[0] if contexts else None
+            if context:
+                log.info(f"  Connected to browser with {len(context.pages)} existing pages")
+        except Exception as e:
+            log.warning(f"  CDP connect failed: {e}")
+            browser = None
+
+    # Strategy 2: Try the shared browser manager
+    if not context:
+        from core.browser import get_browser_manager
+        browser_mgr = get_browser_manager()
+        if browser_mgr and browser_mgr.context:
+            log.info("  Using shared browser instance")
+            context = browser_mgr.context
+
+    # Strategy 3: Launch our own browser (last resort)
+    if not context:
+        log.info(f"  Launching own browser (profile: {user_data_dir})")
+        try:
+            own_ctx = await _pw.chromium.launch_persistent_context(
+                user_data_dir,
+                channel="msedge",
+                headless=False,
+                viewport={"width": 1280, "height": 900},
+            )
+            context = own_ctx
+            own_context = True
+        except Exception as e:
+            log.warning(f"  Browser launch failed: {e}")
+            await _pw_cm.__aexit__(None, None, None)
             return
 
-        # Multi-week lookback — process each week from most recent to oldest
-        current_week_offset = 0
-        attempted_slugs: set[str] = set()  # Track slugs we've already tried
+    page = await context.new_page()
+
+    try:
+        # Navigate to Outlook Calendar
+        await navigate_to_outlook_calendar(page)
+
+        # Collect existing file slugs to skip already-collected transcripts
+        existing_files = set()
+        for f in output_dir.glob("*.txt"):
+            parts = f.stem.split("_", 1)
+            if len(parts) == 2:
+                existing_files.add(parts[1])
+        for f in output_dir.glob("*.md"):
+            parts = f.stem.split("_", 1)
+            if len(parts) == 2:
+                existing_files.add(parts[1])
+
+        skip_slugs = set(attempted_history.keys()) | existing_files
+
+        # Phase 1: Discover all meetings with recaps across all weeks
+        all_meetings = []
 
         for week_num in range(1, lookback_weeks + 1):
-            if collected >= max_meetings:
+            if collected + len(all_meetings) >= max_meetings:
                 break
 
             log.info(f"  --- Week {week_num} of {lookback_weeks} ---")
+            await navigate_weeks_back(page, 1)
+            await _diag(page, f"week{week_num}-navigated")
 
-            # Navigate one week further back
-            await navigate_weeks_back(page, iframe, 1)
-            current_week_offset += 1
+            meetings = await discover_meetings_with_recaps(
+                page, skip_slugs, _slugify
+            )
 
-            # Step 4: Find meetings — wait for calendar to fully render
-            await page.wait_for_timeout(2000)
-            meeting_buttons = await find_meeting_buttons(page, iframe)
+            for m in meetings:
+                if m.slug not in skip_slugs:
+                    all_meetings.append(m)
+                    skip_slugs.add(m.slug)  # prevent duplicates across weeks
 
-            # If few meetings found, calendar may still be loading — retry
-            if len(meeting_buttons) < 3:
-                await page.wait_for_timeout(4000)
-                meeting_buttons = await find_meeting_buttons(page, iframe)
-            log.info(f"  Found {len(meeting_buttons)} meeting buttons in calendar.")
+        log.info(f"  Total meetings to extract: {len(all_meetings)}")
 
-            # Step 5: Process meetings — re-scan after each recap return
-            consecutive_click_failures = 0
-            while meeting_buttons and collected < max_meetings:
-                meeting_name = meeting_buttons.pop(0)
+        # Phase 2: Extract transcripts — one new tab per meeting
+        for i, meeting in enumerate(all_meetings):
+            if collected >= max_meetings:
+                break
 
-                slug = _slugify(meeting_name)
-                if not slug or slug in attempted_slugs:
-                    continue
-                attempted_slugs.add(slug)
+            log.info(f"  [{i+1}/{len(all_meetings)}] Extracting: {meeting.title[:60]}...")
 
-                # Check persistent history — already tried in a previous run?
-                if slug in attempted_history:
-                    skipped += 1
-                    continue
+            new_page = None
+            try:
+                new_page = await context.new_page()
+                transcript = await asyncio.wait_for(
+                    extract_transcript_from_sharepoint(new_page, meeting.sharepoint_url),
+                    timeout=PER_MEETING_TIMEOUT,
+                )
 
-                # Check if already collected on disk
-                existing = list(output_dir.glob(f"*_{slug}*"))
-                if existing:
-                    skipped += 1
-                    continue
-
-                log.info(f"  Processing: {meeting_name[:60]}...")
-                opened_recap = False
-                should_persist = True  # default: persist unless told otherwise
-                try:
-                    result = await asyncio.wait_for(
-                        _process_single_meeting(page, iframe, meeting_name, slug, output_dir),
-                        timeout=PER_MEETING_TIMEOUT,
-                    )
-                    opened_recap = result.get("opened_recap", False)
-                    should_persist = result.get("should_persist", True)
-                    if result.get("collected"):
-                        collected += 1
-                    else:
-                        skipped += 1
-                    consecutive_click_failures = 0
-                except asyncio.TimeoutError:
-                    log.warning(f"  TIMEOUT: {meeting_name[:40]} exceeded {PER_MEETING_TIMEOUT}s")
-                    errors.append(f"{meeting_name[:40]}: timeout after {PER_MEETING_TIMEOUT}s")
-                    opened_recap = True  # assume we navigated away
-                    should_persist = False  # timeout is transient — retry next run
-                except Exception as e:
-                    err_msg = str(e)
-                    if "Timeout" in err_msg:
-                        consecutive_click_failures += 1
-                        if consecutive_click_failures >= 3:
-                            log.warning("  3 consecutive click failures — calendar view likely stale, re-navigating...")
-                            # Force re-navigation and re-scan
-                            opened_recap = True
-                    else:
-                        consecutive_click_failures = 0
-                    log.warning(f"  ERROR: {meeting_name[:40]}: {e}")
-                    errors.append(f"{meeting_name[:40]}: {e}")
-                    should_persist = False  # errors are transient — retry next run
-
-                # Only persist to state if the meeting definitively has no transcript.
-                # Transient failures (frame didn't load, timeout, error) are NOT persisted
-                # so the meeting will be retried on the next run.
-                if should_persist:
-                    _mark_attempted(attempted_history, slug)
-
-                # Navigate back to calendar for next meeting
-                if opened_recap:
-                    fresh_iframe = await _return_to_calendar_with_retry(
-                        page, iframe, current_week_offset
-                    )
-                    if fresh_iframe:
-                        iframe = fresh_iframe  # use refreshed iframe for all subsequent clicks
-                        meeting_buttons = await find_meeting_buttons(page, iframe)
-                        log.info(f"  Re-scanned: {len(meeting_buttons)} meetings after return.")
-                        consecutive_click_failures = 0
-                    else:
-                        log.warning("  FATAL: Cannot return to calendar, stopping week.")
-                        meeting_buttons = []
+                if transcript:
+                    date_str = datetime.now().strftime("%Y-%m-%d")
+                    filename = f"{date_str}_{meeting.slug}.txt"
+                    filepath = output_dir / filename
+                    filepath.write_text(transcript, encoding="utf-8")
+                    log.info(f"    SAVED: {filename} ({len(transcript)} chars)")
+                    collected += 1
+                    _mark_attempted(attempted_history, meeting.slug)
                 else:
-                    # Simple popup — just escape
+                    log.info(f"    No transcript content extracted")
+                    skipped += 1
+                    # Mark as attempted — if the page loaded but has no Transcript tab,
+                    # it's a recording without transcription (won't change later).
+                    # Auth failures and timeouts are NOT marked (retried next run).
+                    _mark_attempted(attempted_history, meeting.slug)
+
+            except TransientExtractionError as e:
+                log.warning(f"    TRANSIENT: {meeting.title[:40]}: {e}")
+                errors.append(f"{meeting.title[:40]}: {e} (will retry)")
+                # Don't mark as attempted — transient failures should be retried
+            except asyncio.TimeoutError:
+                log.warning(f"    TIMEOUT: {meeting.title[:40]} exceeded {PER_MEETING_TIMEOUT}s")
+                errors.append(f"{meeting.title[:40]}: timeout")
+            except Exception as e:
+                log.warning(f"    ERROR: {meeting.title[:40]}: {e}")
+                errors.append(f"{meeting.title[:40]}: {e}")
+            finally:
+                if new_page:
                     try:
-                        await return_to_calendar(page, iframe, force=False)
+                        await new_page.close()
                     except Exception:
                         pass
 
     finally:
-        # Close the page we created, but only close the context if we own it
-        if own_context:
-            await own_context.close()
-        else:
+        # Close the page we created
+        try:
             await page.close()
+        except Exception:
+            pass
+
+        # Only close browser/context if we own it
+        if own_context and context:
+            try:
+                await context.close()
+            except Exception:
+                pass
+        # NOTE: Don't call browser.close() for CDP connections — it kills the
+        # browser process, which belongs to the Playwright MCP server.
+        # Just disconnect by stopping the Playwright instance.
+        try:
+            await _pw_cm.__aexit__(None, None, None)
+        except Exception:
+            pass
 
     # Summary
     log.info(f"Transcript collection end — collected: {collected}, skipped: {skipped}, errors: {len(errors)}")
     for err in errors:
         log.warning(f"  Transcript error: {err}")
+
+
+async def _find_cdp_port() -> int | None:
+    """Find the CDP port of an existing authenticated Edge browser.
+
+    Looks for Edge processes with --remote-debugging-port that use the
+    mcp-msedge-profile (which has SharePoint auth cookies).
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where",
+             "name='msedge.exe' and commandline like '%remote-debugging-port%' and commandline like '%mcp-msedge%'",
+             "get", "commandline"],
+            capture_output=True, text=True, timeout=5,
+        )
+        import re as _re
+        match = _re.search(r'remote-debugging-port=(\d+)', result.stdout)
+        if match:
+            port = int(match.group(1))
+            # Verify it's alive
+            import socket
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=2):
+                    return port
+            except (ConnectionRefusedError, OSError, TimeoutError):
+                pass
+    except Exception:
+        pass
+    return None
