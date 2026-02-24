@@ -14,11 +14,14 @@ from collectors.transcripts.js_snippets import (
 )
 
 
-async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> tuple[str | None, bool]:
+async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> tuple[str | None, bool, bool]:
     """Click into a meeting, find transcript, extract text.
 
-    Returns (transcript_text, opened_recap) tuple.
+    Returns (transcript_text, opened_recap, should_persist) tuple.
     opened_recap=True means we navigated to a recap page and need to go back.
+    should_persist=True means mark this meeting as "attempted" — the meeting
+    definitively has no transcript (no recap, no tab). False means transient
+    failure (frame didn't load) — should be retried next run.
     """
     # Click the meeting
     try:
@@ -27,18 +30,18 @@ async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> t
         await page.wait_for_timeout(1500)
     except Exception as e:
         log.warning(f"    Could not click meeting: {e}")
-        return None, False
+        return None, False, False  # transient — couldn't even click
 
     # Look for "View recap" button — ONLY recap, not "View event"
     try:
         recap_btn = iframe.get_by_role("button", name="View recap")
         if await recap_btn.count() == 0:
-            return None, False
+            return None, False, True  # no recording — persist
         await recap_btn.click()
         await page.wait_for_timeout(3000)
     except Exception as e:
         log.warning(f"    Could not click recap: {e}")
-        return None, False
+        return None, False, False  # transient
 
     # Find and click Transcript tab — may be hidden behind overflow menu
     transcript_clicked = False
@@ -87,25 +90,33 @@ async def extract_meeting_transcript(page: Page, iframe, meeting_name: str) -> t
 
     if not transcript_clicked:
         log.info("    Transcript tab not found.")
-        return None, True  # opened recap but no transcript tab
+        return None, True, True  # no transcript tab — persist (recording but no transcription)
 
-    await page.wait_for_timeout(2000)
+    # Find the transcript frame — retry with backoff since the transcript
+    # content loads asynchronously after clicking the tab.
+    transcript_frame = None
+    for attempt in range(5):
+        wait_ms = [2000, 2000, 3000, 4000, 5000][attempt]
+        await page.wait_for_timeout(wait_ms)
+        transcript_frame = await find_transcript_frame(page)
+        if transcript_frame:
+            break
+        if attempt < 4:
+            log.info(f"    Transcript frame not found (attempt {attempt + 1}/5), waiting...")
 
-    # Find the transcript frame and extract text by scrolling the FocusZone
-    transcript_frame = await find_transcript_frame(page)
     if not transcript_frame:
-        log.info("    Transcript frame not found.")
-        return None, True
+        log.warning("    Transcript frame not found after 5 attempts — will retry next run.")
+        return None, True, False  # TRANSIENT — don't persist, retry next run
 
     try:
         transcript = await scroll_and_extract(transcript_frame)
         if not transcript:
             log.info("    No transcript entries found.")
-            return None, True
-        return transcript, True
+            return None, True, False  # transient — frame loaded but empty, retry
+        return transcript, True, True  # success — persist
     except Exception as e:
         log.warning(f"    Extraction failed: {e}")
-        return None, True
+        return None, True, False  # transient — retry next run
 
 
 async def scroll_and_extract(frame: Frame) -> str | None:
@@ -227,12 +238,37 @@ def clean_transcript(raw_entries: list[str]) -> str | None:
 
 
 async def find_transcript_frame(page: Page) -> Frame | None:
-    """Find the iframe containing transcript list items."""
+    """Find the iframe containing transcript list items.
+
+    Checks all frames (main + iframes) for [role="listitem"] elements.
+    Also tries ms-List as a fallback selector in case listitem roles changed.
+    """
+    best_frame = None
+    best_count = 0
+
     for frame in page.frames:
         try:
             count = await frame.locator('[role="listitem"]').count()
-            if count > 5:
+            if count > best_count:
+                best_count = count
+                best_frame = frame
+        except Exception:
+            continue
+
+    if best_count > 5:
+        return best_frame
+
+    # Fallback: look for ms-List class (Fluent UI virtualized list)
+    for frame in page.frames:
+        try:
+            has_list = await frame.locator('.ms-List [role="listitem"], .ms-List-cell').count()
+            if has_list > 0:
+                log.info(f"    Found transcript via ms-List fallback ({has_list} items)")
                 return frame
         except Exception:
             continue
+
+    if best_count > 0:
+        log.info(f"    Best frame had only {best_count} listitems (need >5)")
+
     return None

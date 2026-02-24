@@ -17,8 +17,9 @@ from collectors.transcripts.extraction import extract_meeting_transcript
 from collectors.transcripts.compressor import compress_transcript
 
 # Per-meeting timeout (extraction + compression). Prevents one stuck meeting
-# from eating the entire transcript collection budget.
-PER_MEETING_TIMEOUT = 180  # 3 minutes
+# from eating the entire transcript collection budget.  Includes up to ~16s
+# for frame-detection retries + scroll extraction + SDK compression.
+PER_MEETING_TIMEOUT = 240  # 4 minutes
 
 # Persistent state — tracks slugs we've already attempted (success or failure).
 # Avoids re-clicking meetings that have no transcript every single run.
@@ -54,9 +55,9 @@ def _slugify(text: str) -> str:
 
 async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config):
     """Extract and compress a single meeting transcript. Returns result dict."""
-    transcript, opened_recap = await extract_meeting_transcript(page, iframe, meeting_name)
+    transcript, opened_recap, should_persist = await extract_meeting_transcript(page, iframe, meeting_name)
     if not transcript:
-        return {"collected": False, "opened_recap": opened_recap}
+        return {"collected": False, "opened_recap": opened_recap, "should_persist": should_persist}
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     compressed = None
@@ -82,7 +83,7 @@ async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir, 
         filepath.write_text(transcript, encoding="utf-8")
         log.info(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
 
-    return {"collected": True, "opened_recap": opened_recap}
+    return {"collected": True, "opened_recap": opened_recap, "should_persist": True}
 
 
 async def run_transcript_collection(client, config: dict):
@@ -251,12 +252,14 @@ async def run_transcript_collection(client, config: dict):
 
                 log.info(f"  Processing: {meeting_name[:60]}...")
                 opened_recap = False
+                should_persist = True  # default: persist unless told otherwise
                 try:
                     result = await asyncio.wait_for(
                         _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config),
                         timeout=PER_MEETING_TIMEOUT,
                     )
                     opened_recap = result.get("opened_recap", False)
+                    should_persist = result.get("should_persist", True)
                     if result.get("collected"):
                         collected += 1
                     else:
@@ -266,6 +269,7 @@ async def run_transcript_collection(client, config: dict):
                     log.warning(f"  TIMEOUT: {meeting_name[:40]} exceeded {PER_MEETING_TIMEOUT}s")
                     errors.append(f"{meeting_name[:40]}: timeout after {PER_MEETING_TIMEOUT}s")
                     opened_recap = True  # assume we navigated away
+                    should_persist = False  # timeout is transient — retry next run
                 except Exception as e:
                     err_msg = str(e)
                     if "Timeout" in err_msg:
@@ -278,9 +282,13 @@ async def run_transcript_collection(client, config: dict):
                         consecutive_click_failures = 0
                     log.warning(f"  ERROR: {meeting_name[:40]}: {e}")
                     errors.append(f"{meeting_name[:40]}: {e}")
+                    should_persist = False  # errors are transient — retry next run
 
-                # Persist this attempt so we skip it in future runs
-                _mark_attempted(attempted_history, slug)
+                # Only persist to state if the meeting definitively has no transcript.
+                # Transient failures (frame didn't load, timeout, error) are NOT persisted
+                # so the meeting will be retried on the next run.
+                if should_persist:
+                    _mark_attempted(attempted_history, slug)
 
                 # Navigate back to calendar for next meeting
                 if opened_recap:
