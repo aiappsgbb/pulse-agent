@@ -153,14 +153,16 @@ async def _navigate_to_calendar(page) -> object:
     raise RuntimeError("Cannot open Calendar view after 4 attempts")
 
 
-async def _return_to_calendar_with_retry(page, iframe, week_offset: int) -> bool:
+async def _return_to_calendar_with_retry(page, iframe, week_offset: int):
     """Return to calendar with retry on stale iframe.
 
     When the calendar iframe goes stale after recap navigation, a simple
     return_to_calendar fails. This function retries with a full page reload
     to recover.
 
-    Returns True if calendar was restored, False if all retries failed.
+    Returns the (possibly refreshed) iframe locator on success, or None if
+    all retries failed.  Callers MUST use the returned iframe for subsequent
+    operations — the old iframe locator may be stale after page reloads.
     """
     for attempt in range(MAX_CALENDAR_RETRIES + 1):
         try:
@@ -197,17 +199,19 @@ async def _return_to_calendar_with_retry(page, iframe, week_offset: int) -> bool
             else:
                 await return_to_calendar(page, iframe, force=True,
                                          week_offset=week_offset)
+                # After return_to_calendar, re-acquire iframe in case it changed
+                iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
 
             # Verify calendar is actually usable
-            buttons = await find_meeting_buttons(page, iframe)
+            buttons = await find_meeting_buttons(page, iframe_loc)
             if len(buttons) > 0:
-                return True
+                return iframe_loc
             log.warning(f"  Calendar returned 0 buttons (attempt {attempt + 1})")
 
         except Exception as e:
             log.warning(f"  Return to calendar failed (attempt {attempt + 1}): {e}")
 
-    return False
+    return None
 
 
 async def run_transcript_collection(client, config: dict):
@@ -363,10 +367,11 @@ async def run_transcript_collection(client, config: dict):
 
                 # Navigate back to calendar for next meeting
                 if opened_recap:
-                    calendar_ok = await _return_to_calendar_with_retry(
+                    fresh_iframe = await _return_to_calendar_with_retry(
                         page, iframe, current_week_offset
                     )
-                    if calendar_ok:
+                    if fresh_iframe:
+                        iframe = fresh_iframe  # use refreshed iframe for all subsequent clicks
                         meeting_buttons = await find_meeting_buttons(page, iframe)
                         log.info(f"  Re-scanned: {len(meeting_buttons)} meetings after return.")
                         consecutive_click_failures = 0

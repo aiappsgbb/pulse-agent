@@ -254,6 +254,11 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
 
         except Exception as e:
             log.exception(f"  Job failed: {job_name} — {e}")
+            # Reset schedule so it retries instead of waiting until next day
+            schedule_id = job.get("_schedule_id")
+            if schedule_id:
+                from core.scheduler import reset_run
+                reset_run(schedule_id)
             if chat_id:
                 from tg.bot import stop_typing
                 stop_typing(chat_id)

@@ -274,6 +274,21 @@ def mark_run(schedule_id: str):
     _save_schedules(schedules)
 
 
+def reset_run(schedule_id: str):
+    """Reset last_run so the schedule fires again on the next tick.
+
+    Called by the worker when a scheduled job fails — ensures the job
+    will be retried instead of waiting until the next scheduled time.
+    """
+    schedules = _load_schedules()
+    for s in schedules:
+        if s["id"] == schedule_id:
+            s["last_run"] = None
+            log.info(f"Scheduler: reset '{schedule_id}' for retry")
+            break
+    _save_schedules(schedules)
+
+
 async def scheduler_loop(
     config: dict,
     job_queue: asyncio.Queue,
@@ -304,9 +319,12 @@ async def scheduler_loop(
                     job = {
                         "type": schedule["type"],
                         "_source": f"schedule:{schedule['id']}",
+                        "_schedule_id": schedule["id"],
                         "_chat_id": chat_id,
                     }
                     job_queue.put_nowait(job)
+                    # Mark as run immediately to prevent re-fire while job runs.
+                    # On failure, the worker resets last_run to None for retry.
                     mark_run(schedule["id"])
                     log.info(f"Scheduler: fired '{schedule['id']}' ({schedule['pattern']})")
 
