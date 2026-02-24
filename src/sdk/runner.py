@@ -12,15 +12,8 @@ from copilot import CopilotClient
 from core.constants import PROJECT_ROOT, OUTPUT_DIR, CONFIG_DIR, PROJECTS_DIR, DIGESTS_DIR, TRANSCRIPTS_DIR, PULSE_HOME
 from core.logging import log
 from sdk.prompts import load_prompt
-from sdk.session import agent_session
+from sdk.session import agent_session, load_modes
 from sdk.tools import get_tools, load_actions
-
-
-def _load_modes() -> dict:
-    """Load mode definitions from config/modes.yaml."""
-    modes_path = CONFIG_DIR / "modes.yaml"
-    with open(modes_path, "r") as f:
-        return yaml.safe_load(f)
 
 
 async def run_job(
@@ -47,7 +40,7 @@ async def run_job(
     """
     context = context or {}
 
-    modes = _load_modes()
+    modes = load_modes()
     mode_key = "monitor" if mode == "triage" else mode
     mode_cfg = modes.get(mode_key, {})
 

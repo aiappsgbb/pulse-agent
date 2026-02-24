@@ -23,7 +23,7 @@ from sdk.agents import load_agents, _mcp_config
 MAX_SESSION_RETRIES = 3
 
 
-def _load_modes() -> dict:
+def load_modes() -> dict:
     """Load mode definitions from config/modes.yaml."""
     modes_path = CONFIG_DIR / "modes.yaml"
     with open(modes_path, "r") as f:
@@ -124,7 +124,7 @@ def build_session_config(
 
     Config-driven: reads mode definitions from modes.yaml instead of hardcoded if/elif.
     """
-    modes = _load_modes()
+    modes = load_modes()
 
     # Map legacy mode name
     mode_key = "monitor" if mode == "triage" else mode

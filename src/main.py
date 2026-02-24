@@ -90,6 +90,13 @@ async def main():
 
     log.info(f"Connected. State: {client.get_state()}")
 
+    # Preflight: verify auth is valid before entering the main loop
+    try:
+        auth = await client.get_auth_status()
+        log.info(f"Auth status: {auth}")
+    except Exception as e:
+        log.warning(f"Auth check failed (non-fatal): {e}")
+
     # Start shared browser (single Edge instance for all Playwright consumers)
     # Uses dedicated daemon profile (pulse-daemon-profile) to avoid conflicts
     # with the user's Edge or Claude Code's Playwright MCP server.
@@ -114,7 +121,10 @@ async def main():
         sync_to_onedrive(config)
         if browser:
             await browser.stop()
-        await client.stop()
+        try:
+            await asyncio.wait_for(client.stop(), timeout=10)
+        except asyncio.TimeoutError:
+            await client.force_stop()
         return
 
     # --once (no mode): run one triage + pending jobs and exit
@@ -145,7 +155,10 @@ async def main():
         sync_to_onedrive(config)
         if browser:
             await browser.stop()
-        await client.stop()
+        try:
+            await asyncio.wait_for(client.stop(), timeout=10)
+        except asyncio.TimeoutError:
+            await client.force_stop()
         return
 
     # --- Daemon mode ---
@@ -192,9 +205,15 @@ async def main():
     scheduler_task.cancel()
     worker_task.cancel()
     await stop_telegram_bot(telegram_app)
+    from daemon.worker import destroy_chat_session
+    await destroy_chat_session()
     if browser:
         await browser.stop()
-    await client.stop()
+    try:
+        await asyncio.wait_for(client.stop(), timeout=10)
+    except asyncio.TimeoutError:
+        log.warning("client.stop() hung — forcing shutdown")
+        await client.force_stop()
     log.info("Pulse Agent stopped.")
 
 

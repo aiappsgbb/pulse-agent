@@ -8,9 +8,10 @@ Falls back to unfiltered articles if the SDK call fails.
 import asyncio
 import json
 
-from copilot import CopilotClient, PermissionRequest, PermissionRequestResult
+from copilot import CopilotClient
 
 from core.logging import log, safe_encode
+from sdk.session import auto_approve_handler
 
 FILTER_PROMPT = """\
 You are an article relevance filter for an enterprise AI consultant. Your job is to \
@@ -90,16 +91,13 @@ async def filter_articles(
         f"## Articles\n{articles_text}"
     )
 
-    def _auto_approve(request: PermissionRequest, context: dict) -> PermissionRequestResult:
-        return PermissionRequestResult(kind="approved", rules=[])
-
     session = None
     try:
         session = await client.create_session({
             "model": model,
             "system_message": {"mode": "replace", "content": FILTER_PROMPT},
             "streaming": True,
-            "on_permission_request": _auto_approve,
+            "on_permission_request": auto_approve_handler,
         })
 
         from sdk.event_handler import EventHandler

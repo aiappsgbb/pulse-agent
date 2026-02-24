@@ -159,7 +159,7 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
         "priority": params.priority,
         "model": params.model,
         "output": {
-            "local": f"./output/{slug}/",
+            "local": str(PULSE_HOME),
         },
     }
 

@@ -12,15 +12,68 @@ from core.config import mark_task_completed
 from core.logging import log
 
 
+# --- Persistent chat session (infinite_sessions) ---
+# Reused across messages so the SDK maintains conversation context natively.
+# Each message gets its own EventHandler for completion tracking.
+
+_chat_session = None
+
+
+async def _get_chat_session(client, config, telegram_app=None, chat_id=None):
+    """Get or create the persistent chat session with infinite_sessions enabled."""
+    global _chat_session
+
+    if _chat_session is not None:
+        return _chat_session
+
+    from sdk.tools import get_tools
+    from sdk.session import build_session_config
+    from core.browser import get_browser_manager
+
+    mgr = get_browser_manager()
+    cdp_endpoint = mgr.cdp_endpoint if mgr else None
+
+    session_config = build_session_config(
+        config, mode="chat", tools=get_tools(),
+        telegram_app=telegram_app, chat_id=chat_id,
+        cdp_endpoint=cdp_endpoint,
+    )
+    # Enable infinite sessions — SDK auto-compacts context when it fills up
+    session_config["infinite_sessions"] = {"enabled": True}
+
+    from sdk.session import MAX_SESSION_RETRIES
+    for attempt in range(1, MAX_SESSION_RETRIES + 1):
+        try:
+            _chat_session = await client.create_session(session_config)
+            log.info("  Persistent chat session created (infinite_sessions=True)")
+            return _chat_session
+        except Exception as e:
+            if attempt == MAX_SESSION_RETRIES:
+                raise
+            log.warning(f"  Chat session creation failed (attempt {attempt}): {e}")
+            await asyncio.sleep(2 ** attempt)
+
+
+async def destroy_chat_session():
+    """Destroy the persistent chat session. Called on daemon shutdown."""
+    global _chat_session
+    if _chat_session is not None:
+        try:
+            await _chat_session.destroy()
+        except Exception:
+            pass
+        _chat_session = None
+
+
 async def run_chat_query(client, config: dict, prompt: str,
                         telegram_app=None, chat_id: int | None = None,
                         on_delta=None) -> str:
     """Run a conversational query via GHCP SDK. Returns the response text.
 
-    For Telegram chats, streams deltas progressively into the message.
+    Uses a persistent session with infinite_sessions so the SDK maintains
+    conversation context natively (auto-compacts when context fills up).
     """
-    from sdk.tools import get_tools
-    from sdk.session import agent_session
+    global _chat_session
 
     log.info(f"  Chat query: {prompt[:80]}...")
 
@@ -33,32 +86,62 @@ async def run_chat_query(client, config: dict, prompt: str,
         if streaming_reply:
             delta_cb = streaming_reply.on_delta
 
-    async with agent_session(client, config, "chat", tools=get_tools(),
-                             telegram_app=telegram_app, chat_id=chat_id,
-                             on_delta=delta_cb) as (session, handler):
-        await session.send({"prompt": prompt})
-        try:
-            await asyncio.wait_for(handler.done.wait(), timeout=1800)
-        except asyncio.TimeoutError:
-            log.warning("Chat query timed out after 1800s")
-            if streaming_reply:
-                await streaming_reply.finish()
-            if handler.final_text:
-                return handler.final_text
-            return "Agent is still working — response timed out."
-
-        if handler.error:
-            log.error(f"Chat session error: {handler.error}")
-            if streaming_reply:
-                await streaming_reply.finish()
-            return f"Agent error: {handler.error}"
-
-        # Finalize streaming reply with formatted HTML
+    # Get persistent session (creates if needed)
+    try:
+        session = await _get_chat_session(client, config, telegram_app, chat_id)
+    except Exception as e:
+        log.error(f"  Failed to create chat session: {e}")
         if streaming_reply:
             await streaming_reply.finish()
-            return handler.final_text or "No response from agent."
+        return f"Agent error: could not create session — {e}"
 
-        return handler.final_text or "No response from agent."
+    # Each message gets its own handler for completion tracking
+    from sdk.event_handler import EventHandler
+    handler = EventHandler(on_delta=delta_cb)
+    unsub = session.on(handler)
+
+    try:
+        await session.send({"prompt": prompt})
+        await asyncio.wait_for(handler.done.wait(), timeout=1800)
+    except asyncio.TimeoutError:
+        log.warning("Chat query timed out after 1800s")
+        if streaming_reply:
+            await streaming_reply.finish()
+        return handler.final_text or "Agent is still working — response timed out."
+    except Exception as e:
+        # Session died — destroy it so next message recreates
+        log.warning(f"  Chat session error, will recreate: {e}")
+        _chat_session = None
+        try:
+            await session.destroy()
+        except Exception:
+            pass
+        if streaming_reply:
+            await streaming_reply.finish()
+        return f"Agent error: {e}"
+    finally:
+        if unsub:
+            try:
+                unsub()
+            except Exception:
+                pass
+
+    if handler.error:
+        log.error(f"Chat session error: {handler.error}")
+        # If session errored, destroy so next message gets a fresh one
+        _chat_session = None
+        try:
+            await session.destroy()
+        except Exception:
+            pass
+        if streaming_reply:
+            await streaming_reply.finish()
+        return f"Agent error: {handler.error}"
+
+    if streaming_reply:
+        await streaming_reply.finish()
+
+    return handler.final_text or "No response from agent."
 
 
 async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_app):
