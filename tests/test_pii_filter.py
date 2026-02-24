@@ -108,8 +108,8 @@ class TestScrub:
         assert "john@microsoft.com" in result
 
     def test_phone_scrubbed(self):
-        result = scrub("Call +1-555-123-4567")
-        assert "555-123-4567" not in result
+        result = scrub("Call +1-202-456-7890")
+        assert "202-456-7890" not in result
 
     def test_credit_card_scrubbed(self):
         result = scrub("Card 4111-1111-1111-1111")
