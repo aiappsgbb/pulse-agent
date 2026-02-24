@@ -71,6 +71,88 @@ async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir):
     return {"collected": True, "opened_recap": opened_recap, "should_persist": True}
 
 
+async def _navigate_to_calendar(page) -> object:
+    """Navigate to Teams Calendar and return the calendar iframe locator.
+
+    teams.microsoft.com/v2/calendar redirects to teams.cloud.microsoft/ (Chat
+    view, NOT Calendar) since early 2026.  Primary strategy: load Teams root,
+    then click the Calendar button in the left app-bar.  Fall back to the new
+    /calendar URL on teams.cloud.microsoft for later retries.
+
+    Verifies success by checking for buttons inside the calendar iframe —
+    NOT page.title() which crashes during SPA redirects.
+
+    Raises RuntimeError if calendar cannot be opened after all retries.
+    """
+    iframe = None
+
+    for attempt in range(4):
+        try:
+            if attempt == 0:
+                # Primary: load Teams root, then click Calendar button
+                log.info("  Opening Teams via root + Calendar button...")
+                await page.goto("https://teams.cloud.microsoft/",
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(8000)
+                try:
+                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
+                    if await cal_btn.count() > 0:
+                        await cal_btn.click()
+                        await page.wait_for_timeout(5000)
+                except Exception:
+                    pass
+            elif attempt == 1:
+                # Try direct calendar URL on the new domain
+                log.info(f"  Calendar attempt {attempt + 1}: direct URL on new domain...")
+                await page.goto("https://teams.cloud.microsoft/calendar",
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(8000)
+            elif attempt == 2:
+                # Reload root with longer settle, then button click
+                log.info(f"  Calendar attempt {attempt + 1}: root + button with long wait...")
+                await page.goto("https://teams.cloud.microsoft/",
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(12000)
+                try:
+                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
+                    if await cal_btn.count() > 0:
+                        await cal_btn.click()
+                        await page.wait_for_timeout(5000)
+                except Exception:
+                    pass
+            else:
+                # Last resort: old URL (may still work via redirect chain)
+                log.info(f"  Calendar attempt {attempt + 1}: legacy URL fallback...")
+                await page.goto("https://teams.microsoft.com/v2/calendar",
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(10000)
+                try:
+                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
+                    if await cal_btn.count() > 0:
+                        await cal_btn.click()
+                        await page.wait_for_timeout(5000)
+                except Exception:
+                    pass
+
+            # Verify: look for the calendar iframe with buttons inside
+            iframe = page.frame_locator('iframe[name="embedded-page-container"]')
+            try:
+                await iframe.get_by_role("button").first.wait_for(
+                    state="visible", timeout=15000
+                )
+                # Success — iframe has rendered buttons
+                log.info("  Calendar loaded (iframe has buttons).")
+                return iframe
+            except Exception:
+                log.warning(f"  Calendar iframe not ready (attempt {attempt + 1}/4)")
+
+        except Exception as e:
+            log.warning(f"  Calendar navigation error (attempt {attempt + 1}/4): {e}")
+            await page.wait_for_timeout(3000)
+
+    raise RuntimeError("Cannot open Calendar view after 4 attempts")
+
+
 async def _return_to_calendar_with_retry(page, iframe, week_offset: int) -> bool:
     """Return to calendar with retry on stale iframe.
 
@@ -85,9 +167,17 @@ async def _return_to_calendar_with_retry(page, iframe, week_offset: int) -> bool
             if attempt > 0:
                 # Full reload — the iframe is stale, need to start fresh
                 log.info(f"  Stale iframe recovery (attempt {attempt + 1})...")
-                await page.goto("https://teams.microsoft.com/v2/calendar",
+                await page.goto("https://teams.cloud.microsoft/",
                                 wait_until="domcontentloaded")
                 await page.wait_for_timeout(5000)
+                # Click Calendar button to get to Calendar view
+                try:
+                    cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
+                    if await cal_btn.count() > 0:
+                        await cal_btn.click()
+                        await page.wait_for_timeout(3000)
+                except Exception:
+                    pass
 
                 # Re-acquire the iframe after reload
                 iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
@@ -177,70 +267,16 @@ async def run_transcript_collection(client, config: dict):
             page = await own_context.new_page()
 
     try:
-        # Step 1: Navigate to Teams and wait for the SPA to fully load
-        log.info("  Opening Teams...")
-        await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
-
-        # Wait for Teams UI to actually render — look for the app bar / nav buttons
+        # Navigate to Calendar and wait for the iframe to be usable.
+        # Verification is done by checking for the calendar iframe with buttons
+        # inside it — NOT page.title() which crashes during SPA redirects.
         try:
-            await page.get_by_role("button", name="Chat").wait_for(state="visible", timeout=20000)
-            log.info(f"  Teams loaded: {await page.title()}")
-        except Exception:
-            # App bar not found within 20s — wait a bit more and continue
-            await page.wait_for_timeout(8000)
-            log.info(f"  Teams slow load, continuing: {await page.title()}")
-
-        # Step 2: Click Calendar — retry up to 3 times with different approaches
-        log.info("  Navigating to Calendar...")
-        calendar_opened = False
-
-        for attempt in range(3):
-            # Try clicking the Calendar button in the left nav
-            try:
-                cal_btn = page.get_by_role("button", name="Calendar")
-                if await cal_btn.count() > 0:
-                    await cal_btn.click()
-                    await page.wait_for_timeout(3000)
-                    title = await page.title()
-                    if "Calendar" in title:
-                        calendar_opened = True
-                        break
-            except Exception:
-                pass
-
-            # Fallback: navigate directly to Teams calendar URL
-            if attempt >= 1:
-                log.info(f"  Calendar button failed (attempt {attempt + 1}), trying direct URL...")
-                try:
-                    await page.goto("https://teams.microsoft.com/v2/calendar", wait_until="domcontentloaded")
-                    await page.wait_for_timeout(5000)
-                    title = await page.title()
-                    if "Calendar" in title:
-                        calendar_opened = True
-                        break
-                except Exception:
-                    pass
-
-            if attempt < 2:
-                log.info(f"  Calendar nav attempt {attempt + 1} failed, waiting before retry...")
-                await page.wait_for_timeout(3000)
-
-        if not calendar_opened:
-            title = await page.title()
-            log.warning(f"  Could not open Calendar view after 3 attempts. Got: {title}")
+            iframe = await _navigate_to_calendar(page)
+        except RuntimeError as e:
+            log.warning(f"  {e}")
             return
 
-        log.info(f"  Calendar opened: {await page.title()}")
-
-        # Step 3: Wait for the calendar iframe to fully load
-        iframe = page.frame_locator('iframe[name="embedded-page-container"]')
-        try:
-            await iframe.get_by_role("button").first.wait_for(state="visible", timeout=15000)
-        except Exception:
-            log.warning("  Calendar iframe slow to load, waiting 5 more seconds...")
-            await page.wait_for_timeout(5000)
-
-        # Step 3b: Multi-week lookback — process each week from most recent to oldest
+        # Multi-week lookback — process each week from most recent to oldest
         current_week_offset = 0
         attempted_slugs: set[str] = set()  # Track slugs we've already tried
 

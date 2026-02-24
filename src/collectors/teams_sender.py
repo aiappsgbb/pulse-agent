@@ -211,7 +211,7 @@ async def _navigate_to_teams(page) -> bool:
     before declaring the session expired.
     """
     log.info("  Navigating to Teams Chat...")
-    await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
+    await page.goto("https://teams.cloud.microsoft/", wait_until="domcontentloaded")
 
     try:
         await page.wait_for_load_state("networkidle", timeout=15000)

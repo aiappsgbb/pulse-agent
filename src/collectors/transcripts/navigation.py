@@ -71,14 +71,14 @@ async def return_to_calendar(page: Page, iframe, force: bool = False, week_offse
     # We opened a recap page — always navigate back to Calendar
     log.info("  Returning to calendar from recap view...")
     try:
-        cal_btn = page.get_by_role("button", name="Calendar")
+        cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
         await cal_btn.click()
         await page.wait_for_timeout(3000)
     except Exception:
-        await page.goto("https://teams.microsoft.com", wait_until="domcontentloaded")
+        await page.goto("https://teams.cloud.microsoft/", wait_until="domcontentloaded")
         await page.wait_for_timeout(5000)
         try:
-            cal_btn = page.get_by_role("button", name="Calendar")
+            cal_btn = page.get_by_role("button", name=re.compile(r"Calendar"))
             await cal_btn.click()
             await page.wait_for_timeout(3000)
         except Exception:

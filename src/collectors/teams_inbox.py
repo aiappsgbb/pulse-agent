@@ -128,7 +128,7 @@ async def _do_scan(page) -> list[dict]:
     log.info("Scanning Teams inbox for unread messages...")
 
     # Navigate to Teams Chat view
-    await page.goto("https://teams.microsoft.com/v2/", wait_until="domcontentloaded")
+    await page.goto("https://teams.cloud.microsoft/", wait_until="domcontentloaded")
     try:
         await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:
