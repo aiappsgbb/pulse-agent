@@ -3,12 +3,15 @@
 Deterministic script — no LLM involved. Uses the shared browser.
 Returns structured data that gets injected into the monitor trigger prompt.
 
-DOM structure (verified Feb 2026):
-- Chat tree: [role="tree"] contains all chat categories + conversations
-- Categories (level 1): Copilot, Discover, Mentions, Saved, Important, Regular, Chats
-- Chat items (level 2): [role="treeitem"][data-item-type="chat"] with data-testid="list-item"
-- Unread indicator: badge elements ([class*="Badge"]) inside the treeitem
-- Text format: "chat name\\ntime\\nsender: preview" (newline-separated)
+DOM structure (verified Feb 24 2026):
+- Chat tree: [role="tree"] contains categories and conversations
+- Categories (level 1): Copilot, Quick views, Important, Regular, GBB Team, Chats, etc.
+  User-defined categories — emoji-prefixed, may have "Unread" prefix
+- Chat items (level 2): [role="treeitem"] inside [role="group"] under expanded categories
+  Accessible name format: "[Unread message] [Chat type] TITLE Last message SENDER: PREVIEW TIME"
+  Chat types: "Meeting chat", "Group chat", "Chat"
+- Unread indicator: "Unread" prefix in treeitem accessible name (both category and chat level)
+- Filter bar: "Unread (Ctrl+Alt+U)" button filters to unread-only view
 """
 
 import re
@@ -17,66 +20,83 @@ from datetime import datetime
 from core.logging import log, safe_encode
 
 
-# JS snippet to extract chat items from Teams tree view
+# JS snippet to extract chat items from Teams tree view (Feb 2026 DOM structure)
+# NOTE: treeitems do NOT have aria-label attributes — use innerText instead.
+# Level 2 treeitems with a <time> element are individual chats.
+# innerText format: "Unread\\nTITLE\\nTIME\\nSENDER: PREVIEW" (newline-separated)
 EXTRACT_CHAT_LIST_JS = """
 () => {
     const results = [];
+    const tree = document.querySelector('[role="tree"]');
+    if (!tree) return results;
 
-    // Teams 2026 UI: chats are treeitem elements with data-item-type="chat"
-    const chatItems = document.querySelectorAll(
-        '[role="treeitem"][data-item-type="chat"]'
-    );
+    const allItems = tree.querySelectorAll('[role="treeitem"]');
 
-    for (const item of chatItems) {
+    for (const item of allItems) {
+        // Individual chats are level 2 with a <time> element
+        const level = item.getAttribute('aria-level');
+        const timeEl = item.querySelector('time');
+        if (level !== '2' || !timeEl) continue;
+
         const text = item.innerText || '';
-        if (!text.trim()) continue;
-
-        // Unread: badge elements inside the treeitem
-        const hasBadge = !!(
-            item.querySelector('[class*="Badge"], [class*="badge"]') ||
-            item.querySelector('[class*="unread"], [class*="Unread"]') ||
-            item.getAttribute('aria-label')?.toLowerCase().includes('unread')
-        );
-
-        // Parse text: lines are name, time, sender: preview (varies)
         const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+        if (!lines.length) continue;
 
-        // Extract name (first line), time, and preview
-        let name = lines[0] || '';
-        let time = '';
-        let preview = '';
+        // Skip utility items like "New message" or "See more"
+        if (lines[0] === 'New message' || lines[0] === 'See more') continue;
 
-        // Look for time pattern (e.g. "1:53 PM", "11:35 AM", "Yesterday")
-        for (let i = 1; i < lines.length; i++) {
-            if (/^\\d{1,2}:\\d{2}\\s*(AM|PM)$/i.test(lines[i]) ||
-                /^(Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i.test(lines[i]) ||
-                /^\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(lines[i])) {
-                time = lines[i];
-            } else if (lines[i].includes(':') && !time) {
-                // Could be "sender: message" - check if previous line was time
-                preview = lines[i];
-            } else if (i === lines.length - 1 && !time) {
-                time = lines[i];
-            } else if (!preview) {
-                preview = lines[i];
-            }
+        const time = timeEl ? timeEl.textContent.trim() : '';
+
+        // Determine unread: first line is literally "Unread"
+        let isUnread = false;
+        let startIdx = 0;
+        if (lines[0] === 'Unread') {
+            isUnread = true;
+            startIdx = 1;
         }
 
-        // If preview still empty, try last non-time line
-        if (!preview && lines.length > 2) {
-            preview = lines[lines.length - 1];
-            if (preview === time) preview = lines.length > 3 ? lines[lines.length - 2] : '';
+        // Chat name is the first real content line (after optional "Unread")
+        const name = lines[startIdx] || '';
+
+        // Preview is the last line (sender: message), skip if it equals time
+        let preview = '';
+        for (let i = lines.length - 1; i > startIdx; i--) {
+            if (lines[i] !== time) {
+                preview = lines[i];
+                break;
+            }
         }
 
         results.push({
             name: name.substring(0, 200),
             preview: preview.substring(0, 300),
             time: time,
-            unread: hasBadge,
-            raw: text.substring(0, 300),
+            unread: isUnread,
+            raw: text.substring(0, 400),
         });
     }
     return results;
+}
+"""
+
+# JS to expand all collapsed chat categories so level 2 items become visible.
+# Skips "Teams and channels" and "Communities" (not chat categories).
+EXPAND_UNREAD_CATEGORIES_JS = """
+() => {
+    const tree = document.querySelector('[role="tree"]');
+    if (!tree) return 0;
+    let expanded = 0;
+    const SKIP = ['teams and channels', 'communities', 'copilot', 'quick views'];
+    const categories = tree.querySelectorAll(':scope > [role="treeitem"]');
+    for (const cat of categories) {
+        const name = (cat.innerText || '').split('\\n')[0].trim().toLowerCase();
+        const isExpanded = cat.getAttribute('aria-expanded');
+        if (isExpanded === 'false' && !SKIP.some(s => name.includes(s))) {
+            cat.click();
+            expanded++;
+        }
+    }
+    return expanded;
 }
 """
 
@@ -130,20 +150,32 @@ async def _do_scan(page) -> list[dict]:
     # Navigate to Teams Chat view
     await page.goto("https://teams.cloud.microsoft/", wait_until="domcontentloaded")
     try:
-        await page.wait_for_load_state("networkidle", timeout=12000)
+        await page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
         pass
 
-    # Wait for the chat tree to render (treeitems with chat data)
+    # Wait for the chat tree to render
     try:
+        await page.wait_for_selector('[role="tree"]', timeout=15000)
+        # Extra wait for treeitems to populate inside the tree
         await page.wait_for_selector(
-            '[role="treeitem"][data-item-type="chat"]',
+            '[role="tree"] [role="treeitem"]',
             timeout=10000,
         )
         await page.wait_for_timeout(2000)
     except Exception:
-        log.warning("  Chat tree items not found — Teams may still be loading")
-        await page.wait_for_timeout(3000)
+        log.warning("  Chat tree not found — Teams may still be loading")
+        await page.wait_for_timeout(5000)
+
+    # Expand all collapsed categories that have unread items
+    # (individual chats are level 2 treeitems inside category groups)
+    try:
+        expanded_count = await page.evaluate(EXPAND_UNREAD_CATEGORIES_JS)
+        if expanded_count:
+            log.info(f"  Expanded {expanded_count} chat categories with unread items")
+            await page.wait_for_timeout(2000)
+    except Exception as e:
+        log.warning(f"  Failed to expand categories: {e}")
 
     # Try structured extraction
     items = await page.evaluate(EXTRACT_CHAT_LIST_JS)

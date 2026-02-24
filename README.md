@@ -4,17 +4,19 @@
 
 You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email threads you'll never read. Competitors announce changes at 2 AM. Pulse Agent runs when you don't — it consumes everything you can't and tells you only what matters.
 
-Not a copilot. Not a chatbot. A local daemon with standing instructions, full M365 visibility, and structured output. The output lands in a OneDrive-synced folder so M365 Copilot can read and summarize it natively — no custom bot required.
+Not a copilot. Not a chatbot. A local daemon with standing instructions, full M365 visibility, and structured output.
+
+**"I had 8 meetings yesterday. I was distracted in half of them. At 7 AM, Pulse Agent told me the 3 things that actually need my attention — including an escalation I completely missed."**
 
 ## What It Does
 
-Pulse Agent processes three categories of information overnight and delivers a single, filtered digest by morning:
+Pulse Agent processes three categories of information and delivers a single, filtered digest by morning:
 
 | Source | How | What You Get |
 |--------|-----|-------------|
-| **Meeting transcripts** | Playwright scrapes Teams web UI | Decisions, action items, escalations |
-| **Inbox + Teams** | WorkIQ queries M365 data | Outstanding items you haven't dealt with yet |
-| **Industry news** | RSS feeds via feedparser | Competitor moves, product launches, trends |
+| **Meeting transcripts** | Playwright scrapes Teams web UI + SDK compression | Decisions, action items, escalations |
+| **Inbox + Teams** | Playwright inbox scans + WorkIQ M365 queries | Outstanding items you haven't dealt with yet |
+| **Industry news** | RSS feeds via feedparser + SDK relevance filtering | Competitor moves, product launches, trends |
 
 **The key insight:** It cross-references what needs attention against what you've already handled. If you replied to an email, it's filtered out. If you attended a meeting with no open actions, it's gone. You only see what's genuinely outstanding.
 
@@ -27,8 +29,8 @@ A typical digest is 30-50 lines. Not 400.
 - Python 3.12+
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) installed and authenticated
 - GitHub Copilot subscription (Individual, Business, or Enterprise)
-- Microsoft Edge with an authenticated Teams session (for transcript collection)
-- [WorkIQ MCP server](https://github.com/microsoft/work-iq-mcp) (`npm install -g @anthropic/workiq-mcp` or equivalent)
+- Microsoft Edge with an authenticated Teams session (for transcript collection + inbox scanning)
+- [WorkIQ MCP server](https://github.com/microsoft/work-iq-mcp) for M365 data access
 
 ### Setup
 
@@ -45,26 +47,29 @@ python -m venv .venv
 # Install dependencies
 pip install -r requirements.txt
 
-# For transcript collection, also install Playwright browsers
+# For transcript collection + inbox scanning, install Playwright browsers
 playwright install msedge
 ```
 
 ### Configuration
 
-Copy and edit the config file:
+Set your data directory:
 
 ```bash
-cp config/standing-instructions.yaml config/standing-instructions.yaml.bak
+# Add to .env (already gitignored)
+PULSE_HOME=$USERPROFILE/OneDrive - Microsoft/Documents/Pulse
 ```
 
-Edit `config/standing-instructions.yaml` to customize priorities, RSS feeds, and model preferences. The agent identifies you automatically via WorkIQ — no manual identity config needed.
+On first run, `config/standing-instructions.yaml` is copied to `$PULSE_HOME/standing-instructions.yaml`. Edit the copy to customize priorities, RSS feeds, model preferences, and schedules.
 
 The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all string fields.
 
-### Telegram Setup (optional)
+**Config resolution chain:** `--config` flag > `PULSE_CONFIG` env var > `$PULSE_HOME/standing-instructions.yaml` > `config/standing-instructions.yaml` (repo template fallback)
+
+### Telegram Setup
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram, create a new bot, copy the token
-2. Edit `config/standing-instructions.yaml`:
+2. Edit `standing-instructions.yaml`:
    ```yaml
    telegram:
      enabled: true
@@ -75,17 +80,21 @@ The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all
 ### Run
 
 ```bash
-# Start the daemon — Telegram + triage heartbeat + job queue
+# Start the daemon — Telegram + scheduler + job worker
 python src/main.py
 
-# Single cycle then exit (triage + jobs + sync)
+# Start with alternate config (inter-agent testing, secondary instance)
+python src/main.py --config config/standing-instructions-alpha.yaml
+
+# Single cycle then exit
 python src/main.py --once
 
-# Run a specific stage only (dev/debugging)
+# Run a specific mode (dev/debugging)
 python src/main.py --mode digest --once
 python src/main.py --mode monitor --once
 python src/main.py --mode transcripts --once
 python src/main.py --mode intel --once
+python src/main.py --mode knowledge --once
 ```
 
 ### Interacting via Telegram
@@ -97,12 +106,18 @@ Just talk to the bot naturally:
 - "Run a digest" — triggers a full digest immediately
 - "Analyze Parloa vs 11Labs" — deep research task
 - "Grab transcripts" — collects meeting transcripts from Teams
+- "Send to Esther: here's the pricing update" — sends a Teams message (with draft review)
 
-The bot also sends you proactive notifications when jobs complete.
+The bot also provides:
+- `/digest`, `/triage`, `/intel`, `/transcripts` — queued jobs
+- `/latest` — sends the most recent digest
+- `/status` — daemon uptime + queue size
+- 1-tap action buttons for triage items (review draft, send, dismiss)
+- Proactive triage reports during office hours
 
 ### Job Files
 
-You can also drop YAML files into `tasks/pending/` or OneDrive `Pulse/Jobs/`:
+Drop YAML files into `$PULSE_HOME/jobs/pending/` (picked up within 60 seconds):
 
 ```yaml
 type: digest
@@ -114,43 +129,60 @@ task: "Compare AWS Bedrock pricing vs Azure OpenAI"
 description: "Pull latest public pricing, summarize differences"
 ```
 
-Jobs are picked up immediately (or on next heartbeat if from OneDrive).
+## Modes
+
+| Mode | Trigger | What It Does |
+|------|---------|-------------|
+| **Transcript Collection** | `--mode transcripts` | Playwright scrapes Teams Calendar for meeting transcripts, SDK compresses to structured notes |
+| **Internal Digest** | `--mode digest` | Scans local content + RSS + inbox scans + WorkIQ, generates a 30-50 line filtered digest with action buttons |
+| **Triage** | `--mode monitor` | 30-min inbox triage with 1-tap action buttons (Teams reply, email reply, schedule meeting) |
+| **Deep Research** | `--mode research` | Autonomous long-running research with full WorkIQ + local tool access (60 min timeout) |
+| **External Intel** | `--mode intel` | RSS feeds filtered for relevance, generates a concise intelligence brief |
+| **Chat** | Telegram message | Natural language via Telegram with streaming replies, WorkIQ, local search, and browser actions |
+| **Knowledge Mining** | `--mode knowledge` | Overnight pipeline: collect transcripts, compress, archive emails/Teams, enrich project memory |
 
 ## Architecture
 
 ```
-Input Sources
-  ├── Teams Transcripts ── Playwright (browser automation, no LLM)
-  ├── M365 Inbox/Teams ── WorkIQ MCP (email, calendar, messages)
-  └── RSS Feeds ───────── feedparser (Google News, TechCrunch, HN, etc.)
-        │
-        ▼
-  Pulse Agent (Python)
-  ├── Phase 1: Collect content locally (Python, deterministic)
-  ├── Phase 1b: Fetch RSS feeds, deduplicate, filter by recency
-  └── Phase 2: Send to GHCP SDK agent for analysis
-        │
-        ▼
-  GitHub Copilot SDK
-  ├── CopilotClient → JSON-RPC → Copilot CLI (server mode)
-  ├── WorkIQ MCP ── queries M365 for what's handled vs. outstanding
-  ├── Custom tools ── log_action, write_output, queue_task
-  └── Multi-model routing ── gpt-4.1, claude-sonnet, claude-opus
-        │
-        ▼
-  Output → OneDrive-synced folder
-  ├── output/digests/2026-02-16.json   Structured digest
-  ├── output/digests/2026-02-16.md     Human-readable digest
-  ├── output/intel/2026-02-16.md       External intel brief
-  ├── output/pulse-signals/*.md        Drafted GBB Pulse signals
-  ├── output/monitoring-*.md           Triage reports
-  └── logs/2026-02-16.jsonl            Structured audit trail
-        │
-        ▼
-  Telegram Bot (conversational interface)
-  └── "What's new?" → queries WorkIQ, responds instantly
-  └── "Run a digest" → triggers job, notifies when done
-  └── Proactive morning digest delivery
+Data Collection (Playwright + Python, no LLM)
+  Teams Transcripts ── browser automation -> virtualized list scraping -> SDK compression
+  Teams Inbox ──────── browser scan for unread messages (ground truth)
+  Outlook Inbox ────── browser scan for unread emails (ground truth)
+  Calendar ─────────── browser scan for upcoming events
+  Local Content ────── file system scan (.docx, .pdf, .pptx, .xlsx, .csv, .eml, .vtt, .txt, .md)
+  RSS Feeds ────────── feedparser + SDK relevance filtering
+        |
+        v
+Pulse Agent (Python daemon, always-on)
+  asyncio event loop with 3 concurrent tasks:
+    Telegram bot ── conversational + action buttons + streaming replies
+    Scheduler ───── config-driven schedules (every 60s) + OneDrive job sync
+    Job worker ──── processes queue, one at a time (GHCP SDK sessions)
+        |
+        v
+GitHub Copilot SDK (CopilotClient -> JSON-RPC -> Copilot CLI server mode)
+  WorkIQ MCP ────── calendar, email, Teams, people, documents
+  Custom tools ──── 13 tools (write, search, schedule, send, dismiss, projects, inter-agent)
+  Session hooks ─── automatic audit trail, path guardrails, error recovery, metrics
+  Sub-agents ────── digest-writer, project-researcher, knowledge-miner, m365-query, pulse-reader, signal-drafter
+  Multi-model ───── gpt-4.1 (triage/chat), claude-sonnet (digest), claude-opus (research/intel)
+        |
+        v
+Output -> $PULSE_HOME (OneDrive-synced)
+  digests/YYYY-MM-DD.json + .md ─── structured + human-readable digest
+  intel/YYYY-MM-DD.md ──────────── external intel brief
+  projects/*.yaml ──────────────── persistent project memory
+  monitoring-*.json + .md ──────── triage reports with action buttons
+  transcripts/*.md ─────────────── compressed meeting transcripts
+  pulse-signals/*.md ───────────── drafted GBB Pulse signals
+  logs/YYYY-MM-DD.jsonl ────────── structured audit trail
+        |
+        v
+Telegram Bot (user interface)
+  Chat ─────── natural language -> streaming reply (progressive edits)
+  Jobs ─────── /digest, /triage, /intel, /transcripts -> queued jobs
+  Actions ──── 1-tap buttons: review draft -> send Teams/email -> dismiss
+  Proactive ── triage reports + morning digest delivery
 ```
 
 ## How It Works
@@ -158,140 +190,183 @@ Input Sources
 The daemon runs three things concurrently on one async event loop:
 
 1. **Telegram bot** — listens for messages, puts jobs on an `asyncio.Queue`
-2. **Heartbeat** (every 30min, office hours only) — puts a triage job on the same queue + pulls OneDrive job files
+2. **Config-driven scheduler** (every 60s) — checks cron-like patterns (`daily 07:00`, `every 30m`, `weekdays HH:MM`), fires due schedules, syncs OneDrive job files
 3. **Worker** — processes jobs from the queue one at a time (GHCP SDK sessions)
 
 Jobs execute immediately when queued — no waiting for the next cycle.
 
-### Job Types
-
-| Type | What It Does |
-|------|-------------|
-| `digest` | Scans input folders + RSS feeds + WorkIQ inbox, generates a 30-50 line filtered digest |
-| `transcripts` | Playwright scrapes Teams Calendar for meeting transcripts from the past week |
-| `intel` | RSS-only intel brief (competitor moves, product launches, trends) |
-| `research` | Autonomous deep research mission with full WorkIQ + local tool access |
+**Default schedule:**
+```yaml
+schedule:
+  - id: morning-digest
+    type: digest
+    pattern: "daily 07:00"
+  - id: triage
+    type: monitor
+    pattern: "every 30m"
+    office_hours_only: true
+  - id: daily-intel
+    type: intel
+    pattern: "daily 09:00"
+```
 
 ## Project Structure
 
 ```
-├── README.md                          This file
-├── AGENTS.md                          Agent behavior spec (contest requirement)
-├── .mcp.json                          MCP server config (WorkIQ)
-├── requirements.txt                   Python dependencies (pinned)
-├── src/
-│   ├── main.py                        Daemon — event loop, job worker, heartbeat
-│   ├── telegram_bot.py                Telegram interface — chat, notifications, state
-│   ├── utils.py                       Shared logging, event streaming, session context manager
-│   ├── config.py                      YAML config loader with env var expansion + validation
-│   ├── session.py                     GHCP SDK session builder (prompts, MCP, tools, permissions)
-│   ├── digest.py                      Digest mode — file extraction, RSS, WorkIQ, LLM analysis
-│   ├── intel.py                       Intel mode — RSS collection + standalone analysis
-│   ├── monitor.py                     Monitoring mode — WorkIQ triage
-│   ├── researcher.py                  Research mode — task queue runner
-│   ├── transcripts.py                 Transcript collection — Playwright DOM scraping
-│   └── tools.py                       Custom GHCP SDK tools (log, write, queue, dismiss, note)
-├── config/
-│   ├── standing-instructions.yaml     All behavior config (priorities, models, feeds)
-│   └── skills/                        GHCP SDK skill definitions
-├── input/                             User content (gitignored)
-│   ├── transcripts/                   Meeting transcripts (.txt)
-│   ├── documents/                     Docs, presentations, spreadsheets
-│   └── emails/                        Email exports (.eml)
-├── output/                            Agent output (gitignored)
-│   ├── digests/                       Daily digests
-│   ├── intel/                         Intel briefs
-│   ├── pulse-signals/                 Drafted GBB Pulse signals
-│   ├── .digest-state.json             Incremental processing state
-│   ├── .digest-actions.json           Dismiss/note state
-│   └── .intel-state.json              RSS deduplication state
-├── tasks/
-│   ├── pending/                       Queued jobs (.yaml) — synced from OneDrive
-│   └── completed/                     Done tasks (gitignored)
-└── logs/                              Structured JSONL audit logs (gitignored)
+gbb-pulse/                               # Code only — no data here
+|-- CLAUDE.md                            # Architecture & design decisions
+|-- AGENTS.md                            # Agent behavior instructions
+|-- README.md                            # This file
+|-- .mcp.json                            # MCP server config (WorkIQ)
+|-- requirements.txt                     # Python dependencies
+|-- pytest.ini                           # Test configuration
+|-- src/
+|   |-- main.py                          # Daemon entry point — event loop, dotenv
+|   |-- core/                            # Shared infrastructure
+|   |   |-- constants.py                 # Path constants (PULSE_HOME, named dirs)
+|   |   |-- config.py                    # YAML config loading + env var expansion
+|   |   |-- state.py                     # Generic JSON state persistence
+|   |   |-- logging.py                   # Structured logging + safe_encode
+|   |   |-- browser.py                   # Shared Edge browser manager (CDP singleton)
+|   |   |-- scheduler.py                 # Persistent cron-like scheduler
+|   |   +-- diagnostics.py              # System health checks
+|   |-- sdk/                             # GHCP SDK integration layer
+|   |   |-- runner.py                    # Unified job runner (all modes)
+|   |   |-- session.py                   # Config-driven SessionConfig builder
+|   |   |-- event_handler.py             # Event-driven session completion
+|   |   |-- hooks.py                     # Session hooks (audit, guardrails, recovery, metrics)
+|   |   |-- tools.py                     # 13 custom tool definitions
+|   |   |-- prompts.py                   # Prompt loading + {{variable}} interpolation
+|   |   +-- agents.py                    # Agent definition loading
+|   |-- collectors/                      # Data collection (deterministic, no LLM)
+|   |   |-- content.py                   # Local file scanning + text extraction
+|   |   |-- feeds.py                     # RSS feed collection + dedup
+|   |   |-- article_filter.py           # RSS article relevance filtering via SDK
+|   |   |-- teams_inbox.py              # Teams unread scanning (Playwright)
+|   |   |-- teams_sender.py             # Teams message sending (Playwright)
+|   |   |-- outlook_inbox.py            # Outlook unread scanning (Playwright)
+|   |   |-- outlook_sender.py           # Outlook email reply (Playwright)
+|   |   |-- calendar.py                 # Calendar scanning (Playwright)
+|   |   |-- extractors.py               # File-type text extractors
+|   |   +-- transcripts/                 # Meeting transcript collection
+|   |       |-- collector.py             # Orchestration
+|   |       |-- navigation.py            # Teams calendar navigation
+|   |       |-- extraction.py            # Virtualized list scraping
+|   |       |-- compressor.py            # SDK-based transcript compression
+|   |       +-- js_snippets.py           # JavaScript for DOM interaction
+|   |-- daemon/                          # Always-on daemon components
+|   |   |-- heartbeat.py                 # Legacy utilities (parse_interval)
+|   |   |-- worker.py                    # Job queue worker
+|   |   +-- sync.py                      # OneDrive job sync + instruction seeding
+|   +-- tg/                              # Telegram bot interface
+|       |-- bot.py                       # Commands, streaming, action buttons
+|       |-- confirmations.py             # ask_user confirmation flow
+|       +-- pii_filter.py               # PII masking for Telegram output
+|-- config/
+|   |-- standing-instructions.yaml       # Template config
+|   |-- standing-instructions-alpha.yaml # Alternate config (inter-agent testing)
+|   |-- modes.yaml                       # Mode definitions (8 modes + 2 sub-modes)
+|   |-- prompts/
+|   |   |-- system/                      # System prompts per mode
+|   |   |-- triggers/                    # Trigger prompt templates
+|   |   +-- agents/                      # Sub-agent definitions
+|   +-- skills/                          # 4 Playwright-based skill definitions
+|-- tests/                               # 396 tests (pytest + pytest-asyncio)
++-- presentations/
+    +-- PulseAgent.pptx
+```
+
+**Data directory** (`$PULSE_HOME`, OneDrive-synced):
+```
+$PULSE_HOME/
+|-- transcripts/              # Meeting transcripts (.md compressed, .txt raw)
+|-- documents/                # User-dropped docs
+|-- emails/                   # Email exports
+|-- digests/                  # Structured + human-readable digests
+|-- intel/                    # Intel briefs
+|-- projects/                 # Project memory (.yaml per engagement)
+|-- pulse-signals/            # Drafted GBB Pulse signals
+|-- jobs/pending/ + completed/# Task queue
+|-- logs/                     # Structured JSONL audit trail
++-- .scheduler.json, .digest-state.json, .digest-actions.json, etc.
 ```
 
 ## Custom Tools
 
-The agent has 5 custom tools registered via the GHCP SDK:
+The agent has 13 custom tools registered via the GHCP SDK `@define_tool` decorator:
 
 | Tool | Description |
 |------|-------------|
-| `log_action` | Write action + reasoning to `logs/YYYY-MM-DD.jsonl` (audit trail) |
-| `write_output` | Write files to `output/` (path-traversal protected) |
-| `queue_task` | Add a job to `tasks/pending/` (digest, research, transcripts, intel) |
+| `write_output` | Write files under `$PULSE_HOME` (path traversal blocked) |
+| `queue_task` | Add a job to `jobs/pending/` (digest, research, transcripts, intel) |
 | `dismiss_item` | Mark a digest item as handled (won't reappear) |
 | `add_note` | Annotate a digest item for future context |
+| `schedule_task` | Create a recurring schedule (`daily HH:MM`, `every Nm`, etc.) |
+| `list_schedules` | List all configured recurring schedules with status |
+| `update_schedule` | Update a schedule's pattern, description, or enabled status |
+| `cancel_schedule` | Remove a recurring schedule by ID |
+| `search_local_files` | Search transcripts, documents, emails, Teams messages, digests, intel, projects |
+| `update_project` | Create/update a project memory file (YAML) |
+| `send_teams_message` | Queue a Teams message for delivery via shared browser |
+| `send_email_reply` | Queue an email reply for delivery via Outlook Web |
+| `send_task_to_agent` | Send a task/question to another team member's Pulse Agent via OneDrive |
+
+All tool usage is automatically logged to the JSONL audit trail via the `on_post_tool_use` session hook.
 
 ## Security & Governance
 
-- **Read-only by default** — the agent reads and summarizes, it does not send emails or post messages
-- **Local-first** — all processing happens on your machine, content is not uploaded
-- **Path-traversal protection** — `write_output` validates that file paths stay inside `output/`
-- **Full audit trail** — every agent action logged with reasoning to structured JSONL
-- **Config validation** — warns on placeholder values, missing fields, or misconfiguration at startup
-- **Graceful shutdown** — handles SIGINT/SIGTERM cleanly, finishes current cycle before stopping
+- **Draft-first for outbound actions** — triage suggests draft replies shown for user review before sending
+- **Local-first processing** — content processed on your machine, not uploaded
+- **Full audit trail** — every tool call automatically logged via `on_post_tool_use` hook to `logs/YYYY-MM-DD.jsonl` (100% coverage)
+- **Defense-in-depth guardrails** — `on_pre_tool_use` hook validates file paths before tools execute
+- **PII filtering** — Telegram output is scrubbed of emails, phone numbers, credit cards, and IBANs
+- **No destructive actions** — agent cannot delete, cancel, or overwrite
+- **Path-traversal protection** — `write_output` and `update_project` validate paths at both hook and handler level
+- **Configurable scope** — user controls what folders to scan, what topics to watch
 - **Scoped permissions** — WorkIQ only accesses your own M365 data, Playwright uses your browser session
 
-## Configuration Reference
+## Testing
 
-`config/standing-instructions.yaml` controls all behavior:
+```bash
+# Run all tests (396 tests)
+python -m pytest tests/ -q
 
-```yaml
-monitoring:
-  interval: "30m"               # Daemon loop interval (supports h/m/s)
-  priorities: [...]             # What to watch for (list of strings)
-  autonomy:
-    auto_send: false            # Never auto-send emails
-    auto_send_low_risk: true    # Auto-ack meeting invites, simple replies
-    max_nudges: 2               # Max follow-up nudges per item
+# Verbose output
+python -m pytest tests/ -v
 
-digest:
-  input_paths:                  # Folders to scan for content
-    - path: "input/transcripts"
-      type: "transcripts"
-  incremental: true             # Only process new/modified files
-  priorities: [...]             # What to flag in digest output
+# Stop on first failure
+python -m pytest tests/ -x --tb=short
 
-intelligence:
-  lookback_hours: 48            # How far back to check RSS feeds
-  max_articles: 100             # Cap per run
-  feeds:                        # RSS feed URLs + display names
-    - url: "https://..."
-      name: "Source Name"
-  competitors:                  # Companies to track
-    - company: "AWS"
-      watch: ["Bedrock pricing", "new AI services"]
+# Run specific test file
+python -m pytest tests/test_tools.py -v
 
-models:
-  digest: "claude-sonnet"       # Model per mode
-  triage: "gpt-4.1"
-  research: "claude-opus"
-  default: "claude-sonnet"
+# Filter by name pattern
+python -m pytest tests/ -k "digest" -v
 ```
 
 ## Tech Stack
 
 - **Language:** Python 3.12
-- **Agent runtime:** GitHub Copilot SDK (`github-copilot-sdk`) → Copilot CLI server mode (JSON-RPC)
-- **M365 integration:** WorkIQ MCP server (emails, calendar, Teams, files)
-- **Transcript collection:** Playwright Python (Edge browser automation)
+- **Agent runtime:** GitHub Copilot SDK (`github-copilot-sdk`) -> Copilot CLI server mode (JSON-RPC)
+- **User interface:** Telegram bot (`python-telegram-bot`) — conversational + streaming replies + inline action buttons
+- **M365 integration:** WorkIQ MCP server (emails, calendar, Teams, files, people)
+- **Browser automation:** Playwright Python (Edge) — transcript collection, inbox scanning, message sending
 - **External intel:** feedparser (RSS)
 - **Document extraction:** python-docx, python-pptx, PyPDF2, openpyxl
-- **User interface:** Telegram bot (python-telegram-bot, conversational + proactive notifications)
 - **Output sync:** OneDrive (local folder sync)
-- **Logging:** Python `logging` module → structured JSON lines
-- **Config:** YAML with env var expansion
+- **Logging:** Structured JSONL via session hooks (automatic, 100% coverage)
+- **Config:** YAML standing instructions with env var expansion
 
 ## Troubleshooting
 
-**"Config not found"** — Make sure `config/standing-instructions.yaml` exists. Check the path from the project root.
+**"Config not found"** — Make sure `config/standing-instructions.yaml` exists, or set `PULSE_HOME` to a directory containing `standing-instructions.yaml`.
 
 **"Failed to connect to GitHub Copilot SDK"** — The Copilot CLI must be installed and authenticated. Run `github-copilot-cli auth` first.
-
 
 **Transcript collection fails** — The browser needs a logged-in Teams session. Open Edge manually, navigate to `teams.microsoft.com`, sign in, then try again. The `user_data_dir` in config must point to a valid Edge profile.
 
 **WorkIQ queries return nothing** — Accept the WorkIQ EULA first. The MCP server must be installed and accessible on your PATH.
 
 **charmap encoding errors on Windows** — All terminal output is ASCII-safe encoded. If you still see errors, check that your Python is 3.12+ and your terminal supports UTF-8.
+
+See [CLAUDE.md](CLAUDE.md) for full architecture details, technical deep-dives, and design decisions.
