@@ -14,12 +14,12 @@ from collectors.transcripts.navigation import (
     return_to_calendar, find_meeting_buttons, navigate_weeks_back,
 )
 from collectors.transcripts.extraction import extract_meeting_transcript
-from collectors.transcripts.compressor import compress_transcript
+# Per-meeting timeout (extraction only — compression deferred to Phase 0b).
+# Budget: up to ~16s for frame-detection retries + scroll extraction.
+PER_MEETING_TIMEOUT = 90  # 90 seconds (no inline compression)
 
-# Per-meeting timeout (extraction + compression). Prevents one stuck meeting
-# from eating the entire transcript collection budget.  Includes up to ~16s
-# for frame-detection retries + scroll extraction + SDK compression.
-PER_MEETING_TIMEOUT = 240  # 4 minutes
+# Max retries when returning to calendar fails (stale iframe recovery)
+MAX_CALENDAR_RETRIES = 2
 
 # Persistent state — tracks slugs we've already attempted (success or failure).
 # Avoids re-clicking meetings that have no transcript every single run.
@@ -53,37 +53,71 @@ def _slugify(text: str) -> str:
     return text[:60]
 
 
-async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config):
-    """Extract and compress a single meeting transcript. Returns result dict."""
+async def _process_single_meeting(page, iframe, meeting_name, slug, output_dir):
+    """Extract a single meeting transcript (raw only — compression deferred to Phase 0b).
+
+    Returns result dict with collected, opened_recap, should_persist.
+    """
     transcript, opened_recap, should_persist = await extract_meeting_transcript(page, iframe, meeting_name)
     if not transcript:
         return {"collected": False, "opened_recap": opened_recap, "should_persist": should_persist}
 
     date_str = datetime.now().strftime("%Y-%m-%d")
-    compressed = None
-    if client:
-        tc_models = config.get("models", {})
-        compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
-        compressed = await compress_transcript(client, transcript, meeting_name, model=compress_model)
-
-    if compressed:
-        filename = f"{date_str}_{slug}.md"
-        filepath = output_dir / filename
-        header = (
-            f"# {meeting_name}\n"
-            f"**Date**: {date_str} | "
-            f"**Original length**: {len(transcript)} chars | "
-            f"**Compressed**: {len(compressed)} chars\n\n"
-        )
-        filepath.write_text(header + compressed, encoding="utf-8")
-        log.info(f"  SAVED (compressed): {filename} ({len(compressed)} chars from {len(transcript)})")
-    else:
-        filename = f"{date_str}_{slug}.txt"
-        filepath = output_dir / filename
-        filepath.write_text(transcript, encoding="utf-8")
-        log.info(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
+    filename = f"{date_str}_{slug}.txt"
+    filepath = output_dir / filename
+    filepath.write_text(transcript, encoding="utf-8")
+    log.info(f"  SAVED (raw): {filename} ({len(transcript)} chars)")
 
     return {"collected": True, "opened_recap": opened_recap, "should_persist": True}
+
+
+async def _return_to_calendar_with_retry(page, iframe, week_offset: int) -> bool:
+    """Return to calendar with retry on stale iframe.
+
+    When the calendar iframe goes stale after recap navigation, a simple
+    return_to_calendar fails. This function retries with a full page reload
+    to recover.
+
+    Returns True if calendar was restored, False if all retries failed.
+    """
+    for attempt in range(MAX_CALENDAR_RETRIES + 1):
+        try:
+            if attempt > 0:
+                # Full reload — the iframe is stale, need to start fresh
+                log.info(f"  Stale iframe recovery (attempt {attempt + 1})...")
+                await page.goto("https://teams.microsoft.com/v2/calendar",
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(5000)
+
+                # Re-acquire the iframe after reload
+                iframe_loc = page.frame_locator('iframe[name="embedded-page-container"]')
+                try:
+                    await iframe_loc.get_by_role("button").first.wait_for(
+                        state="visible", timeout=15000
+                    )
+                except Exception:
+                    await page.wait_for_timeout(5000)
+
+                # Navigate back to correct week
+                from collectors.transcripts.navigation import navigate_weeks_back, go_to_today
+                await go_to_today(page, iframe_loc)
+                if week_offset > 0:
+                    await navigate_weeks_back(page, iframe_loc, week_offset)
+                    await page.wait_for_timeout(2000)
+            else:
+                await return_to_calendar(page, iframe, force=True,
+                                         week_offset=week_offset)
+
+            # Verify calendar is actually usable
+            buttons = await find_meeting_buttons(page, iframe)
+            if len(buttons) > 0:
+                return True
+            log.warning(f"  Calendar returned 0 buttons (attempt {attempt + 1})")
+
+        except Exception as e:
+            log.warning(f"  Return to calendar failed (attempt {attempt + 1}): {e}")
+
+    return False
 
 
 async def run_transcript_collection(client, config: dict):
@@ -91,6 +125,7 @@ async def run_transcript_collection(client, config: dict):
 
     No LLM involved — deterministic navigation script.
     Uses multi-week lookback (config: transcripts.lookback_weeks, default 2).
+    Saves raw .txt files only — compression is deferred to Phase 0b.
 
     Uses the shared BrowserManager when available (daemon mode).
     Falls back to launching its own browser (CLI --once mode).
@@ -98,7 +133,7 @@ async def run_transcript_collection(client, config: dict):
     log.info("Transcript collection start")
 
     tc = config.get("transcripts", {})
-    max_meetings = tc.get("max_per_run", 20)
+    max_meetings = tc.get("max_per_run", 50)
     lookback_weeks = tc.get("lookback_weeks", 2)
     output_dir = Path(tc.get("output_dir", str(TRANSCRIPTS_DIR)))
     if not output_dir.is_absolute():
@@ -255,7 +290,7 @@ async def run_transcript_collection(client, config: dict):
                 should_persist = True  # default: persist unless told otherwise
                 try:
                     result = await asyncio.wait_for(
-                        _process_single_meeting(page, iframe, meeting_name, slug, output_dir, client, config),
+                        _process_single_meeting(page, iframe, meeting_name, slug, output_dir),
                         timeout=PER_MEETING_TIMEOUT,
                     )
                     opened_recap = result.get("opened_recap", False)
@@ -292,15 +327,15 @@ async def run_transcript_collection(client, config: dict):
 
                 # Navigate back to calendar for next meeting
                 if opened_recap:
-                    try:
-                        await return_to_calendar(page, iframe, force=True,
-                                                 week_offset=current_week_offset)
-                        # Re-scan buttons — calendar may have different state after return
+                    calendar_ok = await _return_to_calendar_with_retry(
+                        page, iframe, current_week_offset
+                    )
+                    if calendar_ok:
                         meeting_buttons = await find_meeting_buttons(page, iframe)
                         log.info(f"  Re-scanned: {len(meeting_buttons)} meetings after return.")
                         consecutive_click_failures = 0
-                    except Exception:
-                        log.warning("  FATAL: Cannot return to calendar, stopping collection.")
+                    else:
+                        log.warning("  FATAL: Cannot return to calendar, stopping week.")
                         meeting_buttons = []
                 else:
                     # Simple popup — just escape

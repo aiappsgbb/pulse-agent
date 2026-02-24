@@ -565,10 +565,10 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         try:
             await asyncio.wait_for(
                 run_transcript_collection(client, config),
-                timeout=600,  # 10 minute hard cap
+                timeout=1800,  # 30 minute hard cap (extraction only, compression deferred to Phase 0b)
             )
         except asyncio.TimeoutError:
-            log.warning("  Transcript collection timed out after 10 minutes (non-fatal, continuing with what was saved)")
+            log.warning("  Transcript collection timed out after 30 minutes (non-fatal, continuing with what was saved)")
         except Exception as e:
             log.warning(f"  Transcript collection failed (non-fatal): {e}")
     else:
