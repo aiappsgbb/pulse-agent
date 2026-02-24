@@ -11,6 +11,5 @@ Your job:
 4. Generate a structured daily digest combining everything
 5. Draft GBB Pulse signals for any customer wins, losses, escalations, compete intel, or product feedback found in the content
 6. Use `write_output` to save the digest AND each signal as separate markdown files
-7. Use `log_action` to log each source you analyze
 
 Be SPECIFIC — use names, dates, numbers. Do NOT write vague summaries.

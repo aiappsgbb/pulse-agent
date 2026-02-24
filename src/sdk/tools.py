@@ -12,19 +12,13 @@ import re
 import yaml
 
 from core.constants import (
-    LOGS_DIR, OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME,
+    OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME,
     TRANSCRIPTS_DIR, DOCUMENTS_DIR, EMAILS_DIR, DIGESTS_DIR, INTEL_DIR,
 )
 from core.state import load_json_state, save_json_state
 
 
 # --- Tool parameter schemas ---
-
-class LogActionParams(BaseModel):
-    action: str
-    reasoning: str
-    category: str = "general"
-
 
 class WriteOutputParams(BaseModel):
     filename: str
@@ -102,29 +96,6 @@ class SearchLocalFilesParams(BaseModel):
 
 
 # --- Tool handlers ---
-
-@define_tool(
-    name="log_action",
-    description="Log an action the agent took, with reasoning. Used for audit trail and M365 Copilot discoverability.",
-)
-def log_action(params: LogActionParams, invocation: ToolInvocation) -> str:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().isoformat()
-    log_entry = {
-        "timestamp": timestamp,
-        "action": params.action,
-        "reasoning": params.reasoning,
-        "category": params.category,
-    }
-
-    # Append to daily log file
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    log_file = LOGS_DIR / f"{date_str}.jsonl"
-    with open(log_file, "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
-
-    return f"Logged: {params.action}"
-
 
 @define_tool(
     name="write_output",
@@ -545,7 +516,7 @@ def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -
 def get_tools() -> list[Tool]:
     """Return custom tools for registration on a session."""
     return [
-        log_action, write_output, queue_task, dismiss_item, add_note,
+        write_output, queue_task, dismiss_item, add_note,
         schedule_task, list_schedules_tool, update_schedule_tool, cancel_schedule,
         search_local_files, update_project,
         send_teams_message, send_email_reply,

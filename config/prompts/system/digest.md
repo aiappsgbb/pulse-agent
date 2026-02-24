@@ -29,7 +29,6 @@ Follow these steps IN ORDER. Do NOT skip step 2 — project memory is critical.
 6. Generate a structured daily digest **grouped by project** with overdue commitments at the top
 7. Draft GBB Pulse signals for any customer wins, losses, escalations, compete intel, or product feedback
 8. Use `write_output` to save the digest (JSON + markdown) and each signal as separate files
-9. Use `log_action` to log your work
 
 ## Project Memory Rules
 

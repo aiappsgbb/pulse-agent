@@ -68,16 +68,22 @@ Loaded from `config/standing-instructions.yaml`. Define:
 
 ## Tools
 
-Agent can use built-in GHCP SDK tools (file system, browser, shell) plus 9 custom tools:
-- `log_action` -- write action + reasoning to local audit log
-- `write_output` -- write files to the output/ directory (path traversal blocked)
-- `queue_task` -- add a job to tasks/pending/ (digest, research, transcripts, intel)
+Agent can use built-in GHCP SDK tools (file system, browser, shell) plus 13 custom tools:
+- `write_output` -- write files to $PULSE_HOME (path traversal blocked)
+- `queue_task` -- add a job to jobs/pending/ (digest, research, transcripts, intel)
 - `dismiss_item` -- mark a digest item as handled (won't appear in future digests)
 - `add_note` -- attach a note to a digest item for future reference
 - `schedule_task` -- create a recurring schedule (daily, weekdays, interval patterns)
 - `list_schedules` -- list all configured recurring schedules
+- `update_schedule` -- update an existing schedule's pattern/description/status
 - `cancel_schedule` -- remove a recurring schedule by ID
-- `search_local_files` -- search transcripts/documents/emails for keywords with context
+- `search_local_files` -- search transcripts/documents/emails/digests/intel/projects for keywords
+- `update_project` -- create/update a project memory file (YAML)
+- `send_teams_message` -- queue a Teams message for deterministic delivery via shared browser
+- `send_email_reply` -- queue an email reply for deterministic delivery via shared browser
+- `send_task_to_agent` -- send a task/question to another team member's Pulse Agent via OneDrive
+
+All tool usage is automatically logged to the JSONL audit trail via `on_post_tool_use` session hook — no manual logging tool needed.
 
 ## Skills
 

@@ -14,7 +14,6 @@ You receive collected content (transcripts, documents, emails, RSS articles, Wor
 
 ## Rules
 - Use write_output to save both JSON and markdown files.
-- Use log_action to log your analysis.
 - Be SPECIFIC — names, dates, amounts. No vague summaries.
 - FILTER OUT everything already dealt with.
 - TARGET: 30-50 lines for the markdown digest. Be brutal about what makes the cut.

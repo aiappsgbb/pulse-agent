@@ -38,5 +38,4 @@ Save each signal as `pulse-signals/YYYY-MM-DD-{slug}.md` using write_output:
 - Only draft signals with SPECIFIC facts (customer names, deal sizes, product names)
 - Do NOT fabricate — if the source material is vague, skip it
 - One file per signal
-- Use log_action to log each signal drafted
 - If nothing qualifies, say so — don't force it

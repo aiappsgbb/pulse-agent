@@ -19,6 +19,7 @@ from core.constants import PROJECT_ROOT, PULSE_HOME, CONFIG_DIR
 from core.logging import log
 from sdk.prompts import load_prompt
 from sdk.agents import load_agents, _mcp_config
+from sdk.hooks import build_hooks
 
 MAX_SESSION_RETRIES = 3
 
@@ -170,6 +171,7 @@ def build_session_config(
         "working_directory": working_dir,
         "streaming": True,
         "on_permission_request": auto_approve_handler,
+        "hooks": build_hooks(mode_key),
     }
 
     # Excluded tools

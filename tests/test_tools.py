@@ -9,7 +9,6 @@ import yaml
 from sdk.tools import (
     get_tools,
     load_actions,
-    log_action,
     write_output,
     queue_task,
     dismiss_item,
@@ -46,20 +45,6 @@ def test_load_actions_existing_file(tmp_dir):
         result = load_actions()
     assert len(result["dismissed"]) == 1
     assert result["notes"]["y"]["note"] == "z"
-
-
-# --- log_action ---
-
-
-async def test_log_action_writes_jsonl(tmp_dir):
-    with patch("sdk.tools.LOGS_DIR", tmp_dir):
-        result = await log_action.handler({"arguments": {"action": "tested", "reasoning": "because tests", "category": "test"}})
-    assert result["resultType"] == "success"
-    assert "Logged" in result["textResultForLlm"]
-    log_files = list(tmp_dir.glob("*.jsonl"))
-    assert len(log_files) == 1
-    entry = json.loads(log_files[0].read_text().strip())
-    assert entry["action"] == "tested"
 
 
 # --- write_output ---
@@ -131,10 +116,10 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 14
+    assert len(tools) == 13
     names = {t.name for t in tools}
     assert names == {
-        "log_action", "write_output", "queue_task", "dismiss_item", "add_note",
+        "write_output", "queue_task", "dismiss_item", "add_note",
         "schedule_task", "list_schedules", "update_schedule", "cancel_schedule",
         "search_local_files", "update_project",
         "send_teams_message", "send_email_reply",

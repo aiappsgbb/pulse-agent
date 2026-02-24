@@ -321,4 +321,3 @@ CRITICAL:
 - Be SPECIFIC (names, dates, amounts). No vague summaries.
 - FILTER OUT everything already dealt with. This is the whole point.
 - If everything is handled, say "Nothing outstanding" — don't pad it.
-- Use `log_action` to log your work.

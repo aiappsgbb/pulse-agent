@@ -34,4 +34,3 @@ CRITICAL:
 - Skip generic AI hype articles with no substance.
 - Be specific — names, products, pricing, dates.
 - If nothing significant happened, say so. Don't pad.
-- Use `log_action` to log your analysis.

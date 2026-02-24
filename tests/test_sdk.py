@@ -102,6 +102,13 @@ def test_build_session_config_monitor():
     assert "system_message" in sc
     assert sc["system_message"]["mode"] == "append"
     assert "workiq" in sc.get("mcp_servers", {})
+    # Hooks are attached to all sessions
+    assert "hooks" in sc
+    hooks = sc["hooks"]
+    assert callable(hooks["on_pre_tool_use"])
+    assert callable(hooks["on_post_tool_use"])
+    assert callable(hooks["on_error_occurred"])
+    assert callable(hooks["on_session_end"])
 
 
 def test_build_session_config_chat():
