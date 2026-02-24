@@ -196,6 +196,15 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     if chat_id:
                         await _notify(telegram_app, chat_id, "Transcripts complete.")
 
+                elif job_type == "knowledge":
+                    # Pipeline mode — archive + per-project enrichment sessions
+                    from sdk.runner import run_knowledge_pipeline
+                    await run_knowledge_pipeline(client, config)
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    if chat_id:
+                        await _notify(telegram_app, chat_id, "Knowledge mining complete.")
+
                 elif job_type in ("digest", "monitor", "intel"):
                     await run_job(client, config, job_type,
                                   telegram_app=telegram_app, chat_id=chat_id)

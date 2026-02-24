@@ -26,7 +26,7 @@ schedule:
   - id: morning-digest
     type: digest
     pattern: "daily 07:00"
-    description: "Morning digest with transcript collection"
+    description: "Morning digest — reads overnight knowledge + transcripts, produces project-oriented summary"
   - id: triage
     type: monitor
     pattern: "every 30m"
@@ -36,6 +36,10 @@ schedule:
     type: intel
     pattern: "daily 09:00"
     description: "Morning intel brief"
+  - id: nightly-knowledge
+    type: knowledge
+    pattern: "daily 02:00"
+    description: "Overnight knowledge mining — archive emails/Teams, enrich per-project"
 
 monitoring:
   office_hours:

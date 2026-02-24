@@ -573,52 +573,10 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
     from collectors.outlook_inbox import scan_outlook_inbox, format_outlook_for_prompt
     from collectors.calendar import scan_calendar, format_calendar_for_prompt
-    from collectors.transcripts.compressor import compress_existing_transcripts
-    from collectors.transcripts import run_transcript_collection
-    from core.browser import get_browser_manager
 
-    # Phase 0a: Collect fresh transcripts from Teams (multi-week lookback)
-    # The collector already deduplicates by slug — it skips meetings that have
-    # already been collected. No freshness check needed here.
-    browser_mgr = get_browser_manager()
-
-    if browser_mgr and browser_mgr.context:
-        log.info("Phase 0a: Collecting fresh transcripts from Teams...")
-        try:
-            await asyncio.wait_for(
-                run_transcript_collection(client, config),
-                timeout=1800,  # 30 minute hard cap (extraction only, compression deferred to Phase 0b)
-            )
-        except asyncio.TimeoutError:
-            log.warning("  Transcript collection timed out after 30 minutes (non-fatal, continuing with what was saved)")
-        except Exception as e:
-            log.warning(f"  Transcript collection failed (non-fatal): {e}")
-    else:
-        log.info("Phase 0a: Skipping transcript collection (no browser)")
-
-    # Phase 0b: Compress any raw .txt transcripts before content collection
-    if client:
-        transcripts_dir = TRANSCRIPTS_DIR
-        if transcripts_dir.exists() and list(transcripts_dir.glob("*.txt")):
-            tc_models = config.get("models", {})
-            compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
-            log.info("Phase 0b: Compressing raw transcripts via GHCP SDK...")
-            compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
-            log.info(f"  Compressed {compressed_count} transcripts")
-
-    # Phase 0c: Knowledge mining — archive emails/Teams via WorkIQ, enrich projects
-    # Runs as a pipeline: archive once, then enrich per-project (prioritized by activity).
-    if client:
-        log.info("Phase 0c: Running knowledge pipeline...")
-        try:
-            await asyncio.wait_for(
-                run_knowledge_pipeline(client, config),
-                timeout=900,  # 15 minute cap for full pipeline
-            )
-        except asyncio.TimeoutError:
-            log.warning("  Knowledge pipeline timed out after 15 minutes (non-fatal)")
-        except Exception as e:
-            log.warning(f"  Knowledge pipeline failed (non-fatal): {e}")
+    # Transcript collection + compression runs in the overnight knowledge pipeline
+    # (daily 02:00). The digest just reads whatever was already collected/compressed.
+    # Knowledge mining also runs overnight — projects are already enriched by morning.
 
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
@@ -887,6 +845,37 @@ async def run_knowledge_pipeline(client, config: dict):
     WorkIQ and search_local_files to determine what's worth updating.
     """
     log.info("=== Knowledge pipeline start ===")
+
+    # Phase 0: Collect fresh transcripts + compress
+    # Knowledge needs fresh data to mine — transcripts, emails, Teams messages.
+    # Transcript collection runs here (not in digest) so overnight runs have fresh content.
+    from collectors.transcripts.compressor import compress_existing_transcripts
+    from collectors.transcripts import run_transcript_collection
+    from core.browser import get_browser_manager
+
+    browser_mgr = get_browser_manager()
+    if browser_mgr and browser_mgr.context:
+        log.info("  Phase 0a: Collecting fresh transcripts from Teams...")
+        try:
+            await asyncio.wait_for(
+                run_transcript_collection(client, config),
+                timeout=1800,  # 30 min cap
+            )
+        except asyncio.TimeoutError:
+            log.warning("    Transcript collection timed out (non-fatal)")
+        except Exception as e:
+            log.warning(f"    Transcript collection failed (non-fatal): {e}")
+    else:
+        log.info("  Phase 0a: Skipping transcript collection (no browser)")
+
+    if client:
+        transcripts_dir = TRANSCRIPTS_DIR
+        if transcripts_dir.exists() and list(transcripts_dir.glob("*.txt")):
+            tc_models = config.get("models", {})
+            compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
+            log.info("  Phase 0b: Compressing raw transcripts via GHCP SDK...")
+            compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
+            log.info(f"    Compressed {compressed_count} transcripts")
 
     # Phase 1: Run archive session (global — emails, Teams messages, new project discovery)
     log.info("  Phase 1: Archiving emails/Teams messages + discovering new projects...")
