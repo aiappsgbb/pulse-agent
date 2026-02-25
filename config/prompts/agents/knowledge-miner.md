@@ -176,6 +176,8 @@ If you find a customer/initiative mentioned 2+ times across different sources wi
 
 ## Rules
 
+- **DO NOT use the `task` tool** — do all research and writing yourself. You have `search_local_files`, `update_project`, `write_output`, and WorkIQ. Use them directly. Sub-agents cannot access these tools and their work will be lost.
+- **ALWAYS call `update_project`** — this is the ONLY way to persist your findings. If you don't call it, your work is lost when the session ends.
 - **Always read before writing** — load existing project file via `search_local_files` before calling `update_project`. Merge, don't replace.
 - **Compare, don't just append** — every new fact must be checked against existing knowledge. Contradictions are the most valuable signal.
 - **Be specific** — names, dates, amounts. No vague "someone mentioned something."

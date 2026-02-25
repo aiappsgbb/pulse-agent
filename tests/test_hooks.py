@@ -122,7 +122,7 @@ def test_post_tool_use_truncates_large_args(tmp_dir):
         }, CTX)
     entry = json.loads(list(tmp_dir.glob("*.jsonl"))[0].read_text().strip())
     assert len(entry["args"]) <= 600  # 500 + some dict formatting
-    assert len(entry["result_preview"]) <= 600
+    assert len(entry["result_preview"]) <= 1100  # 1000 + some dict formatting
 
 
 def test_post_tool_use_handles_none_args(tmp_dir):

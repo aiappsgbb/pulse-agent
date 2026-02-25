@@ -55,9 +55,9 @@ def make_post_tool_use_hook():
             tool_args = input_data.get("toolArgs")
             tool_result = input_data.get("toolResult")
 
-            # Truncate for audit log — keep it manageable
+            # Truncate for audit log — keep it manageable but show full errors
             args_str = str(tool_args)[:500] if tool_args else ""
-            result_str = str(tool_result)[:500] if tool_result else ""
+            result_str = str(tool_result)[:1000] if tool_result else ""
 
             _write_audit_entry({
                 "timestamp": datetime.now().isoformat(),

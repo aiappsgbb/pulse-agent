@@ -882,7 +882,7 @@ async def run_knowledge_pipeline(client, config: dict):
     try:
         await asyncio.wait_for(
             run_job(client, config, "knowledge-archive"),
-            timeout=300,  # 5 min cap for archival
+            timeout=600,  # 10 min cap for archival
         )
         log.info("  Phase 1 complete.")
     except asyncio.TimeoutError:
@@ -933,12 +933,12 @@ async def run_knowledge_pipeline(client, config: dict):
         try:
             await asyncio.wait_for(
                 run_job(client, config, "knowledge-project", context=project_context),
-                timeout=180,  # 3 min per project
+                timeout=600,  # 10 min per project
             )
             enriched += 1
             log.info(f"    Done: {pname}")
         except asyncio.TimeoutError:
-            log.warning(f"    Timeout enriching {pname} (3 min cap)")
+            log.warning(f"    Timeout enriching {pname} (10 min cap)")
         except Exception as e:
             log.warning(f"    Failed enriching {pname}: {e}")
 

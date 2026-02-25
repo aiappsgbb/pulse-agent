@@ -71,6 +71,14 @@ knowledge-archive:
   system_prompt_mode: append
   trigger_prompt: config/prompts/triggers/knowledge-archive.md
   pre_process: collect_knowledge_context
+  excluded_tools:
+    - task
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
 
 knowledge-project:
   model_key: digest
@@ -80,6 +88,14 @@ knowledge-project:
   system_prompt: config/prompts/system/knowledge.md
   system_prompt_mode: append
   trigger_prompt: config/prompts/triggers/knowledge-project.md
+  excluded_tools:
+    - task
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
 
 transcripts:
   standalone: true
