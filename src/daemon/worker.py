@@ -2,14 +2,40 @@
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
 
-from core.constants import PULSE_HOME
+from core.constants import PULSE_HOME, JOBS_DIR
 from core.config import mark_task_completed
 from core.logging import log
+
+
+_PROXY_RETRY_DELAY = 300       # 5 minutes between retries
+_PROXY_MAX_RETRIES = 48        # 4 hours max (48 × 5 min)
+
+
+def _requeue_with_delay(job: dict, retry_count: int, delay_seconds: int = _PROXY_RETRY_DELAY):
+    """Write a retry job YAML to jobs/pending/ with a retry_after timestamp.
+
+    Strips internal fields (_file, _schedule_id, _chat_id) so the requeued job
+    is treated as a clean file-based job picked up by sync_jobs_from_onedrive.
+    """
+    retry_after = (datetime.now() + timedelta(seconds=delay_seconds)).isoformat()
+    retry_job = {k: v for k, v in job.items() if not k.startswith("_")}
+    retry_job["_retry_count"] = retry_count
+    retry_job["_retry_after"] = retry_after
+    retry_job["_retry_reason"] = "ProxyResponseError"
+
+    pending_dir = JOBS_DIR / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    job_type = retry_job.get("type", "job")
+    file_path = pending_dir / f"{timestamp}-retry-{job_type}-{retry_count}.yaml"
+    with open(file_path, "w") as f:
+        yaml.dump(retry_job, f, default_flow_style=False)
+    log.info(f"  Retry job written: {file_path.name} (due after {retry_after})")
 
 
 # --- Persistent chat session (infinite_sessions) ---
@@ -262,16 +288,35 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     log.warning(f"  Unknown job type: {job_type}")
 
         except Exception as e:
-            log.exception(f"  Job failed: {job_name} — {e}")
-            # Reset schedule so it retries instead of waiting until next day
-            schedule_id = job.get("_schedule_id")
-            if schedule_id:
-                from core.scheduler import reset_run
-                reset_run(schedule_id)
-            if chat_id:
-                from tg.bot import stop_typing
-                stop_typing(chat_id)
-                await _notify(telegram_app, chat_id, f"Failed: {job_name}\n{e}")
+            from sdk.runner import ProxyError
+            if isinstance(e, ProxyError):
+                retry_count = job.get("_retry_count", 0) + 1
+                if retry_count > _PROXY_MAX_RETRIES:
+                    log.error(f"  Proxy retry limit reached for {job_name} ({retry_count} attempts)")
+                    if chat_id:
+                        from tg.bot import stop_typing
+                        stop_typing(chat_id)
+                        await _notify(telegram_app, chat_id,
+                                      f"Proxy error: {job_name} exhausted retries after {retry_count} attempts.")
+                else:
+                    _requeue_with_delay(job, retry_count=retry_count)
+                    log.warning(f"  Proxy 502 — requeued {job_name} (attempt {retry_count}, retry in 5 min)")
+                    if chat_id and retry_count == 1:
+                        from tg.bot import stop_typing
+                        stop_typing(chat_id)
+                        await _notify(telegram_app, chat_id,
+                                      f"Network error (502) — retrying {job_name} in 5 min.")
+            else:
+                log.exception(f"  Job failed: {job_name} — {e}")
+                # Reset schedule so it retries instead of waiting until next day
+                schedule_id = job.get("_schedule_id")
+                if schedule_id:
+                    from core.scheduler import reset_run
+                    reset_run(schedule_id)
+                if chat_id:
+                    from tg.bot import stop_typing
+                    stop_typing(chat_id)
+                    await _notify(telegram_app, chat_id, f"Failed: {job_name}\n{e}")
 
         finally:
             job_queue.task_done()

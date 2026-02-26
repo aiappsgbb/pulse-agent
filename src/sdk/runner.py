@@ -1,5 +1,9 @@
 """Unified config-driven job runner — replaces per-mode orchestration functions."""
 
+
+class ProxyError(RuntimeError):
+    """Raised when GHCP SDK fails with a proxy/firewall 502 (ProxyResponseError)."""
+
 import asyncio
 import json
 from datetime import datetime
@@ -90,6 +94,8 @@ async def run_job(
 
         if handler.error:
             log.error(f"  Session error: {handler.error}")
+            if "ProxyResponseError" in str(handler.error):
+                raise ProxyError(f"HTTP 502 proxy error: {handler.error}")
             return None
 
         # Post-process: validate digest JSON if written

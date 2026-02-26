@@ -79,16 +79,28 @@ def load_config() -> dict:
 
 
 def load_pending_tasks() -> list[dict]:
-    """Load all pending jobs from jobs/pending/."""
+    """Load all pending jobs from jobs/pending/.
+
+    Skips retry jobs whose _retry_after timestamp has not yet passed.
+    """
+    from datetime import datetime
     pending_dir = JOBS_DIR / "pending"
     tasks = []
     if not pending_dir.exists():
         return tasks
+    now = datetime.now()
     for task_file in sorted(pending_dir.glob("*.yaml")):
         with open(task_file, "r") as f:
             task = yaml.safe_load(f)
-            task["_file"] = str(task_file)
-            tasks.append(task)
+        retry_after = task.get("_retry_after")
+        if retry_after:
+            try:
+                if datetime.fromisoformat(retry_after) > now:
+                    continue  # Not yet due — skip until next sync cycle
+            except (ValueError, TypeError):
+                pass  # Malformed timestamp — proceed anyway
+        task["_file"] = str(task_file)
+        tasks.append(task)
     return tasks
 
 
