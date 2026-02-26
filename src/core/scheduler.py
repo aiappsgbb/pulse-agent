@@ -300,7 +300,6 @@ async def scheduler_loop(
     When a schedule is due, enqueues the job and marks it as run.
     Also pulls new job files from OneDrive each tick (inter-agent requests, etc.).
     """
-    from tg.bot import get_proactive_chat_id
     from daemon.sync import sync_jobs_from_onedrive
 
     log.info(f"Scheduler started (checking every {check_interval}s)")
@@ -315,12 +314,10 @@ async def scheduler_loop(
 
             for schedule in schedules:
                 if is_due(schedule, now, config=config):
-                    chat_id = get_proactive_chat_id()
                     job = {
                         "type": schedule["type"],
                         "_source": f"schedule:{schedule['id']}",
                         "_schedule_id": schedule["id"],
-                        "_chat_id": chat_id,
                     }
                     job_queue.put_nowait(job)
                     # Mark as run immediately to prevent re-fire while job runs.

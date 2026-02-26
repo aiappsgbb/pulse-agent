@@ -13,25 +13,18 @@ def test_empty_config():
     """Empty config triggers multiple warnings."""
     warnings = run_diagnostics({})
     assert any("models" in w for w in warnings)
-    assert any("bot_token" in w for w in warnings)
     assert any("monitoring" in w for w in warnings)
 
 
-def test_missing_telegram_token():
-    config = {"models": {"default": "gpt-4.1"}, "telegram": {}, "monitoring": {}}
-    warnings = run_diagnostics(config)
-    assert any("bot_token" in w for w in warnings)
-
-
 def test_copilot_cli_missing():
-    config = {"models": {"default": "gpt-4.1"}, "telegram": {"bot_token": "x"}, "monitoring": {}}
+    config = {"models": {"default": "gpt-4.1"}, "monitoring": {}}
     with patch("core.diagnostics.shutil.which", return_value=None):
         warnings = run_diagnostics(config)
     assert any("Copilot CLI" in w for w in warnings)
 
 
 def test_copilot_cli_present():
-    config = {"models": {"default": "gpt-4.1"}, "telegram": {"bot_token": "x"}, "monitoring": {}}
+    config = {"models": {"default": "gpt-4.1"}, "monitoring": {}}
     with patch("core.diagnostics.shutil.which", side_effect=lambda cmd: "/usr/bin/copilot" if cmd == "copilot" else None):
         warnings = run_diagnostics(config)
     assert not any("Copilot CLI" in w for w in warnings)
@@ -39,7 +32,7 @@ def test_copilot_cli_present():
 
 def test_workiq_missing_is_optional():
     """WorkIQ missing is a warning but mentions 'optional'."""
-    config = {"models": {"default": "gpt-4.1"}, "telegram": {"bot_token": "x"}, "monitoring": {}}
+    config = {"models": {"default": "gpt-4.1"}, "monitoring": {}}
     with patch("core.diagnostics.shutil.which", side_effect=lambda cmd: "/bin/copilot" if cmd == "copilot" else None):
         warnings = run_diagnostics(config)
     workiq_warnings = [w for w in warnings if "WorkIQ" in w]
@@ -49,7 +42,7 @@ def test_workiq_missing_is_optional():
 
 def test_browser_profile_missing(tmp_path):
     config = {
-        "models": {"default": "gpt-4.1"}, "telegram": {"bot_token": "x"}, "monitoring": {},
+        "models": {"default": "gpt-4.1"}, "monitoring": {},
         "transcripts": {"playwright": {"user_data_dir": str(tmp_path / "nonexistent")}},
     }
     with patch("core.diagnostics.shutil.which", return_value="/bin/copilot"):
@@ -62,7 +55,7 @@ def test_browser_profile_exists(tmp_path):
     profile_dir = tmp_path / "edge-profile"
     profile_dir.mkdir()
     config = {
-        "models": {"default": "gpt-4.1"}, "telegram": {"bot_token": "x"}, "monitoring": {},
+        "models": {"default": "gpt-4.1"}, "monitoring": {},
         "transcripts": {"playwright": {"user_data_dir": str(profile_dir)}},
     }
     with patch("core.diagnostics.shutil.which", return_value="/bin/copilot"):
@@ -74,7 +67,6 @@ def test_complete_config_minimal_warnings():
     """A complete config with all deps present produces only optional warnings."""
     config = {
         "models": {"default": "gpt-4.1"},
-        "telegram": {"bot_token": "test-token"},
         "monitoring": {},
     }
     with patch("core.diagnostics.shutil.which", return_value="/bin/exists"):

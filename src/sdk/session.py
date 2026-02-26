@@ -36,31 +36,6 @@ def auto_approve_handler(request: PermissionRequest, context: dict) -> Permissio
     return PermissionRequestResult(kind="approved", rules=[])
 
 
-def make_user_input_handler(telegram_app, chat_id: int):
-    """Create an async UserInputHandler that relays ask_user calls to Telegram.
-
-    When the agent calls ask_user (e.g., to confirm a Teams message), this
-    handler sends the question to the user's Telegram chat and waits for
-    their reply. Timeout after 120s -> returns "no".
-    """
-    async def handler(request, context):
-        from tg.bot import notify, wait_for_confirmation
-        import asyncio
-
-        question = request.get("question", "")
-        await notify(telegram_app, chat_id, question)
-
-        try:
-            answer = await wait_for_confirmation(chat_id, timeout=120)
-        except asyncio.TimeoutError:
-            await notify(telegram_app, chat_id, "(Timed out — action cancelled)")
-            answer = "no"
-
-        return {"answer": answer, "wasFreeform": True}
-
-    return handler
-
-
 def _build_system_prompt(config: dict, mode: str, mode_cfg: dict) -> str:
     """Build system prompt by loading base + mode-specific prompt with variable interpolation."""
     # Chat mode replaces the entire system prompt
@@ -117,8 +92,6 @@ def build_session_config(
     config: dict,
     mode: str,
     tools: list[Tool] | None = None,
-    telegram_app=None,
-    chat_id: int | None = None,
     cdp_endpoint: str | None = None,
 ) -> SessionConfig:
     """Build a SessionConfig from modes.yaml + standing instructions.
@@ -179,11 +152,10 @@ def build_session_config(
     if excluded:
         session_config["excluded_tools"] = excluded
 
-    # User input handler (for ask_user -> Telegram relay)
-    if mode_cfg.get("user_input_handler") == "telegram" and telegram_app and chat_id:
-        session_config["on_user_input_request"] = make_user_input_handler(
-            telegram_app, chat_id
-        )
+    # User input handler (for ask_user -> file-based IPC relay to TUI)
+    if mode_cfg.get("user_input_handler"):
+        from tui.ipc import make_user_input_handler_file
+        session_config["on_user_input_request"] = make_user_input_handler_file()
 
     if tools:
         session_config["tools"] = tools
@@ -197,8 +169,6 @@ async def agent_session(
     config: dict,
     mode: str,
     tools: list[Tool] | None = None,
-    telegram_app=None,
-    chat_id: int | None = None,
     on_delta: Callable[[str], None] | None = None,
 ):
     """Async context manager for GHCP SDK sessions.
@@ -222,7 +192,6 @@ async def agent_session(
 
     session_config = build_session_config(
         config, mode=mode, tools=tools,
-        telegram_app=telegram_app, chat_id=chat_id,
         cdp_endpoint=cdp_endpoint,
     )
 

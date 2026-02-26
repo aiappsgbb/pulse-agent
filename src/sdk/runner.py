@@ -29,8 +29,6 @@ async def run_job(
     config: dict,
     mode: str,
     context: dict | None = None,
-    telegram_app=None,
-    chat_id: int | None = None,
     on_delta=None,
 ) -> str | None:
     """Unified entry point for running any SDK-based job.
@@ -40,8 +38,6 @@ async def run_job(
         config: Parsed standing-instructions.yaml
         mode: Job mode (monitor, digest, intel, research, chat)
         context: Extra context for the job (e.g. research task details, chat prompt)
-        telegram_app: Telegram Application (for ask_user relay)
-        chat_id: Telegram chat ID
         on_delta: Optional callback for streaming text deltas
     Returns:
         Response text from the agent, or None
@@ -79,8 +75,6 @@ async def run_job(
     async with agent_session(
         client, config, mode_key,
         tools=get_tools(),
-        telegram_app=telegram_app,
-        chat_id=chat_id,
         on_delta=on_delta,
     ) as (session, handler):
         log.info("  Agent working...")

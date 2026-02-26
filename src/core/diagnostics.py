@@ -15,9 +15,6 @@ def run_diagnostics(config: dict) -> list[str]:
     if not config.get("models"):
         warnings.append("No 'models' section in config")
 
-    if not config.get("telegram", {}).get("bot_token"):
-        warnings.append("No Telegram bot_token configured")
-
     if "monitoring" not in config:
         warnings.append("No 'monitoring' section in config")
 

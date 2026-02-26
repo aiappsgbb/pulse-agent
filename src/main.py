@@ -1,18 +1,20 @@
 """Pulse Agent — Autonomous Digital Employee
 
-Always-on daemon with Telegram interface.
+Always-on daemon with TUI + desktop notification interfaces.
 Architecture: asyncio.Queue → worker processes jobs immediately.
 
-- Telegram messages land on the queue instantly
 - Heartbeat puts triage on the queue every 30 minutes
 - OneDrive job files are pulled each cycle
 - Worker executes jobs one at a time (no SDK concurrency issues)
+- TUI chat requests polled every 5s; status file written every 60s
 """
 
 import asyncio
 import argparse
+import json
 import signal
 import sys
+from datetime import datetime
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -178,11 +180,8 @@ async def main():
         except NotImplementedError:
             pass  # Windows
 
+    boot_time = datetime.now()
     job_queue = asyncio.Queue()
-
-    # Start Telegram bot
-    from tg.bot import start_telegram_bot, stop_telegram_bot
-    telegram_app = await start_telegram_bot(config, job_queue)
 
     # Pull any pending jobs from OneDrive (picks up inter-agent requests immediately)
     from daemon.sync import sync_jobs_from_onedrive
@@ -196,10 +195,18 @@ async def main():
 
     # Start worker and scheduler (scheduler handles all periodic jobs)
     from daemon.worker import job_worker
-    worker_task = asyncio.create_task(job_worker(client, config, job_queue, telegram_app))
+    worker_task = asyncio.create_task(job_worker(client, config, job_queue))
     scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, shutdown_event))
 
-    log.info("Daemon running — Telegram + scheduler active. Ctrl+C to stop.")
+    # TUI support: status file writer + chat request poller
+    status_task = asyncio.create_task(
+        _write_daemon_status_loop(job_queue, boot_time, shutdown_event)
+    )
+    chat_poll_task = asyncio.create_task(
+        _poll_tui_chat_requests(client, config, job_queue, shutdown_event)
+    )
+
+    log.info("Daemon running — TUI + scheduler active. Ctrl+C to stop.")
 
     # Wait for shutdown
     await shutdown_event.wait()
@@ -207,7 +214,8 @@ async def main():
     # Cleanup
     scheduler_task.cancel()
     worker_task.cancel()
-    await stop_telegram_bot(telegram_app)
+    status_task.cancel()
+    chat_poll_task.cancel()
     from daemon.worker import destroy_chat_session
     await destroy_chat_session()
     if browser:
@@ -218,6 +226,76 @@ async def main():
         log.warning("client.stop() hung — forcing shutdown")
         await client.force_stop()
     log.info("Pulse Agent stopped.")
+
+
+async def _write_daemon_status_loop(
+    job_queue: asyncio.Queue,
+    boot_time: datetime,
+    shutdown_event: asyncio.Event,
+) -> None:
+    """Write .daemon-status.json every 60s for TUI status bar."""
+    from core.constants import PULSE_HOME
+
+    status_file = PULSE_HOME / ".daemon-status.json"
+
+    while not shutdown_event.is_set():
+        try:
+            uptime_s = int((datetime.now() - boot_time).total_seconds())
+            status = {
+                "boot_time": boot_time.isoformat(),
+                "uptime_s": uptime_s,
+                "queue_size": job_queue.qsize(),
+                "updated_at": datetime.now().isoformat(),
+            }
+            status_file.write_text(json.dumps(status), encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _poll_tui_chat_requests(
+    client,
+    config: dict,
+    job_queue: asyncio.Queue,
+    shutdown_event: asyncio.Event,
+) -> None:
+    """Poll .chat-request.json every 5s and enqueue chat jobs for the TUI.
+
+    When the TUI sends a chat request, this picks it up and puts a chat job
+    on the queue. The worker handles it with file-based streaming (on_delta
+    writes to .chat-stream.jsonl).
+    """
+    from core.constants import PULSE_HOME
+    from core.logging import log
+
+    request_file = PULSE_HOME / ".chat-request.json"
+
+    while not shutdown_event.is_set():
+        try:
+            if request_file.exists():
+                data = json.loads(request_file.read_text(encoding="utf-8"))
+                prompt = data.get("prompt", "")
+                request_id = data.get("request_id", "")
+                if prompt:
+                    # Delete first so TUI doesn't see duplicate on next poll
+                    request_file.unlink(missing_ok=True)
+                    job_queue.put_nowait({
+                        "type": "chat",
+                        "prompt": prompt,
+                        "_request_id": request_id,
+                        "_from_tui": True,
+                    })
+                    log.info(f"TUI chat request queued (id={request_id[:8]}): {prompt[:60]}...")
+        except Exception as e:
+            log.debug(f"TUI chat poll error: {e}")
+
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
 
 
 if __name__ == "__main__":

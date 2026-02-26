@@ -37,10 +37,6 @@ def validate_config(config: dict) -> list[str]:
         if not path_cfg.get("path"):
             warnings.append("Digest input_paths entry missing 'path' field")
 
-    allowed = config.get("telegram", {}).get("allowed_users", [])
-    if not allowed:
-        warnings.append("telegram.allowed_users is empty — anyone can interact with the bot")
-
     for member in config.get("team", []):
         if not member.get("alias"):
             warnings.append(f"Team member '{member.get('name', '?')}' missing 'alias'")

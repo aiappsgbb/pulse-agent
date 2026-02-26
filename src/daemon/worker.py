@@ -10,6 +10,7 @@ import yaml
 from core.constants import PULSE_HOME, JOBS_DIR
 from core.config import mark_task_completed
 from core.logging import log
+from core.notify import notify_desktop, build_toast_summary
 
 
 _PROXY_RETRY_DELAY = 300       # 5 minutes between retries
@@ -45,7 +46,7 @@ def _requeue_with_delay(job: dict, retry_count: int, delay_seconds: int = _PROXY
 _chat_session = None
 
 
-async def _get_chat_session(client, config, telegram_app=None, chat_id=None):
+async def _get_chat_session(client, config):
     """Get or create the persistent chat session with infinite_sessions enabled."""
     global _chat_session
 
@@ -61,7 +62,6 @@ async def _get_chat_session(client, config, telegram_app=None, chat_id=None):
 
     session_config = build_session_config(
         config, mode="chat", tools=get_tools(),
-        telegram_app=telegram_app, chat_id=chat_id,
         cdp_endpoint=cdp_endpoint,
     )
     # Enable infinite sessions — SDK auto-compacts context when it fills up
@@ -91,9 +91,7 @@ async def destroy_chat_session():
         _chat_session = None
 
 
-async def run_chat_query(client, config: dict, prompt: str,
-                        telegram_app=None, chat_id: int | None = None,
-                        on_delta=None) -> str:
+async def run_chat_query(client, config: dict, prompt: str, on_delta=None) -> str:
     """Run a conversational query via GHCP SDK. Returns the response text.
 
     Uses a persistent session with infinite_sessions so the SDK maintains
@@ -103,27 +101,16 @@ async def run_chat_query(client, config: dict, prompt: str,
 
     log.info(f"  Chat query: {prompt[:80]}...")
 
-    # Set up streaming reply for Telegram
-    streaming_reply = None
-    delta_cb = on_delta
-    if chat_id and not on_delta:
-        from tg.bot import create_streaming_reply
-        streaming_reply = await create_streaming_reply(chat_id)
-        if streaming_reply:
-            delta_cb = streaming_reply.on_delta
-
     # Get persistent session (creates if needed)
     try:
-        session = await _get_chat_session(client, config, telegram_app, chat_id)
+        session = await _get_chat_session(client, config)
     except Exception as e:
         log.error(f"  Failed to create chat session: {e}")
-        if streaming_reply:
-            await streaming_reply.finish()
         return f"Agent error: could not create session — {e}"
 
     # Each message gets its own handler for completion tracking
     from sdk.event_handler import EventHandler
-    handler = EventHandler(on_delta=delta_cb)
+    handler = EventHandler(on_delta=on_delta)
     unsub = session.on(handler)
 
     try:
@@ -131,8 +118,6 @@ async def run_chat_query(client, config: dict, prompt: str,
         await asyncio.wait_for(handler.done.wait(), timeout=1800)
     except asyncio.TimeoutError:
         log.warning("Chat query timed out after 1800s")
-        if streaming_reply:
-            await streaming_reply.finish()
         return handler.final_text or "Agent is still working — response timed out."
     except Exception as e:
         # Session died — destroy it so next message recreates
@@ -142,8 +127,6 @@ async def run_chat_query(client, config: dict, prompt: str,
             await session.destroy()
         except Exception:
             pass
-        if streaming_reply:
-            await streaming_reply.finish()
         return f"Agent error: {e}"
     finally:
         if unsub:
@@ -160,17 +143,12 @@ async def run_chat_query(client, config: dict, prompt: str,
             await session.destroy()
         except Exception:
             pass
-        if streaming_reply:
-            await streaming_reply.finish()
         return f"Agent error: {handler.error}"
-
-    if streaming_reply:
-        await streaming_reply.finish()
 
     return handler.final_text or "No response from agent."
 
 
-async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_app):
+async def job_worker(client, config: dict, job_queue: asyncio.Queue):
     """Process jobs from the queue as they arrive.
 
     Uses an asyncio.Lock to prevent concurrent SDK access (safety net
@@ -183,35 +161,37 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
     while True:
         job = await job_queue.get()
         job_type = job.get("type", "unknown")
-        chat_id = job.get("_chat_id")
         job_name = job.get("task", job_type)
         job_file = job.get("_file")
 
         log.info(f"=== Job: [{job_type}] {job_name} ===")
 
-        # Ensure typing indicator is active for Telegram-sourced jobs
-        if chat_id:
-            from tg.bot import start_typing
-            start_typing(chat_id)
-
         try:
             async with lock:
                 if job_type == "chat":
                     prompt = job.get("prompt", "")
-                    # StreamingReply handles Telegram delivery when chat_id is set
-                    await run_chat_query(client, config, prompt,
-                                         telegram_app=telegram_app, chat_id=chat_id)
-                    # Process any browser actions the agent queued via tools
-                    await process_pending_actions(telegram_app, chat_id)
+                    request_id = job.get("_request_id", "")
+
+                    # File-based streaming for TUI — on_delta writes to .chat-stream.jsonl
+                    from tui.ipc import (
+                        write_chat_delta, finish_chat_stream, clear_chat_stream,
+                    )
+                    clear_chat_stream()
+
+                    def _tui_delta(text: str) -> None:
+                        write_chat_delta(text, request_id)
+
+                    await run_chat_query(client, config, prompt, on_delta=_tui_delta)
+                    finish_chat_stream(request_id)
+                    # Process any browser actions the agent queued
+                    await process_pending_actions()
 
                 elif job_type == "research":
                     context = {"task": job}
-                    await run_job(client, config, "research", context=context,
-                                  telegram_app=telegram_app, chat_id=chat_id)
+                    await run_job(client, config, "research", context=context)
                     if "_file" in job:
                         mark_task_completed(job)
-                    if chat_id:
-                        await _notify(telegram_app, chat_id, f"Research complete: {job_name}")
+                    notify_desktop("Pulse — Research", f"Research complete: {job_name}")
 
                 elif job_type == "transcripts":
                     # Standalone mode — no SDK session, uses Playwright directly
@@ -219,8 +199,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     await run_transcript_collection(client, config)
                     if "_file" in job:
                         mark_task_completed(job)
-                    if chat_id:
-                        await _notify(telegram_app, chat_id, "Transcripts complete.")
+                    notify_desktop("Pulse — Transcripts", "Transcript collection complete.")
 
                 elif job_type == "knowledge":
                     # Pipeline mode — archive + per-project enrichment sessions
@@ -228,61 +207,43 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                     await run_knowledge_pipeline(client, config)
                     if "_file" in job:
                         mark_task_completed(job)
-                    if chat_id:
-                        await _notify(telegram_app, chat_id, "Knowledge mining complete.")
+                    notify_desktop("Pulse — Knowledge", "Knowledge mining complete.")
 
                 elif job_type in ("digest", "monitor", "intel"):
-                    await run_job(client, config, job_type,
-                                  telegram_app=telegram_app, chat_id=chat_id)
+                    await run_job(client, config, job_type)
                     if "_file" in job:
                         mark_task_completed(job)
-                    if chat_id:
-                        await _post_job_notify(telegram_app, chat_id, job_type)
+                    toast_title, toast_body = build_toast_summary(job_type, PULSE_HOME)
+                    urgency = "urgent" if job_type == "monitor" else "normal"
+                    notify_desktop(toast_title, toast_body, urgency=urgency)
 
                 elif job_type == "agent_request":
-                    result_text = await _handle_agent_request(
-                        client, config, job, telegram_app, chat_id
-                    )
+                    result_text = await _handle_agent_request(client, config, job)
                     if "_file" in job:
                         mark_task_completed(job)
                     _write_agent_response(config, job, result_text)
-                    if chat_id:
-                        from_name = job.get("from", "Unknown agent")
-                        await _notify(telegram_app, chat_id,
-                                      f"Processed request from {from_name}: {job_name}")
 
                 elif job_type == "agent_response":
                     from_name = job.get("from", "Unknown")
                     original_task = job.get("original_task", "")
-                    result_text = job.get("result", "No content in response.")
                     log.info(f"  Agent response from {from_name} (req: {job.get('request_id', '?')[:8]})")
                     if "_file" in job:
                         mark_task_completed(job)
-                    notify_id = chat_id
-                    if not notify_id:
-                        from tg.bot import get_proactive_chat_id
-                        notify_id = get_proactive_chat_id()
-                    if notify_id:
-                        notification = (
-                            f"Response from {from_name}'s agent:\n\n"
-                            f"Re: {original_task[:100]}\n\n"
-                            f"{result_text}"
-                        )
-                        await _notify(telegram_app, notify_id, notification)
+                    notify_desktop(
+                        f"Pulse — Response from {from_name}",
+                        f"Re: {original_task[:80]}",
+                        urgency="urgent",
+                    )
 
                 elif job_type == "teams_send":
                     result = await _execute_teams_send(job)
-                    if chat_id:
-                        status = "Sent" if result.get("success") else "Failed"
-                        await _notify(telegram_app, chat_id,
-                                      f"Teams {status}: {result.get('detail', '')}")
+                    status = "Sent" if result.get("success") else "Failed"
+                    log.info(f"  Teams {status}: {result.get('detail', '')}")
 
                 elif job_type == "email_reply":
                     result = await _execute_email_reply(job)
-                    if chat_id:
-                        status = "Sent" if result.get("success") else "Failed"
-                        await _notify(telegram_app, chat_id,
-                                      f"Email reply {status}: {result.get('detail', '')}")
+                    status = "Sent" if result.get("success") else "Failed"
+                    log.info(f"  Email reply {status}: {result.get('detail', '')}")
 
                 else:
                     log.warning(f"  Unknown job type: {job_type}")
@@ -293,19 +254,9 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                 retry_count = job.get("_retry_count", 0) + 1
                 if retry_count > _PROXY_MAX_RETRIES:
                     log.error(f"  Proxy retry limit reached for {job_name} ({retry_count} attempts)")
-                    if chat_id:
-                        from tg.bot import stop_typing
-                        stop_typing(chat_id)
-                        await _notify(telegram_app, chat_id,
-                                      f"Proxy error: {job_name} exhausted retries after {retry_count} attempts.")
                 else:
                     _requeue_with_delay(job, retry_count=retry_count)
                     log.warning(f"  Proxy 502 — requeued {job_name} (attempt {retry_count}, retry in 5 min)")
-                    if chat_id and retry_count == 1:
-                        from tg.bot import stop_typing
-                        stop_typing(chat_id)
-                        await _notify(telegram_app, chat_id,
-                                      f"Network error (502) — retrying {job_name} in 5 min.")
             else:
                 log.exception(f"  Job failed: {job_name} — {e}")
                 # Reset schedule so it retries instead of waiting until next day
@@ -313,10 +264,6 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue, telegram_ap
                 if schedule_id:
                     from core.scheduler import reset_run
                     reset_run(schedule_id)
-                if chat_id:
-                    from tg.bot import stop_typing
-                    stop_typing(chat_id)
-                    await _notify(telegram_app, chat_id, f"Failed: {job_name}\n{e}")
 
         finally:
             job_queue.task_done()
@@ -367,7 +314,7 @@ async def _execute_email_reply(job: dict) -> dict:
     return await reply_to_email(search_query, message)
 
 
-async def process_pending_actions(telegram_app, chat_id: int | None = None):
+async def process_pending_actions():
     """Process any pending browser actions queued by SDK tools.
 
     Called after each chat session completes. Picks up .json files from
@@ -399,13 +346,6 @@ async def process_pending_actions(telegram_app, chat_id: int | None = None):
             status = "OK" if result.get("success") else "FAILED"
             log.info(f"  Action {action_type} {status}: {result.get('detail', '')}")
 
-            # Notify via Telegram
-            notify_chat = chat_id
-            if notify_chat:
-                status = "Sent" if result.get("success") else "Failed"
-                detail = result.get("detail", "")
-                await _notify(telegram_app, notify_chat, f"{status}: {detail}")
-
         except Exception as e:
             log.error(f"  Pending action failed: {e}")
         finally:
@@ -416,45 +356,7 @@ async def process_pending_actions(telegram_app, chat_id: int | None = None):
                 pass
 
 
-async def _post_job_notify(telegram_app, chat_id: int, job_type: str):
-    """Send job-specific completion notification."""
-    if job_type == "digest":
-        from tg.bot import send_latest_digest
-        await _notify(telegram_app, chat_id, "Digest complete:")
-        await send_latest_digest(chat_id)
-    elif job_type == "monitor":
-        report = get_latest_monitoring_report()
-        if report:
-            await _notify(telegram_app, chat_id, report)
-        # Send action buttons from the structured triage JSON
-        await _send_triage_actions(chat_id)
-    else:
-        label = {"intel": "Intel brief", "transcripts": "Transcripts"}
-        await _notify(telegram_app, chat_id, f"{label.get(job_type, job_type)} complete.")
-
-
-async def _notify(telegram_app, chat_id: int, text: str):
-    """Notify via Telegram (lazy import to avoid circular deps)."""
-    from tg.bot import notify
-    await notify(telegram_app, chat_id, text)
-
-
-async def _send_triage_actions(chat_id: int):
-    """Send inline action buttons from the latest triage JSON."""
-    import json
-    reports = sorted(PULSE_HOME.glob("monitoring-*.json"), reverse=True)
-    if not reports:
-        return
-    try:
-        triage_data = json.loads(reports[0].read_text(encoding="utf-8"))
-        from tg.bot import send_triage_actions
-        await send_triage_actions(chat_id, triage_data)
-    except Exception:
-        log.warning("Failed to send triage action buttons", exc_info=True)
-
-
-async def _handle_agent_request(client, config: dict, job: dict,
-                                 telegram_app, chat_id: int | None) -> str:
+async def _handle_agent_request(client, config: dict, job: dict) -> str:
     """Process an incoming agent_request — runs a chat query to answer."""
     from sdk.runner import run_job
 
@@ -464,14 +366,9 @@ async def _handle_agent_request(client, config: dict, job: dict,
 
     log.info(f"  Agent request from {from_name} ({kind}): {task_text[:80]}...")
 
-    if chat_id:
-        await _notify(telegram_app, chat_id,
-                      f"Incoming request from {from_name}: {task_text[:100]}")
-
     if kind == "research":
         context = {"task": job}
-        result = await run_job(client, config, "research", context=context,
-                               telegram_app=telegram_app, chat_id=chat_id)
+        result = await run_job(client, config, "research", context=context)
     else:
         prompt = (
             f"A colleague ({from_name}) sent this request to your agent:\n\n"
@@ -480,8 +377,7 @@ async def _handle_agent_request(client, config: dict, job: dict,
             f"context and provide a thorough answer. Include specific details from "
             f"meetings and documents if available."
         )
-        result = await run_chat_query(client, config, prompt,
-                                       telegram_app=telegram_app, chat_id=chat_id)
+        result = await run_chat_query(client, config, prompt)
 
     return result or "No response generated."
 

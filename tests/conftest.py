@@ -45,7 +45,6 @@ def sample_config():
             "competitors": [{"company": "Acme", "watch": ["pricing", "features"]}],
             "feeds": [],
         },
-        "telegram": {"allowed_users": [12345]},
         "user": {"name": "Test User"},
         "onedrive": {"path": "/tmp/test-onedrive"},
         "team": [

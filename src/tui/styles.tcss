@@ -1,0 +1,151 @@
+/* =========================================================
+   Pulse Agent TUI — Textual stylesheet
+   ========================================================= */
+
+Screen {
+    background: $surface;
+}
+
+Header {
+    background: $primary;
+    height: 1;
+}
+
+Footer {
+    background: $panel;
+    height: 1;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+/* ─── Item panes (Triage, Digest) ───────────────────────── */
+
+TriagePane, DigestPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+TriagePane ListView, DigestPane ListView {
+    height: 55%;
+    border: solid $panel;
+    border-title-color: $accent;
+    padding: 0 1;
+}
+
+TriagePane .detail-container, DigestPane .detail-container {
+    height: 45%;
+    border: solid $panel;
+    border-title-color: $text-muted;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Projects pane ─────────────────────────────────────── */
+
+ProjectsPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+ProjectsPane ListView {
+    height: 45%;
+    border: solid $panel;
+    padding: 0 1;
+}
+
+ProjectsPane .detail-container {
+    height: 55%;
+    border: solid $panel;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Chat pane ─────────────────────────────────────────── */
+
+ChatPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+#chat-log {
+    height: 1fr;
+    border: solid $panel;
+    padding: 0 1;
+}
+
+#chat-input {
+    height: 3;
+    border: solid $accent;
+    margin: 0;
+}
+
+/* ─── Status bar ─────────────────────────────────────────── */
+
+#status-bar {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+/* ─── Modals ─────────────────────────────────────────────── */
+
+ReplyModal, NoteModal, QuestionModal {
+    align: center middle;
+}
+
+#reply-dialog, #note-dialog, #question-dialog {
+    background: $surface;
+    border: double $accent;
+    padding: 1 2;
+    width: 80%;
+    height: auto;
+    max-height: 70%;
+}
+
+#reply-title, #note-title, #question-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#reply-subject, #question-text {
+    color: $text-muted;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+
+#reply-text {
+    height: 8;
+    margin-bottom: 1;
+}
+
+#note-input, #question-input {
+    margin-bottom: 1;
+}
+
+#reply-buttons, #note-buttons, #question-buttons {
+    layout: horizontal;
+    height: 3;
+    align: right middle;
+}
+
+Button {
+    margin-left: 1;
+}
+
+/* ─── List items ────────────────────────────────────────── */
+
+ListItem {
+    padding: 0 1;
+}
+
+ListItem:hover {
+    background: $boost;
+}
+
+ListItem.-highlighted {
+    background: $primary 30%;
+}

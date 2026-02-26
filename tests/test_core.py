@@ -111,13 +111,6 @@ def test_validate_config_warnings():
     assert any("models" in w for w in warnings)
 
 
-def test_validate_config_empty_allowed_users():
-    from core.config import validate_config
-    config = {"models": {"default": "x"}, "telegram": {"allowed_users": []}}
-    warnings = validate_config(config)
-    assert any("allowed_users" in w for w in warnings)
-
-
 def test_expand_env_vars():
     from core.config import _expand_env_vars
     os.environ["_TEST_VAR_"] = "expanded"
