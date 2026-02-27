@@ -182,7 +182,18 @@ async def run_transcript_collection(client, config: dict):
         skip_slugs = set(attempted_history.keys()) | existing_files
 
         # Phase 1: Discover all meetings with recaps across all weeks
+        # Start with CURRENT week (not scanned if we skip straight to back-navigation)
         all_meetings = []
+
+        log.info(f"  --- Current week ---")
+        await _diag(page, "week0-current")
+        meetings = await discover_meetings_with_recaps(
+            page, skip_slugs, _slugify
+        )
+        for m in meetings:
+            if m.slug not in skip_slugs:
+                all_meetings.append(m)
+                skip_slugs.add(m.slug)
 
         for week_num in range(1, lookback_weeks + 1):
             if collected + len(all_meetings) >= max_meetings:

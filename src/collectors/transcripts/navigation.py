@@ -195,19 +195,78 @@ async def discover_meetings_with_recaps(
         try:
             btn = page.get_by_role("button", name=meeting_name)
             await btn.click()
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2500)  # Allow popup to fully render
         except Exception as e:
             log.warning(f"    Could not click meeting '{meeting_name[:50]}': {e}")
             continue
 
-        # Look for "View recap" button in the popup
-        try:
-            recap_btn = page.get_by_role("button", name="View recap")
-            has_recap = await recap_btn.count() > 0
-        except Exception:
-            has_recap = False
+        # Look for recap-related elements in the popup — try buttons AND links
+        # with multiple text patterns (Outlook UI varies across tenants/versions)
+        recap_btn = None
+        recap_patterns = [
+            "View recap", "View recap and transcript", "View transcript",
+            "Open recap", "Recap", "recap",
+        ]
 
-        if not has_recap:
+        for pattern in recap_patterns:
+            try:
+                btn = page.get_by_role("button", name=re.compile(pattern, re.IGNORECASE))
+                if await btn.count() > 0:
+                    recap_btn = btn.first
+                    break
+            except Exception:
+                pass
+            try:
+                link = page.get_by_role("link", name=re.compile(pattern, re.IGNORECASE))
+                if await link.count() > 0:
+                    recap_btn = link.first
+                    break
+            except Exception:
+                pass
+
+        # Also try a generic text-based search as last resort
+        if not recap_btn:
+            try:
+                recap_btn_by_text = page.locator("button, a, [role='button'], [role='link']").filter(
+                    has_text=re.compile(r"recap|transcript", re.IGNORECASE)
+                )
+                if await recap_btn_by_text.count() > 0:
+                    recap_btn = recap_btn_by_text.first
+            except Exception:
+                pass
+
+        if not recap_btn:
+            # Diagnostic: log what interactive elements ARE in the popup
+            # (only for the first few meetings to avoid log spam)
+            if len(seen_slugs) <= 3:
+                try:
+                    popup_els = await page.evaluate("""
+                        () => {
+                            const els = document.querySelectorAll(
+                                '[role="dialog"] button, [role="dialog"] a, ' +
+                                '[class*="popup"] button, [class*="popup"] a, ' +
+                                '[class*="Popup"] button, [class*="Popup"] a, ' +
+                                '[class*="callout"] button, [class*="callout"] a, ' +
+                                '[class*="Callout"] button, [class*="Callout"] a'
+                            );
+                            return Array.from(els).slice(0, 20).map(el => ({
+                                tag: el.tagName,
+                                role: el.getAttribute('role') || '',
+                                text: (el.textContent || '').trim().substring(0, 80),
+                                aria: el.getAttribute('aria-label') || '',
+                                href: el.getAttribute('href') || '',
+                            }));
+                        }
+                    """)
+                    if popup_els:
+                        log.info(f"    [DIAG popup] {len(popup_els)} elements in popup:")
+                        for el in popup_els[:10]:
+                            log.info(f"      {el.get('tag')} role={el.get('role')!r} text={el.get('text')!r} aria={el.get('aria')!r} href={el.get('href','')[:60]!r}")
+                    else:
+                        log.info(f"    [DIAG popup] No interactive elements found in popup containers")
+                except Exception as e:
+                    log.info(f"    [DIAG popup] Could not inspect popup: {e}")
+
             # No recap — close popup and continue
             try:
                 await page.keyboard.press("Escape")
@@ -216,7 +275,7 @@ async def discover_meetings_with_recaps(
                 pass
             continue
 
-        # Click "View recap" — should open Teams launcher in a new tab
+        # Click recap element — should open Teams launcher in a new tab
         log.info(f"    Found recap: {meeting_name[:60]}")
         launcher_page = None
         sharepoint_url = ""
