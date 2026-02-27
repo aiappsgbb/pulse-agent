@@ -44,6 +44,7 @@ def _requeue_with_delay(job: dict, retry_count: int, delay_seconds: int = _PROXY
 # Each message gets its own EventHandler for completion tracking.
 
 _chat_session = None
+_onboarding_sent = False  # Once True, never re-inject onboarding prompt
 
 
 async def _get_chat_session(client, config):
@@ -172,12 +173,15 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     prompt = job.get("prompt", "")
                     request_id = job.get("_request_id", "")
 
-                    # Onboarding: inject context ONLY when session is fresh.
-                    # When session exists, it already has conversation history —
-                    # adding a prefix makes the agent think it needs to restart.
+                    # Onboarding: inject context exactly ONCE per daemon lifetime.
+                    # The SDK session maintains conversation history — follow-up
+                    # messages need no special handling. The flag survives session
+                    # crashes so we never re-inject even if the session is recreated.
+                    global _onboarding_sent
                     from core.onboarding import is_first_run
-                    if _chat_session is None and (job.get("_onboarding") or is_first_run(config)):
+                    if not _onboarding_sent and (job.get("_onboarding") or is_first_run(config)):
                         prompt = _build_onboarding_prompt(config, prompt)
+                        _onboarding_sent = True
 
                     # File-based streaming for TUI — on_delta writes to .chat-stream.jsonl
                     from tui.ipc import (
