@@ -17,10 +17,13 @@ Key bindings:
 
 import threading
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPane, TextArea
+
+from textual.screen import ModalScreen
 
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
@@ -110,6 +113,36 @@ class PulseApp(App):
         yield StatusBar(id="status-bar")
         yield Footer()
 
+    async def on_event(self, event: events.Event) -> None:
+        """Intercept space key for Input/TextArea widgets.
+
+        Works around a Textual + Windows Terminal issue where the space
+        key event is lost during the normal dispatch/binding chain.
+        We catch it here *before* Textual's own ``on_event`` routing and
+        insert the character directly into the focused widget.
+        """
+        if (
+            isinstance(event, events.Key)
+            and event.key == "space"
+            and not event.is_forwarded
+        ):
+            focused = self.focused
+            if isinstance(focused, Input):
+                sel = focused.selection
+                if sel.is_empty:
+                    focused.insert_text_at_cursor(" ")
+                else:
+                    focused.replace(" ", *sel)
+                event.stop()
+                event.prevent_default()
+                return
+            if isinstance(focused, TextArea):
+                focused.insert(" ")
+                event.stop()
+                event.prevent_default()
+                return
+        await super().on_event(event)
+
     def on_mount(self) -> None:
         self._prev_item_count = len(self.query_one(InboxPane)._items)
         # Periodic background tasks
@@ -129,8 +162,17 @@ class PulseApp(App):
     # Periodic callbacks
     # -------------------------------------------------------------------------
 
+    def _is_modal_open(self) -> bool:
+        """Return True if a ModalScreen is currently displayed."""
+        return any(isinstance(s, ModalScreen) for s in self.screen_stack[1:])
+
     def _auto_refresh_panes(self) -> None:
-        """Reload all data panes every 30s. Play alert on new items."""
+        """Reload all data panes every 30s. Play alert on new items.
+
+        Skips refresh when a modal is open to avoid focus interference.
+        """
+        if self._is_modal_open():
+            return
         try:
             inbox = self.query_one(InboxPane)
             inbox.load_data()

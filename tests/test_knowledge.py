@@ -124,7 +124,8 @@ async def test_search_teams_messages_dir(tmp_dir):
          patch("sdk.tools.TEAMS_MESSAGES_DIR", teams_dir), \
          patch("sdk.tools.DIGESTS_DIR", nonexistent), \
          patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+         patch("sdk.tools.PROJECTS_DIR", nonexistent), \
+         patch("sdk.tools.PULSE_HOME", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "HSBC"}})
 
     assert result["resultType"] == "success"
@@ -149,7 +150,8 @@ async def test_search_across_emails_and_teams(tmp_dir):
          patch("sdk.tools.TEAMS_MESSAGES_DIR", teams_dir), \
          patch("sdk.tools.DIGESTS_DIR", nonexistent), \
          patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+         patch("sdk.tools.PROJECTS_DIR", nonexistent), \
+         patch("sdk.tools.PULSE_HOME", nonexistent):
         result = await search_local_files.handler({"arguments": {"query": "Contoso", "max_results": 10}})
 
     text = result["textResultForLlm"]

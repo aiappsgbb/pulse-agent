@@ -347,11 +347,13 @@ _TEXT_EXTENSIONS = {
     name="search_local_files",
     description=(
         "Search local files for a keyword or phrase. Searches transcripts, documents, "
-        "emails, teams-messages, digests, intel reports, and project files. "
+        "emails, teams-messages, digests, intel reports, project files, AND monitoring/"
+        "triage reports in PULSE_HOME root. "
         "Searches all text-based files (.md, .txt, .json, .yaml, etc.) recursively. "
         "Use this to find context before responding — e.g., search for a person's name, "
         "project name, or topic across meeting transcripts, emails, Teams messages, "
-        "digests, and project memory. Returns matching snippets with surrounding context."
+        "digests, triage results, and project memory. Returns matching snippets with "
+        "surrounding context. If no local matches found, try WorkIQ for live M365 data."
     ),
 )
 def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocation) -> str:
@@ -359,7 +361,7 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
     if ".." in params.file_pattern:
         return "ERROR: Invalid file pattern."
 
-    # Search all named data directories
+    # Search all named data directories (recursive)
     search_dirs = []
     for label, d in [
         ("transcripts", TRANSCRIPTS_DIR),
@@ -373,51 +375,66 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
         if d.exists():
             search_dirs.append((label, d))
 
-    if not search_dirs:
+    if not search_dirs and not PULSE_HOME.exists():
         return "No data directories found."
 
     query_lower = params.query.lower()
     results = []
 
+    def _extract_snippets(filepath: Path, label: str, rel_name: str):
+        """Extract matching snippets from a file and append to results."""
+        if not filepath.is_file():
+            return
+        if filepath.suffix.lower() not in _TEXT_EXTENSIONS:
+            return
+        try:
+            text = filepath.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return
+        if query_lower not in text.lower():
+            return
+        lines = text.splitlines()
+        snippets = []
+        for i, line in enumerate(lines):
+            if query_lower in line.lower():
+                start = max(0, i - 2)
+                end = min(len(lines), i + 3)
+                snippet = "\n".join(lines[start:end])
+                snippets.append(snippet)
+                if len(snippets) >= 3:  # max 3 snippets per file
+                    break
+        match_text = "\n---\n".join(snippets)
+        results.append(f"### {label}/{rel_name}\n{match_text}")
+
+    # 1. Recursive search in named data directories
     for dir_label, search_dir in search_dirs:
         for filepath in sorted(search_dir.rglob(params.file_pattern)):
-            if not filepath.is_file():
-                continue
-            # Skip binary files when using broad glob patterns
-            if filepath.suffix.lower() not in _TEXT_EXTENSIONS:
-                continue
-            try:
-                text = filepath.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-
-            if query_lower not in text.lower():
-                continue
-
-            # Extract matching lines with context (2 lines before/after)
-            lines = text.splitlines()
-            snippets = []
-            for i, line in enumerate(lines):
-                if query_lower in line.lower():
-                    start = max(0, i - 2)
-                    end = min(len(lines), i + 3)
-                    snippet = "\n".join(lines[start:end])
-                    snippets.append(snippet)
-                    if len(snippets) >= 3:  # max 3 snippets per file
-                        break
-
-            rel_path = filepath.relative_to(search_dir)
-            match_text = "\n---\n".join(snippets)
-            results.append(f"### {dir_label}/{rel_path}\n{match_text}")
-
+            _extract_snippets(filepath, dir_label, str(filepath.relative_to(search_dir)))
             if len(results) >= params.max_results:
                 break
-
         if len(results) >= params.max_results:
             break
 
+    # 2. Non-recursive search in PULSE_HOME root for monitoring reports,
+    #    knowledge runs, and chat history (these live at root, not in subdirs)
+    if len(results) < params.max_results and PULSE_HOME.exists():
+        for filepath in sorted(PULSE_HOME.glob(params.file_pattern)):
+            if not filepath.is_file():
+                continue
+            # Only include root-level report files, skip dot-files and subdirs
+            name = filepath.name
+            if name.startswith("."):
+                continue
+            _extract_snippets(filepath, "reports", name)
+            if len(results) >= params.max_results:
+                break
+
     if not results:
-        return f"No matches for '{params.query}' in {params.file_pattern} files."
+        return (
+            f"No matches for '{params.query}' in {params.file_pattern} files. "
+            f"TIP: This only searches local files. For live Teams/email/calendar data, "
+            f"query WorkIQ via the m365-query agent."
+        )
 
     return f"Found {len(results)} file(s) matching '{params.query}':\n\n" + "\n\n".join(results)
 

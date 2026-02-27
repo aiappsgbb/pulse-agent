@@ -227,6 +227,15 @@ class ReplyModal(ModalScreen):
                 yield Button("Send (Ctrl+S)", id="btn-send", variant="primary")
                 yield Button("Cancel (Esc)", id="btn-cancel")
 
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._focus_editor)
+
+    def _focus_editor(self) -> None:
+        try:
+            self.query_one(TextArea).focus()
+        except Exception:
+            pass
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-send":
             self.action_send_reply()
@@ -262,6 +271,15 @@ class NoteModal(ModalScreen):
             with Horizontal(id="note-buttons"):
                 yield Button("Save (Enter)", id="btn-save", variant="primary")
                 yield Button("Cancel (Esc)", id="btn-cancel")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._focus_input)
+
+    def _focus_input(self) -> None:
+        try:
+            self.query_one(Input).focus()
+        except Exception:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._save()
@@ -302,6 +320,15 @@ class QuestionModal(ModalScreen):
             with Horizontal(id="question-buttons"):
                 yield Button("Answer (Enter)", id="btn-answer", variant="primary")
                 yield Button("Skip / No (Esc)", id="btn-skip")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._focus_input)
+
+    def _focus_input(self) -> None:
+        try:
+            self.query_one(Input).focus()
+        except Exception:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._answer()

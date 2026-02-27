@@ -232,17 +232,36 @@ async def test_cancel_schedule_not_found(tmp_dir):
 # --- search_local_files ---
 
 
+def _search_patches(tmp_dir, **overrides):
+    """Build patch context managers for search_local_files tests.
+
+    All dirs default to nonexistent.  Pass dir_name=path to override.
+    Always patches PULSE_HOME to nonexistent unless explicitly provided.
+    """
+    nonexistent = tmp_dir / "nonexistent"
+    dirs = {
+        "TRANSCRIPTS_DIR": nonexistent,
+        "DOCUMENTS_DIR": nonexistent,
+        "EMAILS_DIR": nonexistent,
+        "TEAMS_MESSAGES_DIR": nonexistent,
+        "DIGESTS_DIR": nonexistent,
+        "INTEL_DIR": nonexistent,
+        "PROJECTS_DIR": nonexistent,
+        "PULSE_HOME": nonexistent,
+    }
+    dirs.update(overrides)
+    from contextlib import ExitStack
+    stack = ExitStack()
+    for name, path in dirs.items():
+        stack.enter_context(patch(f"sdk.tools.{name}", path))
+    return stack
+
+
 async def test_search_local_files_finds_match(tmp_dir):
     transcripts_dir = tmp_dir / "transcripts"
     transcripts_dir.mkdir(parents=True)
     (transcripts_dir / "meeting.txt").write_text("Alice discussed the Havas project timeline.\nBob agreed.", encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
         result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
     assert result["resultType"] == "success"
     assert "Havas" in result["textResultForLlm"]
@@ -253,25 +272,26 @@ async def test_search_local_files_no_match(tmp_dir):
     transcripts_dir = tmp_dir / "transcripts"
     transcripts_dir.mkdir(parents=True)
     (transcripts_dir / "meeting.txt").write_text("Nothing relevant here.", encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
         result = await search_local_files.handler({"arguments": {"query": "Havas", "file_pattern": "*.txt"}})
     assert "No matches" in result["textResultForLlm"]
 
 
+async def test_search_local_files_no_match_has_workiq_hint(tmp_dir):
+    """When no results found, response should hint to try WorkIQ."""
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (transcripts_dir / "meeting.txt").write_text("Nothing relevant here.", encoding="utf-8")
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
+        result = await search_local_files.handler({"arguments": {"query": "nonexistent topic"}})
+    text = result["textResultForLlm"]
+    assert "No matches" in text
+    assert "WorkIQ" in text
+
+
 async def test_search_local_files_no_dirs(tmp_dir):
     nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent / "t"), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent / "d"), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent / "e"), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent / "di"), \
-         patch("sdk.tools.INTEL_DIR", nonexistent / "i"), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent / "p"):
+    with _search_patches(tmp_dir, PULSE_HOME=nonexistent / "ph"):
         result = await search_local_files.handler({"arguments": {"query": "test"}})
     assert "No data directories" in result["textResultForLlm"]
 
@@ -279,13 +299,7 @@ async def test_search_local_files_no_dirs(tmp_dir):
 async def test_search_local_files_path_traversal_blocked(tmp_dir):
     transcripts_dir = tmp_dir / "transcripts"
     transcripts_dir.mkdir(parents=True)
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
         result = await search_local_files.handler({"arguments": {"query": "test", "file_pattern": "../../*.txt"}})
     assert "ERROR" in result["textResultForLlm"]
 
@@ -295,13 +309,7 @@ async def test_search_local_files_context_lines(tmp_dir):
     transcripts_dir.mkdir(parents=True)
     lines = ["line1", "line2", "line3 has TARGET word", "line4", "line5", "line6"]
     (transcripts_dir / "doc.txt").write_text("\n".join(lines), encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
         result = await search_local_files.handler({"arguments": {"query": "TARGET"}})
     text = result["textResultForLlm"]
     assert "line2" in text  # context before
@@ -313,13 +321,7 @@ async def test_search_local_files_finds_md_by_default(tmp_dir):
     transcripts_dir = tmp_dir / "transcripts"
     transcripts_dir.mkdir(parents=True)
     (transcripts_dir / "meeting.md").write_text("Claude security launch announced today.", encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", transcripts_dir), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir):
         result = await search_local_files.handler({"arguments": {"query": "Claude security"}})
     assert result["resultType"] == "success"
     assert "Claude security" in result["textResultForLlm"]
@@ -332,13 +334,7 @@ async def test_search_local_files_skips_binary(tmp_dir):
     documents_dir.mkdir(parents=True)
     (documents_dir / "deck.pptx").write_bytes(b"\x00\x01binary content with keyword")
     (documents_dir / "notes.md").write_text("The keyword is here.", encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent), \
-         patch("sdk.tools.DOCUMENTS_DIR", documents_dir), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", nonexistent), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, DOCUMENTS_DIR=documents_dir):
         result = await search_local_files.handler({"arguments": {"query": "keyword"}})
     text = result["textResultForLlm"]
     assert "notes.md" in text
@@ -350,17 +346,55 @@ async def test_search_local_files_searches_digests_dir(tmp_dir):
     digests_dir = tmp_dir / "digests"
     digests_dir.mkdir(parents=True)
     (digests_dir / "2026-02-23.md").write_text("# Digest\nQBE Foundry resolution plan urgent.", encoding="utf-8")
-    nonexistent = tmp_dir / "nonexistent"
-    with patch("sdk.tools.TRANSCRIPTS_DIR", nonexistent), \
-         patch("sdk.tools.DOCUMENTS_DIR", nonexistent), \
-         patch("sdk.tools.EMAILS_DIR", nonexistent), \
-         patch("sdk.tools.DIGESTS_DIR", digests_dir), \
-         patch("sdk.tools.INTEL_DIR", nonexistent), \
-         patch("sdk.tools.PROJECTS_DIR", nonexistent):
+    with _search_patches(tmp_dir, DIGESTS_DIR=digests_dir):
         result = await search_local_files.handler({"arguments": {"query": "QBE Foundry"}})
     assert result["resultType"] == "success"
     assert "QBE Foundry" in result["textResultForLlm"]
     assert "digests/" in result["textResultForLlm"]
+
+
+async def test_search_local_files_finds_monitoring_reports(tmp_dir):
+    """Monitoring/triage reports in PULSE_HOME root should be searchable."""
+    # Create monitoring files at PULSE_HOME root (not in a subdir)
+    (tmp_dir / "monitoring-2026-02-27T10-33.json").write_text(
+        '{"items": [{"source": "Teams: az prototype", "summary": "Joshua confirmed the approach"}]}',
+        encoding="utf-8",
+    )
+    (tmp_dir / "monitoring-2026-02-27T10-33.md").write_text(
+        "# Monitoring\n- az prototype: Joshua confirmed the prototype approach",
+        encoding="utf-8",
+    )
+    with _search_patches(tmp_dir, PULSE_HOME=tmp_dir):
+        result = await search_local_files.handler({"arguments": {"query": "az prototype"}})
+    text = result["textResultForLlm"]
+    assert result["resultType"] == "success"
+    assert "az prototype" in text
+    assert "reports/" in text
+
+
+async def test_search_local_files_skips_dotfiles_in_root(tmp_dir):
+    """Dot-files (.scheduler.json, etc.) in PULSE_HOME root should be skipped."""
+    (tmp_dir / ".scheduler.json").write_text('{"keyword": "secret state"}', encoding="utf-8")
+    (tmp_dir / "monitoring-2026-02-27.md").write_text("No keyword here.", encoding="utf-8")
+    with _search_patches(tmp_dir, PULSE_HOME=tmp_dir):
+        result = await search_local_files.handler({"arguments": {"query": "secret state"}})
+    assert "No matches" in result["textResultForLlm"]
+
+
+async def test_search_local_files_root_and_subdirs_combined(tmp_dir):
+    """Search should find results from both subdirs and PULSE_HOME root."""
+    transcripts_dir = tmp_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True)
+    (transcripts_dir / "meeting.md").write_text("Discussed az prototype timeline.", encoding="utf-8")
+    (tmp_dir / "monitoring-2026-02-27.json").write_text(
+        '{"items": [{"source": "Teams: az prototype"}]}',
+        encoding="utf-8",
+    )
+    with _search_patches(tmp_dir, TRANSCRIPTS_DIR=transcripts_dir, PULSE_HOME=tmp_dir):
+        result = await search_local_files.handler({"arguments": {"query": "az prototype"}})
+    text = result["textResultForLlm"]
+    assert "transcripts/" in text
+    assert "reports/" in text
 
 
 # --- update_project ---
