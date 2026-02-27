@@ -90,6 +90,10 @@ class UpdateProjectParams(BaseModel):
     yaml_content: str  # full YAML content for the project file
 
 
+class SaveConfigParams(BaseModel):
+    config: dict  # full standing-instructions config object
+
+
 class SearchLocalFilesParams(BaseModel):
     query: str
     file_pattern: str = "*.*"  # glob pattern to filter files
@@ -545,6 +549,39 @@ def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -
     return f"Email reply for '{params.search_query}' queued for delivery. User will receive confirmation via Telegram."
 
 
+# --- Onboarding config tool ---
+
+@define_tool(
+    name="save_config",
+    description=(
+        "Save the standing instructions configuration file. Used during onboarding "
+        "to persist user preferences. Takes a complete config object with sections: "
+        "user (name, email, role, org, focus, what_matters, what_is_noise), "
+        "schedule, monitoring, team, intelligence. "
+        "The tool merges answers onto the template (preserving defaults for "
+        "digest, transcripts, models, and RSS feeds) and writes to PULSE_HOME."
+    ),
+)
+def save_config_tool(params: SaveConfigParams, invocation: ToolInvocation) -> str:
+    from core.onboarding import build_config_from_answers, write_config, load_template_config
+
+    if not params.config:
+        return "ERROR: config object is empty"
+
+    # Validate required fields
+    user = params.config.get("user", {})
+    if not user.get("name") or "TODO" in str(user.get("name", "")).upper():
+        return "ERROR: user.name is required"
+    if not user.get("email") or "TODO" in str(user.get("email", "")).upper():
+        return "ERROR: user.email is required"
+
+    template = load_template_config()
+    merged = build_config_from_answers(params.config, template)
+
+    dest = write_config(merged)
+    return f"Configuration saved to {dest}. Pulse Agent is now configured and ready."
+
+
 # --- Tool set builder ---
 
 def get_tools() -> list[Tool]:
@@ -554,5 +591,5 @@ def get_tools() -> list[Tool]:
         schedule_task, list_schedules_tool, update_schedule_tool, cancel_schedule,
         search_local_files, update_project,
         send_teams_message, send_email_reply,
-        send_task_to_agent,
+        send_task_to_agent, save_config_tool,
     ]

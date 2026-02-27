@@ -54,6 +54,17 @@ def run_diagnostics(config: dict) -> list[str]:
             "set your name in standing-instructions.yaml so digests and inter-agent messages identify you"
         )
 
+    # Check for unresolved TODO placeholders
+    todo_fields = [
+        k for k, v in user.items()
+        if isinstance(v, str) and "TODO" in v.upper()
+    ]
+    if todo_fields:
+        warnings.append(
+            f"Config has TODO placeholders in user.{', user.'.join(todo_fields)} — "
+            "use Chat to complete setup or run with --setup"
+        )
+
     # ── Copilot CLI ──────────────────────────────────────────────────────
     if not shutil.which("copilot") and not shutil.which("github-copilot"):
         warnings.append(

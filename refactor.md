@@ -175,7 +175,7 @@ tests/
 | `src/intel.py` | Split into `collectors/feeds.py`, prompt moves to config, orchestration in runner |
 | `src/transcripts.py` | Split into `collectors/transcripts/` sub-package |
 | `src/telegram_bot.py` | Rewritten as `telegram/bot.py` class |
-| `src/main.py` | Rewritten (daemon logic moves to `daemon/`) |
+| `src/pulse.py` | Rewritten (daemon logic moves to `daemon/`) |
 | `src/tools.py` | Moves to `sdk/tools.py` |
 | `src/config.py` | Moves to `core/config.py` |
 | `config/instructions/` (entire folder) | All content merged into `config/prompts/system/` and `config/prompts/triggers/`. `task.md` moves to `config/prompts/task.md` |

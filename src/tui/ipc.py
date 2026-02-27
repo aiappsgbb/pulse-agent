@@ -219,6 +219,30 @@ def make_user_input_handler_file():
 # TUI writes: job queue
 # ---------------------------------------------------------------------------
 
+def queue_onboarding_chat() -> None:
+    """Queue a chat job flagged as onboarding.
+
+    The worker detects ``_onboarding: true`` and loads the onboarding trigger
+    prompt so the agent walks the user through setup.
+    """
+    try:
+        pending_dir = JOBS_DIR / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+        file_path = pending_dir / f"{ts}-onboarding-tui.yaml"
+        data = {
+            "type": "chat",
+            "prompt": "Let's set up my agent",
+            "_onboarding": True,
+            "_from_tui": True,
+            "_request_id": str(uuid.uuid4()),
+            "_source": "tui",
+        }
+        file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def queue_job(job_type: str) -> None:
     """Write a minimal job YAML to JOBS_DIR/pending/."""
     try:

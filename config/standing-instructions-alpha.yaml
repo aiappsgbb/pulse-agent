@@ -1,5 +1,5 @@
 # Pulse Agent — Agent Alpha (test instance for inter-agent communication)
-# Launch with: python src/main.py --config config/standing-instructions-alpha.yaml
+# Launch with: python src/pulse.py --config config/standing-instructions-alpha.yaml
 
 user:
   name: "Agent Alpha"

@@ -75,24 +75,21 @@ The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all
 ### Run
 
 ```bash
-# Start the daemon — scheduler + job worker + winotify toasts + TUI backend
-python src/main.py
-
-# Start the interactive TUI dashboard (separate terminal)
-python src/watch.py
+# Start Pulse — daemon + TUI launch together
+python src/pulse.py
 
 # Start with alternate config (inter-agent testing, secondary instance)
-python src/main.py --config config/standing-instructions-alpha.yaml
+python src/pulse.py --config config/standing-instructions-alpha.yaml
 
 # Single cycle then exit
-python src/main.py --once
+python src/pulse.py --once
 
 # Run a specific mode (dev/debugging)
-python src/main.py --mode digest --once
-python src/main.py --mode monitor --once
-python src/main.py --mode transcripts --once
-python src/main.py --mode intel --once
-python src/main.py --mode knowledge --once
+python src/pulse.py --mode digest --once
+python src/pulse.py --mode monitor --once
+python src/pulse.py --mode transcripts --once
+python src/pulse.py --mode intel --once
+python src/pulse.py --mode knowledge --once
 ```
 
 ### User Interface
@@ -101,7 +98,7 @@ Pulse Agent uses two complementary interfaces — both local, no data leaves the
 
 **Windows Toast Notifications (winotify)** — Proactive push alerts for triage items, digest completion, and urgent escalations. Delivered via native Windows notification system.
 
-**Textual TUI Dashboard** (`python src/watch.py`) — Interactive 4-tab terminal application:
+**Textual TUI Dashboard** (`python src/pulse.py`) — Interactive 4-tab terminal application:
 - **Triage** — Latest triage items with dismiss/reply/note actions
 - **Digest** — Morning digest items, grouped by project
 - **Projects** — Per-engagement project memory and commitment tracking
@@ -178,7 +175,7 @@ All modes are config-driven via `config/modes.yaml` — no hardcoded if/elif cha
 │  │  GitHub Copilot SDK (CopilotClient → JSON-RPC → Copilot CLI)    │   │
 │  ├──────────────────────────────────────────────────────────────────┤   │
 │  │  WorkIQ MCP ──── calendar, email, Teams, people, documents      │   │
-│  │  Custom tools ── 13 tools (write, search, schedule, send,       │   │
+│  │  Custom tools ── 14 tools (write, search, schedule, send,       │   │
 │  │                  dismiss, projects, inter-agent)                  │   │
 │  │  Session hooks ─ audit trail, path guardrails, error recovery,  │   │
 │  │                  session metrics                                  │   │
@@ -249,8 +246,7 @@ gbb-pulse/                               # Code only — no data here
 |-- requirements.txt                     # Python dependencies
 |-- pytest.ini                           # Test configuration
 |-- src/
-|   |-- main.py                          # Daemon entry point — event loop, dotenv
-|   |-- watch.py                         # TUI dashboard entry point
+|   |-- pulse.py                         # Unified entry point — daemon + TUI in one command
 |   |-- core/                            # Shared infrastructure
 |   |   |-- constants.py                 # Path constants (PULSE_HOME, named dirs)
 |   |   |-- config.py                    # YAML config loading + env var expansion
@@ -258,13 +254,14 @@ gbb-pulse/                               # Code only — no data here
 |   |   |-- logging.py                   # Structured logging + safe_encode
 |   |   |-- browser.py                   # Shared Edge browser manager (CDP singleton)
 |   |   |-- scheduler.py                 # Persistent cron-like scheduler
+|   |   |-- onboarding.py               # First-run detection + config writing
 |   |   +-- diagnostics.py              # System health checks
 |   |-- sdk/                             # GHCP SDK integration layer
 |   |   |-- runner.py                    # Unified job runner (all modes)
 |   |   |-- session.py                   # Config-driven SessionConfig builder
 |   |   |-- event_handler.py             # Event-driven session completion
 |   |   |-- hooks.py                     # Session hooks (audit, guardrails, recovery, metrics)
-|   |   |-- tools.py                     # 13 custom tool definitions
+|   |   |-- tools.py                     # 14 custom tool definitions
 |   |   |-- prompts.py                   # Prompt loading + {{variable}} interpolation
 |   |   +-- agents.py                    # Agent definition loading
 |   |-- collectors/                      # Data collection (deterministic, no LLM)
@@ -286,6 +283,7 @@ gbb-pulse/                               # Code only — no data here
 |   |-- daemon/                          # Always-on daemon components
 |   |   |-- heartbeat.py                 # Utilities (parse_interval)
 |   |   |-- worker.py                    # Job queue worker
+|   |   |-- tasks.py                     # Extracted daemon tasks (status writer, chat poller)
 |   |   +-- sync.py                      # OneDrive job sync + instruction seeding
 |   +-- tui/                             # Terminal UI (Textual)
 |       |-- app.py                       # 4-tab dashboard application
@@ -301,7 +299,7 @@ gbb-pulse/                               # Code only — no data here
 |   |   |-- triggers/                    # Trigger prompt templates
 |   |   +-- agents/                      # Sub-agent definitions
 |   +-- skills/                          # 4 Playwright-based skill definitions
-|-- tests/                               # 342 tests (pytest + pytest-asyncio)
+|-- tests/                               # 391 tests (pytest + pytest-asyncio)
 |-- docs/
 |   |-- SUMMARY.md                       # 150-word solution summary
 |   |-- RAI.md                           # Responsible AI notes
@@ -329,7 +327,7 @@ $PULSE_HOME/
 
 ## Custom Tools
 
-The agent has 13 custom tools registered via the GHCP SDK `@define_tool` decorator:
+The agent has 14 custom tools registered via the GHCP SDK `@define_tool` decorator:
 
 | Tool | Description |
 |------|-------------|
@@ -346,6 +344,7 @@ The agent has 13 custom tools registered via the GHCP SDK `@define_tool` decorat
 | `send_teams_message` | Queue a Teams message for delivery via shared browser |
 | `send_email_reply` | Queue an email reply for delivery via Outlook Web |
 | `send_task_to_agent` | Send a task/question to another team member's Pulse Agent via OneDrive |
+| `save_config` | Save standing instructions config from onboarding conversation |
 
 All tool usage is automatically logged to the JSONL audit trail via the `on_post_tool_use` session hook.
 
@@ -366,7 +365,7 @@ See [docs/RAI.md](docs/RAI.md) for detailed Responsible AI notes.
 ## Testing
 
 ```bash
-# Run all tests (342 tests)
+# Run all tests (391 tests)
 python -m pytest tests/ -q
 
 # Verbose output

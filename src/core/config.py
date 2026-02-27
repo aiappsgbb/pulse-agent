@@ -73,6 +73,21 @@ def load_config() -> dict:
     return config
 
 
+def load_template_config() -> dict:
+    """Load the standing-instructions template for onboarding.
+
+    Used by the onboarding wizard to pre-fill defaults and preserve
+    sections the user doesn't touch (feeds, input_paths, models).
+    """
+    template_path = CONFIG_DIR / "standing-instructions.template.yaml"
+    if not template_path.exists():
+        template_path = CONFIG_DIR / "standing-instructions.yaml"
+    if not template_path.exists():
+        return {}
+    with open(template_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 def load_pending_tasks() -> list[dict]:
     """Load all pending jobs from jobs/pending/.
 

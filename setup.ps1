@@ -184,12 +184,10 @@ Write-Host "  Pulse-Team:  $pulseTeam" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "  1. Activate the venv:     .venv\Scripts\activate" -ForegroundColor White
-Write-Host "  2. Edit your config:      $siDest" -ForegroundColor White
-Write-Host "     - Set your name, email, role under 'user:'" -ForegroundColor DarkGray
-Write-Host "     - Add teammate aliases under 'team:' (just name + alias)" -ForegroundColor DarkGray
-Write-Host "  3. Log into Teams in Edge once (for transcript/inbox scans)" -ForegroundColor White
-Write-Host "  4. Start the daemon:      python src/main.py" -ForegroundColor White
-Write-Host "  5. Start the TUI:         python src/watch.py" -ForegroundColor White
+Write-Host "  2. Log into Teams in Edge once (for transcript/inbox scans)" -ForegroundColor White
+Write-Host "  3. Start Pulse:           python src/pulse.py" -ForegroundColor White
+Write-Host "     - Daemon + TUI launch together in one command" -ForegroundColor DarkGray
+Write-Host "     - First run? The Chat tab will guide you through setup" -ForegroundColor DarkGray
 Write-Host ""
 
 Pop-Location

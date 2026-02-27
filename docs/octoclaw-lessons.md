@@ -75,7 +75,7 @@ The biggest opportunity is to preserve Pulse's strong core flow while fixing run
 
 **Fix:** Add `src/core/diagnostics.py` — check config completeness, Copilot CLI availability (`copilot --version`), WorkIQ availability, browser profile existence. Run at daemon startup, log warnings.
 
-**Files:** `src/core/diagnostics.py` (new), `src/main.py`
+**Files:** `src/core/diagnostics.py` (new), `src/pulse.py`
 
 ### 7) Event Handler — Dispatch Table vs Lambda Chain
 **Pulse (OK but fragile):** `runner.py` registers event handlers with inline lambdas. Adding new event types means editing the registration block.
@@ -163,7 +163,7 @@ Easy to extend, easy to test individual handlers.
 | 3 | Smart message splitting (newline/space-aware) | `src/tg/bot.py` | 30min |
 | 4 | Agent start retry (3 attempts) + session recovery | `src/sdk/runner.py`, `src/sdk/session.py` | 1hr |
 | 5 | asyncio.Lock on agent sends | `src/daemon/worker.py` or `src/sdk/runner.py` | 30min |
-| 6 | Startup diagnostics | `src/core/diagnostics.py` (new), `src/main.py` | 1hr |
+| 6 | Startup diagnostics | `src/core/diagnostics.py` (new), `src/pulse.py` | 1hr |
 
 ### THIS WEEK — Before Submission (fixes 7-10)
 

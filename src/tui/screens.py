@@ -891,7 +891,7 @@ class ChatPane(Widget):
         self.set_interval(1, self._poll_stream)
         chat_log = self.query_one(RichLog)
         chat_log.write("[bold cyan]Pulse Chat[/bold cyan] — type a message and press Enter")
-        chat_log.write("[dim]Requires daemon running: python src/main.py[/dim]")
+        chat_log.write("[dim]Requires daemon running: python src/pulse.py[/dim]")
         chat_log.write("")
         # Auto-focus the input so the user can type immediately
         self.call_after_refresh(self._focus_input)

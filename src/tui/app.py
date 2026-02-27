@@ -72,7 +72,7 @@ class StatusBar(Static):
                 age_s = 999
             if age_s > 120:  # >2 min stale = daemon is dead
                 self.update(
-                    " Daemon: offline — start with: python src/main.py"
+                    " Daemon: offline — start with: python src/pulse.py"
                     "  |  ^R refresh  q quit"
                 )
                 return
@@ -87,7 +87,7 @@ class StatusBar(Static):
             )
         else:
             self.update(
-                " Daemon: offline — start with: python src/main.py"
+                " Daemon: offline — start with: python src/pulse.py"
                 "  |  ^R refresh  q quit"
             )
 
@@ -98,6 +98,9 @@ class PulseApp(App):
     CSS_PATH = "styles.tcss"
 
     TITLE = "Pulse Agent"
+
+    # Set by the entry point when onboarding is needed
+    needs_onboarding: bool = False
 
     BINDINGS = [
         Binding("ctrl+d", "trigger_digest", "Digest", show=True),
@@ -165,6 +168,10 @@ class PulseApp(App):
         self.set_interval(30, self._auto_refresh_panes)
         self.set_interval(5, self._update_status_bar)
         self.set_interval(2, self._check_pending_question)
+
+        # First-run onboarding — switch to Chat and auto-queue setup prompt
+        if self.needs_onboarding:
+            self._trigger_onboarding()
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """Auto-focus chat input when switching to the Chat tab."""
@@ -248,6 +255,25 @@ class PulseApp(App):
     # -------------------------------------------------------------------------
     # Job trigger actions
     # -------------------------------------------------------------------------
+
+    def _trigger_onboarding(self) -> None:
+        """Switch to Chat tab and queue an onboarding chat job.
+
+        Instead of a regular chat request (polled from .chat-request.json),
+        we write a job YAML with ``_onboarding: true`` so the worker loads
+        the onboarding trigger prompt with the save_config tool.
+        """
+        from tui.ipc import queue_onboarding_chat
+
+        tabs = self.query_one(TabbedContent)
+        tabs.active = "tab-chat"
+        self.notify(
+            "Welcome to Pulse Agent! Let's get you set up.",
+            title="First Run",
+            timeout=8,
+        )
+        queue_onboarding_chat()
+        self.needs_onboarding = False
 
     def action_trigger_digest(self) -> None:
         queue_job("digest")
