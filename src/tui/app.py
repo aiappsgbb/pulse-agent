@@ -1,28 +1,32 @@
 """Pulse Agent TUI — main Textual application.
 
-Provides a 4-tab interactive dashboard:
-  Triage    — latest triage items with dismiss/reply/note actions
-  Digest    — morning digest items
-  Projects  — per-engagement project memory
-  Chat      — streaming chat with the agent
+Provides a 5-tab interactive dashboard:
+  Triage     — latest triage items with dismiss/reply/note actions
+  Digest     — morning digest items
+  Dismissed  — snoozed/archived items with restore/archive actions
+  Projects   — per-engagement project memory
+  Chat       — streaming chat with the agent
 
 Key bindings:
   ctrl+d/t/i/x  — queue digest/triage/intel/transcript jobs
   ctrl+l        — jump to Digest tab and reload
   ctrl+r        — force refresh all panes
   d / r / n     — dismiss / reply / note (on Triage and Digest tabs)
+  a             — archive (on Dismissed tab)
+  r             — restore (on Dismissed tab) / reply (on Triage/Digest)
   q             — quit
 """
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
+from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPane, TextArea
 
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
     ChatPane,
     DigestPane,
+    DismissedPane,
     ProjectsPane,
     QuestionModal,
     TriagePane,
@@ -76,8 +80,9 @@ class PulseApp(App):
         Binding("ctrl+r", "refresh_all", "Refresh", show=True),
         # Item actions — active on Triage and Digest tabs
         Binding("d", "item_dismiss", "Dismiss", show=False),
-        Binding("r", "item_reply", "Reply", show=False),
+        Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
+        Binding("a", "item_archive", "Archive", show=False),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -88,6 +93,8 @@ class PulseApp(App):
                 yield TriagePane(id="triage-pane")
             with TabPane("Digest", id="tab-digest"):
                 yield DigestPane(id="digest-pane")
+            with TabPane("Dismissed", id="tab-dismissed"):
+                yield DismissedPane(id="dismissed-pane")
             with TabPane("Projects", id="tab-projects"):
                 yield ProjectsPane(id="projects-pane")
             with TabPane("Chat", id="tab-chat"):
@@ -101,6 +108,14 @@ class PulseApp(App):
         self.set_interval(5, self._update_status_bar)
         self.set_interval(2, self._check_pending_question)
 
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Auto-focus chat input when switching to the Chat tab."""
+        try:
+            if self.query_one(TabbedContent).active == "tab-chat":
+                self.query_one("#chat-input").focus()
+        except Exception:
+            pass
+
     # -------------------------------------------------------------------------
     # Periodic callbacks
     # -------------------------------------------------------------------------
@@ -110,6 +125,7 @@ class PulseApp(App):
         try:
             self.query_one(TriagePane).load_data()
             self.query_one(DigestPane).load_data()
+            self.query_one(DismissedPane).load_data()
             self.query_one(ProjectsPane).load_data()
         except Exception:
             pass
@@ -167,20 +183,42 @@ class PulseApp(App):
     # Item actions (delegate to active pane)
     # -------------------------------------------------------------------------
 
+    def _input_is_focused(self) -> bool:
+        """Return True if an Input or TextArea widget currently has focus."""
+        return isinstance(self.focused, (Input, TextArea))
+
     def action_item_dismiss(self) -> None:
+        if self._input_is_focused():
+            return
         pane = self._get_active_item_pane()
         if pane:
             pane.dismiss_selected()
 
-    def action_item_reply(self) -> None:
-        pane = self._get_active_item_pane()
-        if pane:
-            pane.reply_selected()
+    def action_item_reply_or_restore(self) -> None:
+        """Reply on Triage/Digest tabs, Restore on Dismissed tab."""
+        if self._input_is_focused():
+            return
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == "tab-dismissed":
+            self.query_one(DismissedPane).restore_selected()
+        else:
+            pane = self._get_active_item_pane()
+            if pane:
+                pane.reply_selected()
 
     def action_item_note(self) -> None:
+        if self._input_is_focused():
+            return
         pane = self._get_active_item_pane()
         if pane:
             pane.note_selected()
+
+    def action_item_archive(self) -> None:
+        if self._input_is_focused():
+            return
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == "tab-dismissed":
+            self.query_one(DismissedPane).archive_selected()
 
     def _get_active_item_pane(self) -> TriagePane | DigestPane | None:
         """Return TriagePane or DigestPane if that tab is currently active."""

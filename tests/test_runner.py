@@ -442,21 +442,42 @@ def test_trigger_variables_digest_defaults_projects(sample_config, tmp_dir):
 
 
 def test_trigger_variables_digest_dismissed_ttl(sample_config, tmp_dir):
-    """Dismissed items older than 30 days are auto-expired."""
+    """Archived items older than 30 days are auto-expired; legacy entries treated as archived."""
     from datetime import datetime, timedelta
     old_ts = (datetime.now() - timedelta(days=45)).isoformat()
     fresh_ts = (datetime.now() - timedelta(days=5)).isoformat()
     with patch("sdk.runner.OUTPUT_DIR", tmp_dir), \
          patch("sdk.runner.load_actions", return_value={
              "dismissed": [
-                 {"item": "old-thing", "dismissed_at": old_ts},
-                 {"item": "fresh-thing", "dismissed_at": fresh_ts},
+                 {"item": "old-thing", "dismissed_at": old_ts},              # legacy, no status → archived, expired
+                 {"item": "fresh-thing", "dismissed_at": fresh_ts},          # legacy, no status → archived, fresh
              ],
              "notes": {},
          }):
         result = _build_trigger_variables("digest", sample_config, {})
     assert "fresh-thing" in result["dismissed_block"]
     assert "old-thing" not in result["dismissed_block"]
+
+
+def test_trigger_variables_digest_snooze_ttl(sample_config, tmp_dir):
+    """Snoozed items expire after 1 day; archived items last 30 days."""
+    from datetime import datetime, timedelta
+    today_ts = (datetime.now() - timedelta(hours=6)).isoformat()
+    yesterday_ts = (datetime.now() - timedelta(days=2)).isoformat()
+    recent_archived_ts = (datetime.now() - timedelta(days=10)).isoformat()
+    with patch("sdk.runner.OUTPUT_DIR", tmp_dir), \
+         patch("sdk.runner.load_actions", return_value={
+             "dismissed": [
+                 {"item": "snoozed-today", "dismissed_at": today_ts, "status": "dismissed"},
+                 {"item": "snoozed-yesterday", "dismissed_at": yesterday_ts, "status": "dismissed"},
+                 {"item": "archived-recent", "dismissed_at": recent_archived_ts, "status": "archived"},
+             ],
+             "notes": {},
+         }):
+        result = _build_trigger_variables("digest", sample_config, {})
+    assert "snoozed-today" in result["dismissed_block"]
+    assert "snoozed-yesterday" not in result["dismissed_block"]  # expired snooze
+    assert "archived-recent" in result["dismissed_block"]
 
 
 async def test_pre_process_monitor_none_returns_unavailable():

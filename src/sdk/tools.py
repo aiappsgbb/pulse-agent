@@ -161,12 +161,16 @@ def _save_actions(actions: dict):
 )
 def dismiss_item(params: DismissItemParams, invocation: ToolInvocation) -> str:
     actions = load_actions()
-    entry = {"item": params.item, "dismissed_at": datetime.now().isoformat()}
+    entry = {
+        "item": params.item,
+        "dismissed_at": datetime.now().isoformat(),
+        "status": "archived",  # agent dismissals are permanent
+    }
     if params.reason:
         entry["reason"] = params.reason
     actions["dismissed"].append(entry)
     _save_actions(actions)
-    return f"Dismissed: {params.item}"
+    return f"Archived: {params.item}"
 
 
 @define_tool(

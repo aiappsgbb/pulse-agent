@@ -92,10 +92,11 @@ async def test_dismiss_item_persists(tmp_dir):
     actions_file = tmp_dir / ".digest-actions.json"
     with patch("sdk.tools.ACTIONS_FILE", actions_file):
         result = await dismiss_item.handler({"arguments": {"item": "reply-alice-budget", "reason": "already replied"}})
-        assert "Dismissed" in result["textResultForLlm"]
+        assert "Archived" in result["textResultForLlm"]
         actions = load_actions()
     assert len(actions["dismissed"]) == 1
     assert actions["dismissed"][0]["item"] == "reply-alice-budget"
+    assert actions["dismissed"][0]["status"] == "archived"
 
 
 # --- add_note ---

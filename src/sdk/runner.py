@@ -135,33 +135,50 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         priorities = digest_cfg.get("priorities", [])
         variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
 
-        # Dismissed items (auto-expire after 30 days)
+        # Dismissed items — dual TTL: snoozed=1 day, archived=30 days
         actions = load_actions()
         dismissed_raw = actions.get("dismissed", [])
-        dismissed = []
+        snoozed = []
+        archived = []
         for d in dismissed_raw:
             try:
                 dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
-                if (datetime.now() - dismissed_at).days > 30:
-                    continue
+                age_days = (datetime.now() - dismissed_at).days
             except (ValueError, TypeError):
-                pass
-            dismissed.append(d)
+                age_days = 0
+            status = d.get("status", "archived")  # legacy entries = archived
+            if status == "dismissed":
+                if age_days > 1:
+                    continue  # expired snooze — agent can re-surface
+                snoozed.append(d)
+            else:
+                if age_days > 30:
+                    continue  # expired archive
+                archived.append(d)
         notes = actions.get("notes", {})
 
-        if dismissed:
-            dismissed_lines = []
-            for d in dismissed:
+        dismissed_lines = []
+        if snoozed:
+            dismissed_lines.append("### Snoozed today (do NOT include)")
+            for d in snoozed:
                 reason = d.get("reason", "")
+                line = f"- {d['item']}"
                 if reason:
-                    dismissed_lines.append(f"- {d['item']} — *Reason: {reason}*")
-                else:
-                    dismissed_lines.append(f"- {d['item']}")
-            dismissed_items = "\n".join(dismissed_lines)
+                    line += f" — *Reason: {reason}*"
+                dismissed_lines.append(line)
+        if archived:
+            dismissed_lines.append("### Archived (do NOT include — learn from the pattern)")
+            for d in archived:
+                reason = d.get("reason", "")
+                line = f"- {d['item']}"
+                if reason:
+                    line += f" — *Reason: {reason}*"
+                dismissed_lines.append(line)
+        if dismissed_lines:
             variables["dismissed_block"] = (
-                f"\n## Previously Dismissed Items (DO NOT include these)\n{dismissed_items}\n"
-                "\nLearn from these: if items were dismissed because \"already replied\" or "
-                "\"not my responsibility\", apply the same logic to similar items today.\n"
+                "\n## Previously Dismissed Items\n"
+                + "\n".join(dismissed_lines)
+                + "\n"
             )
         else:
             variables["dismissed_block"] = ""

@@ -252,17 +252,51 @@ def _save_digest_actions(actions: dict) -> None:
         pass
 
 
-def dismiss_item(item_id: str, reason: str = "") -> None:
-    """Mark an item as dismissed in .digest-actions.json."""
+def dismiss_item(
+    item_id: str,
+    reason: str = "",
+    title: str = "",
+    source: str = "",
+) -> None:
+    """Snooze an item (1-day suppress). Comes back tomorrow if still relevant."""
     actions = _load_digest_actions()
     existing_ids = {d.get("item") for d in actions.get("dismissed", [])}
     if item_id not in existing_ids:
         actions.setdefault("dismissed", []).append({
             "item": item_id,
+            "title": title,
+            "source": source,
             "dismissed_at": datetime.now().isoformat(),
             "reason": reason,
+            "status": "dismissed",
         })
         _save_digest_actions(actions)
+
+
+def archive_item(item_id: str) -> None:
+    """Permanently archive a dismissed item (30-day TTL)."""
+    actions = _load_digest_actions()
+    for d in actions.get("dismissed", []):
+        if d.get("item") == item_id:
+            d["status"] = "archived"
+            d["archived_at"] = datetime.now().isoformat()
+            break
+    _save_digest_actions(actions)
+
+
+def restore_item(item_id: str) -> None:
+    """Remove an item from the dismissed list (un-dismiss)."""
+    actions = _load_digest_actions()
+    actions["dismissed"] = [
+        d for d in actions.get("dismissed", []) if d.get("item") != item_id
+    ]
+    _save_digest_actions(actions)
+
+
+def load_dismissed_items() -> list[dict]:
+    """Load all dismissed/archived entries for the Dismissed tab."""
+    actions = _load_digest_actions()
+    return actions.get("dismissed", [])
 
 
 def add_note(item_id: str, note: str) -> None:

@@ -8,6 +8,12 @@ Not a copilot. Not a chatbot. A local daemon with standing instructions, full M3
 
 **"I had 8 meetings yesterday. I was distracted in half of them. At 7 AM, Pulse Agent told me the 3 things that actually need my attention — including an escalation I completely missed."**
 
+## The Problem
+
+Knowledge workers drown in information. Copilot helps when you ask — but nobody asks at 2 AM when a competitor changes pricing. Nobody remembers to check 50 email threads. Nobody processes 8 hours of meeting transcripts overnight.
+
+Pulse Agent solves this by running autonomously with standing instructions. No prompting required.
+
 ## What It Does
 
 Pulse Agent processes three categories of information and delivers a single, filtered digest by morning:
@@ -66,22 +72,14 @@ The config supports environment variables (`$LOCALAPPDATA`, `$HOME`, `~`) in all
 
 **Config resolution chain:** `--config` flag > `PULSE_CONFIG` env var > `$PULSE_HOME/standing-instructions.yaml` > `config/standing-instructions.yaml` (repo template fallback)
 
-### Telegram Setup
-
-1. Message [@BotFather](https://t.me/BotFather) on Telegram, create a new bot, copy the token
-2. Edit `standing-instructions.yaml`:
-   ```yaml
-   telegram:
-     enabled: true
-     bot_token: "your-token-here"
-   ```
-3. Start the daemon — your bot is live
-
 ### Run
 
 ```bash
-# Start the daemon — Telegram + scheduler + job worker
+# Start the daemon — scheduler + job worker + winotify toasts + TUI backend
 python src/main.py
+
+# Start the interactive TUI dashboard (separate terminal)
+python src/watch.py
 
 # Start with alternate config (inter-agent testing, secondary instance)
 python src/main.py --config config/standing-instructions-alpha.yaml
@@ -97,23 +95,21 @@ python src/main.py --mode intel --once
 python src/main.py --mode knowledge --once
 ```
 
-### Interacting via Telegram
+### User Interface
 
-Just talk to the bot naturally:
+Pulse Agent uses two complementary interfaces — both local, no data leaves the tenant:
 
-- "What's new?" — queries WorkIQ for recent activity
-- "Did I miss anything in meetings yesterday?" — checks calendar + transcripts
-- "Run a digest" — triggers a full digest immediately
-- "Analyze Parloa vs 11Labs" — deep research task
-- "Grab transcripts" — collects meeting transcripts from Teams
-- "Send to Esther: here's the pricing update" — sends a Teams message (with draft review)
+**Windows Toast Notifications (winotify)** — Proactive push alerts for triage items, digest completion, and urgent escalations. Delivered via native Windows notification system.
 
-The bot also provides:
-- `/digest`, `/triage`, `/intel`, `/transcripts` — queued jobs
-- `/latest` — sends the most recent digest
-- `/status` — daemon uptime + queue size
-- 1-tap action buttons for triage items (review draft, send, dismiss)
-- Proactive triage reports during office hours
+**Textual TUI Dashboard** (`python src/watch.py`) — Interactive 4-tab terminal application:
+- **Triage** — Latest triage items with dismiss/reply/note actions
+- **Digest** — Morning digest items, grouped by project
+- **Projects** — Per-engagement project memory and commitment tracking
+- **Chat** — Streaming chat with the agent (natural language queries)
+
+Key bindings: `Ctrl+D/T/I/X` to queue digest/triage/intel/transcript jobs, `D/R/N` to dismiss/reply/note items, `Ctrl+R` to refresh.
+
+Communication between daemon and TUI uses file-based IPC (`.chat-request.json` → daemon → `.chat-stream.jsonl`), keeping both processes independent.
 
 ### Job Files
 
@@ -138,60 +134,92 @@ description: "Pull latest public pricing, summarize differences"
 | **Triage** | `--mode monitor` | 30-min inbox triage with 1-tap action buttons (Teams reply, email reply, schedule meeting) |
 | **Deep Research** | `--mode research` | Autonomous long-running research with full WorkIQ + local tool access (60 min timeout) |
 | **External Intel** | `--mode intel` | RSS feeds filtered for relevance, generates a concise intelligence brief |
-| **Chat** | Telegram message | Natural language via Telegram with streaming replies, WorkIQ, local search, and browser actions |
+| **Chat** | TUI chat tab | Natural language with streaming replies, WorkIQ, local search, and browser actions |
 | **Knowledge Mining** | `--mode knowledge` | Overnight pipeline: collect transcripts, compress, archive emails/Teams, enrich project memory |
+
+All modes are config-driven via `config/modes.yaml` — no hardcoded if/elif chains.
 
 ## Architecture
 
 ```
-Data Collection (Playwright + Python, no LLM)
-  Teams Transcripts ── browser automation -> virtualized list scraping -> SDK compression
-  Teams Inbox ──────── browser scan for unread messages (ground truth)
-  Outlook Inbox ────── browser scan for unread emails (ground truth)
-  Calendar ─────────── browser scan for upcoming events
-  Local Content ────── file system scan (.docx, .pdf, .pptx, .xlsx, .csv, .eml, .vtt, .txt, .md)
-  RSS Feeds ────────── feedparser + SDK relevance filtering
-        |
-        v
-Pulse Agent (Python daemon, always-on)
-  asyncio event loop with 3 concurrent tasks:
-    Telegram bot ── conversational + action buttons + streaming replies
-    Scheduler ───── config-driven schedules (every 60s) + OneDrive job sync
-    Job worker ──── processes queue, one at a time (GHCP SDK sessions)
-        |
-        v
-GitHub Copilot SDK (CopilotClient -> JSON-RPC -> Copilot CLI server mode)
-  WorkIQ MCP ────── calendar, email, Teams, people, documents
-  Custom tools ──── 13 tools (write, search, schedule, send, dismiss, projects, inter-agent)
-  Session hooks ─── automatic audit trail, path guardrails, error recovery, metrics
-  Sub-agents ────── digest-writer, project-researcher, knowledge-miner, m365-query, pulse-reader, signal-drafter
-  Multi-model ───── gpt-4.1 (triage/chat), claude-sonnet (digest), claude-opus (research/intel)
-        |
-        v
-Output -> $PULSE_HOME (OneDrive-synced)
-  digests/YYYY-MM-DD.json + .md ─── structured + human-readable digest
-  intel/YYYY-MM-DD.md ──────────── external intel brief
-  projects/*.yaml ──────────────── persistent project memory
-  monitoring-*.json + .md ──────── triage reports with action buttons
-  transcripts/*.md ─────────────── compressed meeting transcripts
-  pulse-signals/*.md ───────────── drafted GBB Pulse signals
-  logs/YYYY-MM-DD.jsonl ────────── structured audit trail
-        |
-        v
-Telegram Bot (user interface)
-  Chat ─────── natural language -> streaming reply (progressive edits)
-  Jobs ─────── /digest, /triage, /intel, /transcripts -> queued jobs
-  Actions ──── 1-tap buttons: review draft -> send Teams/email -> dismiss
-  Proactive ── triage reports + morning digest delivery
+                         ┌─────────────────────────────────────────────┐
+                         │         Data Collection Layer               │
+                         │         (Playwright + Python, no LLM)       │
+                         ├─────────────────────────────────────────────┤
+                         │  Teams Transcripts ── browser → virtualized │
+                         │    list scraping → SDK compression          │
+                         │  Teams Inbox ──── unread message scan       │
+                         │  Outlook Inbox ── unread email scan         │
+                         │  Calendar ─────── upcoming event scan       │
+                         │  Local Content ── .docx .pdf .pptx .xlsx   │
+                         │    .csv .eml .vtt .txt .md                  │
+                         │  RSS Feeds ────── feedparser + relevance    │
+                         └──────────────────────┬──────────────────────┘
+                                                │
+                                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    Pulse Agent (Python daemon)                           │
+│                    asyncio event loop, always-on                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────────────────┐ │
+│  │  Scheduler    │  │  Job Worker       │  │  TUI Backend + Toasts     │ │
+│  │  (every 60s)  │  │  (one at a time)  │  │  (winotify + file IPC)   │ │
+│  │               │  │                   │  │                           │ │
+│  │  Cron-like    │  │  Routes to GHCP   │  │  Status writes            │ │
+│  │  patterns +   │  │  SDK sessions     │  │  Chat request polling     │ │
+│  │  OneDrive     │  │  per mode         │  │  Stream delta writes      │ │
+│  │  job sync     │  │                   │  │  Windows toast alerts     │ │
+│  └──────┬───────┘  └────────┬──────────┘  └────────────────────────────┘ │
+│         │                   │                                            │
+│         └───────────┬───────┘                                            │
+│                     ▼                                                    │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  GitHub Copilot SDK (CopilotClient → JSON-RPC → Copilot CLI)    │   │
+│  ├──────────────────────────────────────────────────────────────────┤   │
+│  │  WorkIQ MCP ──── calendar, email, Teams, people, documents      │   │
+│  │  Custom tools ── 13 tools (write, search, schedule, send,       │   │
+│  │                  dismiss, projects, inter-agent)                  │   │
+│  │  Session hooks ─ audit trail, path guardrails, error recovery,  │   │
+│  │                  session metrics                                  │   │
+│  │  Sub-agents ──── digest-writer, project-researcher,              │   │
+│  │                  knowledge-miner, m365-query, pulse-reader,      │   │
+│  │                  signal-drafter                                   │   │
+│  │  Multi-model ─── gpt-4.1 (triage/chat), claude-sonnet (digest), │   │
+│  │                  claude-opus (research/intel)                     │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                Output → $PULSE_HOME (OneDrive-synced)                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│  digests/YYYY-MM-DD.json + .md ── structured + human-readable digest    │
+│  intel/YYYY-MM-DD.md ──────────── external intel brief                  │
+│  projects/*.yaml ──────────────── persistent project memory             │
+│  monitoring-*.json + .md ──────── triage reports with action buttons    │
+│  transcripts/*.md ─────────────── compressed meeting transcripts        │
+│  logs/YYYY-MM-DD.jsonl ────────── structured audit trail                │
+│  jobs/pending/ + completed/ ───── task queue (inter-agent compatible)   │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      User Interfaces (local only)                        │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Textual TUI ── 4-tab dashboard: Triage | Digest | Projects | Chat     │
+│  winotify ───── Windows toast notifications for proactive alerts        │
+│  Job files ──── Drop YAML into jobs/pending/ for ad-hoc tasks           │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## How It Works
 
 The daemon runs three things concurrently on one async event loop:
 
-1. **Telegram bot** — listens for messages, puts jobs on an `asyncio.Queue`
-2. **Config-driven scheduler** (every 60s) — checks cron-like patterns (`daily 07:00`, `every 30m`, `weekdays HH:MM`), fires due schedules, syncs OneDrive job files
-3. **Worker** — processes jobs from the queue one at a time (GHCP SDK sessions)
+1. **Config-driven scheduler** (every 60s) — checks cron-like patterns (`daily 07:00`, `every 30m`, `weekdays HH:MM`), fires due schedules, syncs OneDrive job files
+2. **Worker** — processes jobs from the queue one at a time (GHCP SDK sessions)
+3. **TUI backend + toast alerts** — writes daemon status, polls for chat requests, streams response deltas via file IPC, sends Windows toast notifications for urgent items
 
 Jobs execute immediately when queued — no waiting for the next cycle.
 
@@ -222,6 +250,7 @@ gbb-pulse/                               # Code only — no data here
 |-- pytest.ini                           # Test configuration
 |-- src/
 |   |-- main.py                          # Daemon entry point — event loop, dotenv
+|   |-- watch.py                         # TUI dashboard entry point
 |   |-- core/                            # Shared infrastructure
 |   |   |-- constants.py                 # Path constants (PULSE_HOME, named dirs)
 |   |   |-- config.py                    # YAML config loading + env var expansion
@@ -255,13 +284,14 @@ gbb-pulse/                               # Code only — no data here
 |   |       |-- compressor.py            # SDK-based transcript compression
 |   |       +-- js_snippets.py           # JavaScript for DOM interaction
 |   |-- daemon/                          # Always-on daemon components
-|   |   |-- heartbeat.py                 # Legacy utilities (parse_interval)
+|   |   |-- heartbeat.py                 # Utilities (parse_interval)
 |   |   |-- worker.py                    # Job queue worker
 |   |   +-- sync.py                      # OneDrive job sync + instruction seeding
-|   +-- tg/                              # Telegram bot interface
-|       |-- bot.py                       # Commands, streaming, action buttons
-|       |-- confirmations.py             # ask_user confirmation flow
-|       +-- pii_filter.py               # PII masking for Telegram output
+|   +-- tui/                             # Terminal UI (Textual)
+|       |-- app.py                       # 4-tab dashboard application
+|       |-- screens.py                   # Triage, Digest, Projects, Chat panes
+|       |-- ipc.py                       # File-based IPC (daemon <-> TUI)
+|       +-- styles.tcss                  # Textual CSS styles
 |-- config/
 |   |-- standing-instructions.yaml       # Template config
 |   |-- standing-instructions-alpha.yaml # Alternate config (inter-agent testing)
@@ -271,9 +301,15 @@ gbb-pulse/                               # Code only — no data here
 |   |   |-- triggers/                    # Trigger prompt templates
 |   |   +-- agents/                      # Sub-agent definitions
 |   +-- skills/                          # 4 Playwright-based skill definitions
-|-- tests/                               # 396 tests (pytest + pytest-asyncio)
+|-- tests/                               # 342 tests (pytest + pytest-asyncio)
+|-- docs/
+|   |-- SUMMARY.md                       # 150-word solution summary
+|   |-- RAI.md                           # Responsible AI notes
+|   |-- SDK-FEEDBACK.md                  # GitHub Copilot SDK product feedback
+|   |-- knowledge.md                     # Knowledge mining architecture
+|   +-- roadmap.md                       # Future phases
 +-- presentations/
-    +-- PulseAgent.pptx
+    +-- PulseAgent.pptx                  # Demo deck
 ```
 
 **Data directory** (`$PULSE_HOME`, OneDrive-synced):
@@ -286,7 +322,7 @@ $PULSE_HOME/
 |-- intel/                    # Intel briefs
 |-- projects/                 # Project memory (.yaml per engagement)
 |-- pulse-signals/            # Drafted GBB Pulse signals
-|-- jobs/pending/ + completed/# Task queue
+|-- jobs/pending/ + completed/# Task queue (also used for inter-agent communication)
 |-- logs/                     # Structured JSONL audit trail
 +-- .scheduler.json, .digest-state.json, .digest-actions.json, etc.
 ```
@@ -313,22 +349,24 @@ The agent has 13 custom tools registered via the GHCP SDK `@define_tool` decorat
 
 All tool usage is automatically logged to the JSONL audit trail via the `on_post_tool_use` session hook.
 
-## Security & Governance
+## Security & Responsible AI
 
 - **Draft-first for outbound actions** — triage suggests draft replies shown for user review before sending
-- **Local-first processing** — content processed on your machine, not uploaded
+- **Local-first processing** — content processed on your machine, not uploaded to external services
 - **Full audit trail** — every tool call automatically logged via `on_post_tool_use` hook to `logs/YYYY-MM-DD.jsonl` (100% coverage)
 - **Defense-in-depth guardrails** — `on_pre_tool_use` hook validates file paths before tools execute
-- **PII filtering** — Telegram output is scrubbed of emails, phone numbers, credit cards, and IBANs
+- **PII filtering** — output is scrubbed of emails, phone numbers, credit cards, and IBANs before display
 - **No destructive actions** — agent cannot delete, cancel, or overwrite
 - **Path-traversal protection** — `write_output` and `update_project` validate paths at both hook and handler level
 - **Configurable scope** — user controls what folders to scan, what topics to watch
 - **Scoped permissions** — WorkIQ only accesses your own M365 data, Playwright uses your browser session
 
+See [docs/RAI.md](docs/RAI.md) for detailed Responsible AI notes.
+
 ## Testing
 
 ```bash
-# Run all tests (396 tests)
+# Run all tests (342 tests)
 python -m pytest tests/ -q
 
 # Verbose output
@@ -348,7 +386,7 @@ python -m pytest tests/ -k "digest" -v
 
 - **Language:** Python 3.12
 - **Agent runtime:** GitHub Copilot SDK (`github-copilot-sdk`) -> Copilot CLI server mode (JSON-RPC)
-- **User interface:** Telegram bot (`python-telegram-bot`) — conversational + streaming replies + inline action buttons
+- **User interface:** Textual TUI (4-tab dashboard) + winotify (Windows toast notifications)
 - **M365 integration:** WorkIQ MCP server (emails, calendar, Teams, files, people)
 - **Browser automation:** Playwright Python (Edge) — transcript collection, inbox scanning, message sending
 - **External intel:** feedparser (RSS)
@@ -369,4 +407,10 @@ python -m pytest tests/ -k "digest" -v
 
 **charmap encoding errors on Windows** — All terminal output is ASCII-safe encoded. If you still see errors, check that your Python is 3.12+ and your terminal supports UTF-8.
 
-See [CLAUDE.md](CLAUDE.md) for full architecture details, technical deep-dives, and design decisions.
+## Further Reading
+
+- [CLAUDE.md](CLAUDE.md) — Full architecture details, technical deep-dives, and design decisions
+- [AGENTS.md](AGENTS.md) — Agent behavior instructions and guardrails
+- [docs/RAI.md](docs/RAI.md) — Responsible AI notes
+- [docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md) — GitHub Copilot SDK product feedback
+- [docs/knowledge.md](docs/knowledge.md) — Knowledge mining architecture

@@ -13,6 +13,7 @@ Modals:
 """
 
 import json
+from datetime import datetime
 
 import yaml
 
@@ -26,9 +27,12 @@ from textual.widgets import Button, Input, Label, ListItem, ListView, RichLog, S
 from core.constants import DIGESTS_DIR, PROJECTS_DIR, PULSE_HOME
 from tui.ipc import (
     add_note,
+    archive_item,
     dismiss_item,
+    load_dismissed_items,
     read_chat_stream_deltas,
     read_pending_question,
+    restore_item,
     send_chat_request,
     write_question_response,
     write_reply_job,
@@ -310,11 +314,16 @@ class ItemPane(Widget):
     def dismiss_selected(self) -> None:
         item = self.get_selected_item()
         if item:
-            dismiss_item(item.get("id", ""), "")
+            dismiss_item(
+                item.get("id", ""),
+                reason="",
+                title=item.get("title", ""),
+                source=item.get("source", ""),
+            )
             self._items.pop(self._selected_idx)
             self._selected_idx = max(0, self._selected_idx - 1)
             self._refresh_list()
-            self.notify("Item dismissed")
+            self.notify("Item snoozed (comes back tomorrow if still relevant)")
 
     def reply_selected(self) -> None:
         item = self.get_selected_item()
@@ -457,6 +466,136 @@ class ProjectsPane(Widget):
 
 
 # ---------------------------------------------------------------------------
+# Dismissed pane
+# ---------------------------------------------------------------------------
+
+STATUS_LABELS: dict[str, str] = {
+    "dismissed": "SNOOZED",
+    "archived": "ARCHIVED",
+}
+
+STATUS_COLORS: dict[str, str] = {
+    "dismissed": "yellow",
+    "archived": "dim",
+}
+
+
+def _age_str(iso_ts: str) -> str:
+    """Human-readable age from ISO timestamp (e.g. '2h', '3d')."""
+    try:
+        dt = datetime.fromisoformat(iso_ts)
+        delta = datetime.now() - dt
+        if delta.days > 0:
+            return f"{delta.days}d"
+        hours = delta.seconds // 3600
+        return f"{hours}h" if hours else "<1h"
+    except Exception:
+        return "?"
+
+
+class DismissedPane(Widget):
+    """Dismissed/archived items with restore and archive actions."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._items: list[dict] = []
+        self._selected_idx: int = 0
+
+    def compose(self) -> ComposeResult:
+        yield ListView()
+        with VerticalScroll(classes="detail-container"):
+            yield Static("Select an item to view details")
+
+    def on_mount(self) -> None:
+        self.load_data()
+
+    def load_data(self) -> None:
+        self._items = load_dismissed_items()
+        self._refresh_list()
+
+    def _refresh_list(self) -> None:
+        lv = self.query_one(ListView)
+        lv.clear()
+        if not self._items:
+            lv.append(ListItem(Label("[dim]No dismissed items[/dim]")))
+            return
+        for item in self._items:
+            status = item.get("status", "archived")
+            label = STATUS_LABELS.get(status, "ARCHIVED")
+            color = STATUS_COLORS.get(status, "dim")
+            title = item.get("title") or item.get("item", "?")
+            title = title[:50]
+            age = _age_str(item.get("dismissed_at", ""))
+            source = item.get("source", "")
+            src = f"  [dim]{source}[/dim]" if source else ""
+            text = f"[{color}][{label}][/{color}] {title}{src}  [dim]({age} ago)[/dim]"
+            lv.append(ListItem(Label(text)))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item is None:
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._items):
+            self._selected_idx = idx
+            self._show_detail(self._items[idx])
+
+    def _show_detail(self, item: dict) -> None:
+        detail = self.query_one(Static)
+        status = item.get("status", "archived")
+        label = STATUS_LABELS.get(status, "ARCHIVED")
+        color = STATUS_COLORS.get(status, "dim")
+        title = item.get("title") or item.get("item", "?")
+        age = _age_str(item.get("dismissed_at", ""))
+
+        lines = [
+            f"[{color}][{label}][/{color}] [bold]{title}[/bold]",
+            f"Source: {item.get('source', '?')}  |  Dismissed: {age} ago",
+        ]
+        reason = item.get("reason", "")
+        if reason:
+            lines.append(f"Reason: {reason}")
+
+        if status == "dismissed":
+            lines += [
+                "",
+                "[yellow]This item is snoozed for today.[/yellow]",
+                "It will come back tomorrow if still relevant.",
+                "",
+                "[dim]  a = archive permanently   r = restore to active[/dim]",
+            ]
+        else:
+            lines += [
+                "",
+                "[dim]This item is permanently archived (30-day expiry).[/dim]",
+                "",
+                "[dim]  r = restore to active[/dim]",
+            ]
+        detail.update("\n".join(lines))
+
+    def get_selected_item(self) -> dict | None:
+        if 0 <= self._selected_idx < len(self._items):
+            return self._items[self._selected_idx]
+        return None
+
+    def archive_selected(self) -> None:
+        item = self.get_selected_item()
+        if item:
+            archive_item(item.get("item", ""))
+            item["status"] = "archived"
+            self._refresh_list()
+            self.notify("Item archived permanently")
+
+    def restore_selected(self) -> None:
+        item = self.get_selected_item()
+        if item:
+            restore_item(item.get("item", ""))
+            self._items.pop(self._selected_idx)
+            self._selected_idx = max(0, self._selected_idx - 1)
+            self._refresh_list()
+            self.notify("Item restored — will appear in next triage/digest")
+
+
+# ---------------------------------------------------------------------------
 # Chat pane
 # ---------------------------------------------------------------------------
 
@@ -485,6 +624,14 @@ class ChatPane(Widget):
         chat_log.write("[bold cyan]Pulse Chat[/bold cyan] — type a message and press Enter")
         chat_log.write("[dim]Requires daemon running: python src/main.py[/dim]")
         chat_log.write("")
+        # Auto-focus the input so the user can type immediately
+        self.call_after_refresh(self._focus_input)
+
+    def _focus_input(self) -> None:
+        try:
+            self.query_one(Input).focus()
+        except Exception:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         prompt = event.value.strip()
