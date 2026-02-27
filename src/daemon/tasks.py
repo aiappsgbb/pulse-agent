@@ -20,21 +20,30 @@ async def write_daemon_status_loop(
     """Write .daemon-status.json every 60s for TUI status bar."""
     status_file = PULSE_HOME / ".daemon-status.json"
 
+    def _write_status():
+        uptime_s = int((datetime.now() - boot_time).total_seconds())
+        status = {
+            "boot_time": boot_time.isoformat(),
+            "uptime_s": uptime_s,
+            "queue_size": job_queue.qsize(),
+            "updated_at": datetime.now().isoformat(),
+        }
+        status_file.write_text(json.dumps(status), encoding="utf-8")
+
+    # Write immediately so TUI sees "online" right away
+    try:
+        _write_status()
+    except Exception:
+        pass
+
     while not shutdown_event.is_set():
-        try:
-            uptime_s = int((datetime.now() - boot_time).total_seconds())
-            status = {
-                "boot_time": boot_time.isoformat(),
-                "uptime_s": uptime_s,
-                "queue_size": job_queue.qsize(),
-                "updated_at": datetime.now().isoformat(),
-            }
-            status_file.write_text(json.dumps(status), encoding="utf-8")
-        except Exception:
-            pass
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=60)
         except asyncio.TimeoutError:
+            pass
+        try:
+            _write_status()
+        except Exception:
             pass
 
 

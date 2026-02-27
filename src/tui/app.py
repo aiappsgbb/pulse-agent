@@ -257,22 +257,19 @@ class PulseApp(App):
     # -------------------------------------------------------------------------
 
     def _trigger_onboarding(self) -> None:
-        """Switch to Chat tab and queue an onboarding chat job.
+        """Switch to Chat tab for onboarding.
 
-        Instead of a regular chat request (polled from .chat-request.json),
-        we write a job YAML with ``_onboarding: true`` so the worker loads
-        the onboarding trigger prompt with the save_config tool.
+        No job is auto-queued — the user's first message naturally triggers
+        onboarding because the worker detects is_first_run(config) and injects
+        the onboarding prompt when the chat session is fresh.
         """
-        from tui.ipc import queue_onboarding_chat
-
         tabs = self.query_one(TabbedContent)
         tabs.active = "tab-chat"
         self.notify(
-            "Welcome to Pulse Agent! Let's get you set up.",
+            "Welcome to Pulse Agent! Type anything in Chat to start setup.",
             title="First Run",
             timeout=8,
         )
-        queue_onboarding_chat()
         self.needs_onboarding = False
 
     def action_trigger_digest(self) -> None:

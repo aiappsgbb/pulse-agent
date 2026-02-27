@@ -172,8 +172,11 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     prompt = job.get("prompt", "")
                     request_id = job.get("_request_id", "")
 
-                    # Onboarding: augment prompt with setup instructions
-                    if job.get("_onboarding"):
+                    # Onboarding: inject context ONLY when session is fresh.
+                    # When session exists, it already has conversation history —
+                    # adding a prefix makes the agent think it needs to restart.
+                    from core.onboarding import is_first_run
+                    if _chat_session is None and (job.get("_onboarding") or is_first_run(config)):
                         prompt = _build_onboarding_prompt(config, prompt)
 
                     # File-based streaming for TUI — on_delta writes to .chat-stream.jsonl
@@ -187,6 +190,9 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
 
                     await run_chat_query(client, config, prompt, on_delta=_tui_delta)
                     finish_chat_stream(request_id)
+                    # Mark file-based chat jobs as completed so they aren't re-enqueued
+                    if "_file" in job:
+                        mark_task_completed(job)
                     # Process any browser actions the agent queued
                     await process_pending_actions()
 
@@ -430,10 +436,17 @@ def _write_agent_response(config: dict, original_job: dict, result_text: str):
 
 
 def _build_onboarding_prompt(config: dict, user_prompt: str) -> str:
-    """Load the onboarding trigger template and prepend it to the user prompt."""
+    """Build onboarding prompt for a fresh chat session.
+
+    Only called when _chat_session is None (fresh start or recreation).
+    Always loads the full onboarding template so the agent has complete
+    instructions. Follow-up messages on an existing session are passed
+    through without modification — the SDK session has conversation history.
+    """
+    import yaml as _yaml
+
     try:
         from sdk.prompts import load_prompt
-        import yaml as _yaml
 
         current_config_str = _yaml.dump(config, default_flow_style=False, sort_keys=False)
         onboarding_text = load_prompt(
@@ -443,13 +456,7 @@ def _build_onboarding_prompt(config: dict, user_prompt: str) -> str:
         return f"{onboarding_text}\n\nUser: {user_prompt}"
     except Exception as e:
         log.warning(f"Failed to load onboarding prompt: {e}")
-        return (
-            "I'm setting up Pulse Agent for the first time. Please ask me about "
-            "my name, email, role, organization, what matters to me, my schedule "
-            "preferences, and any team members. Then call the save_config tool "
-            "to save the configuration.\n\n"
-            f"User: {user_prompt}"
-        )
+        return user_prompt
 
 
 def get_latest_monitoring_report() -> str | None:
