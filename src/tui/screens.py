@@ -913,6 +913,10 @@ class ChatPane(Widget):
         chat_log = self.query_one(RichLog)
         chat_log.write(f"[bold cyan]You:[/bold cyan] {prompt}")
 
+        # Clear stale stream BEFORE sending so we never read old responses
+        from tui.ipc import clear_chat_stream
+        clear_chat_stream()
+
         # Send to daemon via file IPC
         self._current_request_id = send_chat_request(prompt)
         self._stream_offset = 0
@@ -925,7 +929,7 @@ class ChatPane(Widget):
         if not self._streaming:
             return
 
-        new_text, is_done, new_offset = read_chat_stream_deltas(self._stream_offset)
+        new_text, is_done, new_offset = read_chat_stream_deltas(self._stream_offset, self._current_request_id)
         self._stream_offset = new_offset
         chat_log = self.query_one(RichLog)
 

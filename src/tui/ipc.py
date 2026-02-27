@@ -62,8 +62,11 @@ def send_chat_request(prompt: str) -> str:
     return request_id
 
 
-def read_chat_stream_deltas(offset: int) -> tuple[str, bool, int]:
+def read_chat_stream_deltas(offset: int, request_id: str = "") -> tuple[str, bool, int]:
     """Read new chat stream content after byte offset.
+
+    When request_id is provided, only deltas matching that request are returned.
+    Stale deltas from previous requests are skipped.
 
     Returns (new_text, is_done, new_offset).
     """
@@ -83,6 +86,9 @@ def read_chat_stream_deltas(offset: int) -> tuple[str, bool, int]:
                 continue
             try:
                 entry = json.loads(line)
+                # Skip deltas from a different request
+                if request_id and entry.get("request_id", "") and entry["request_id"] != request_id:
+                    continue
                 if entry.get("type") == "delta":
                     new_text += entry.get("text", "")
                 elif entry.get("type") == "done":
