@@ -12,9 +12,13 @@ Run a 30-minute triage cycle NOW. Focus on the LAST 60 MINUTES only — not the 
 
 {{calendar_block}}
 
+{{dismissed_block}}
+
 ## Your Task
 
 Priority order: Teams messages first (from scan above + WorkIQ), then emails (cross-reference with Outlook scan above), then upcoming meetings (cross-reference with Calendar scan above).
+
+**CRITICAL: Dismissed items filter.** If any item matches one of the Previously Dismissed Items above (by ID or by title/subject), do NOT include it in the output. The user already handled or dismissed these — re-surfacing them is a bug.
 
 ### Step 0: Search Local Context
 Before triaging, use `search_local_files` to look up any names or topics from the Teams inbox scan in your local transcripts. This gives you meeting context about what was recently discussed with each person.
@@ -76,6 +80,12 @@ After writing the monitoring report, you MUST also write a structured JSON file 
   }
 }
 ```
+
+Rules for item IDs:
+- Format: lowercase, hyphens only, derived from type + key entity. E.g. `reply-sender-subject-slug`, `email-sender-topic-slug`.
+- **ID STABILITY IS CRITICAL.** The user dismisses items by ID. If you generate a different ID for the same item, it reappears after dismiss — this is a bug.
+- Check the Previously Dismissed Items list above. If an item you're about to output matches a dismissed item (same person + same topic), do NOT output it — it's already handled.
+- If you must output an item that was previously seen (e.g. re-escalation), reuse the same ID format.
 
 Rules for the JSON:
 - Every `reply_needed` item MUST have at least one `suggested_actions` entry with a drafted reply

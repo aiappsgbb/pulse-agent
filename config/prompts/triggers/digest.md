@@ -217,7 +217,12 @@ You MUST produce TWO outputs using `write_output`:
 }
 ```
 
-Rules for item IDs: lowercase, hyphens only, derived from type + key entity. E.g. `reply-sender-subject-slug`, `action-project-task-slug`, `intel-source-topic-slug`.
+Rules for item IDs:
+- Format: lowercase, hyphens only, derived from type + key entity. E.g. `reply-sender-subject-slug`, `action-project-task-slug`.
+- **ID STABILITY IS CRITICAL.** The user dismisses items by ID. If you change the ID between runs, dismissed items reappear — this is a bug.
+- If an item appeared in the previous digest (carry-forward) or in the dismissed list, you MUST reuse its exact ID.
+- If an item about the same topic/person appeared in triage with a different ID (e.g. `email-frank-press-review` vs `reply-frank-press-release`), reuse the EXISTING ID from the dismissed list or previous digest.
+- Only generate a new ID for genuinely new items that have no match in dismissed or carry-forward.
 
 Rules for `age` and `verified`:
 - `age`: human-readable relative time from the item's origin date to today. E.g. "2 days", "18 hours", "today", "5 days".

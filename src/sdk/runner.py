@@ -100,6 +100,60 @@ async def run_job(
         return handler.final_text
 
 
+def _build_dismissed_block() -> str:
+    """Build dismissed items text block with dual TTL: snoozed=1 day, archived=30 days."""
+    actions = load_actions()
+    dismissed_raw = actions.get("dismissed", [])
+    snoozed = []
+    archived = []
+    for d in dismissed_raw:
+        try:
+            dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
+            age_days = (datetime.now() - dismissed_at).days
+        except (ValueError, TypeError):
+            age_days = 0
+        status = d.get("status", "archived")  # legacy entries = archived
+        if status == "dismissed":
+            if age_days > 1:
+                continue  # expired snooze — agent can re-surface
+            snoozed.append(d)
+        else:
+            if age_days > 30:
+                continue  # expired archive
+            archived.append(d)
+
+    dismissed_lines = []
+    if snoozed:
+        dismissed_lines.append("### Snoozed today (do NOT include)")
+        for d in snoozed:
+            reason = d.get("reason", "")
+            title = d.get("title", "")
+            line = f"- {d['item']}"
+            if title:
+                line += f" ({title})"
+            if reason:
+                line += f" — *Reason: {reason}*"
+            dismissed_lines.append(line)
+    if archived:
+        dismissed_lines.append("### Archived (do NOT include — learn from the pattern)")
+        for d in archived:
+            reason = d.get("reason", "")
+            title = d.get("title", "")
+            line = f"- {d['item']}"
+            if title:
+                line += f" ({title})"
+            if reason:
+                line += f" — *Reason: {reason}*"
+            dismissed_lines.append(line)
+    if dismissed_lines:
+        return (
+            "\n## Previously Dismissed Items\n"
+            + "\n".join(dismissed_lines)
+            + "\n"
+        )
+    return ""
+
+
 def _build_trigger_prompt(mode: str, mode_cfg: dict, config: dict, context: dict) -> str:
     """Build the trigger prompt from template + variables."""
     # Chat mode: use the user's message directly
@@ -135,54 +189,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         priorities = digest_cfg.get("priorities", [])
         variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
 
-        # Dismissed items — dual TTL: snoozed=1 day, archived=30 days
-        actions = load_actions()
-        dismissed_raw = actions.get("dismissed", [])
-        snoozed = []
-        archived = []
-        for d in dismissed_raw:
-            try:
-                dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
-                age_days = (datetime.now() - dismissed_at).days
-            except (ValueError, TypeError):
-                age_days = 0
-            status = d.get("status", "archived")  # legacy entries = archived
-            if status == "dismissed":
-                if age_days > 1:
-                    continue  # expired snooze — agent can re-surface
-                snoozed.append(d)
-            else:
-                if age_days > 30:
-                    continue  # expired archive
-                archived.append(d)
-        notes = actions.get("notes", {})
-
-        dismissed_lines = []
-        if snoozed:
-            dismissed_lines.append("### Snoozed today (do NOT include)")
-            for d in snoozed:
-                reason = d.get("reason", "")
-                line = f"- {d['item']}"
-                if reason:
-                    line += f" — *Reason: {reason}*"
-                dismissed_lines.append(line)
-        if archived:
-            dismissed_lines.append("### Archived (do NOT include — learn from the pattern)")
-            for d in archived:
-                reason = d.get("reason", "")
-                line = f"- {d['item']}"
-                if reason:
-                    line += f" — *Reason: {reason}*"
-                dismissed_lines.append(line)
-        if dismissed_lines:
-            variables["dismissed_block"] = (
-                "\n## Previously Dismissed Items\n"
-                + "\n".join(dismissed_lines)
-                + "\n"
-            )
-        else:
-            variables["dismissed_block"] = ""
-
+        # Dismissed items + notes
+        variables["dismissed_block"] = _build_dismissed_block()
+        notes = load_actions().get("notes", {})
         if notes:
             note_items = "\n".join(f"- **{k}**: {v['note']}" for k, v in notes.items())
             variables["notes_block"] = f"\n## User Notes (context for your analysis)\n{note_items}\n"
@@ -250,6 +259,7 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["teams_inbox"] = context.get("teams_inbox", "No Teams inbox data available.")
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
+        variables["dismissed_block"] = _build_dismissed_block()
 
     elif mode == "knowledge-archive":
         variables["date"] = date_str

@@ -245,11 +245,13 @@ def _load_digest_actions() -> dict:
     return {"dismissed": [], "notes": {}}
 
 
-def _save_digest_actions(actions: dict) -> None:
+def _save_digest_actions(actions: dict) -> bool:
+    """Save digest actions. Returns True on success, False on failure."""
     try:
         DIGEST_ACTIONS_FILE.write_text(json.dumps(actions, indent=2), encoding="utf-8")
+        return True
     except Exception:
-        pass
+        return False
 
 
 def dismiss_item(
@@ -273,14 +275,33 @@ def dismiss_item(
         _save_digest_actions(actions)
 
 
-def archive_item(item_id: str) -> None:
-    """Permanently archive a dismissed item (30-day TTL)."""
+def archive_item(
+    item_id: str,
+    title: str = "",
+    source: str = "",
+) -> None:
+    """Permanently archive an item (30-day TTL).
+
+    Works on both already-dismissed items (updates status) and active items
+    (creates a new archived entry directly).
+    """
     actions = _load_digest_actions()
+    found = False
     for d in actions.get("dismissed", []):
         if d.get("item") == item_id:
             d["status"] = "archived"
             d["archived_at"] = datetime.now().isoformat()
+            found = True
             break
+    if not found:
+        actions.setdefault("dismissed", []).append({
+            "item": item_id,
+            "title": title,
+            "source": source,
+            "dismissed_at": datetime.now().isoformat(),
+            "archived_at": datetime.now().isoformat(),
+            "status": "archived",
+        })
     _save_digest_actions(actions)
 
 
@@ -309,11 +330,14 @@ def add_note(item_id: str, note: str) -> None:
     _save_digest_actions(actions)
 
 
-def write_reply_job(item: dict, draft: str) -> None:
-    """Queue a reply job (teams_send or email_reply) to JOBS_DIR/pending/."""
+def write_reply_job(item: dict, draft: str) -> bool:
+    """Queue a reply job (teams_send or email_reply) to JOBS_DIR/pending/.
+
+    Returns True on success, False on failure.
+    """
     suggested = item.get("suggested_actions", [])
     if not suggested:
-        return
+        return False
 
     action = suggested[0]
     action_type = action.get("action_type", "")
@@ -339,7 +363,7 @@ def write_reply_job(item: dict, draft: str) -> None:
             "_source": "tui",
         }
     else:
-        return
+        return False
 
     try:
         pending_dir = JOBS_DIR / "pending"
@@ -347,5 +371,6 @@ def write_reply_job(item: dict, draft: str) -> None:
         ts = datetime.now().strftime("%Y%m%dT%H%M%S")
         file_path = pending_dir / f"{ts}-reply-tui.yaml"
         file_path.write_text(yaml.dump(job, default_flow_style=False), encoding="utf-8")
+        return True
     except Exception:
-        pass
+        return False

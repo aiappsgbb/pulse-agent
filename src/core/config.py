@@ -40,8 +40,7 @@ def validate_config(config: dict) -> list[str]:
     for member in config.get("team", []):
         if not member.get("alias"):
             warnings.append(f"Team member '{member.get('name', '?')}' missing 'alias'")
-        if not member.get("agent_path"):
-            warnings.append(f"Team member '{member.get('alias', '?')}' missing 'agent_path'")
+        # agent_path is optional — convention-based paths (PULSE_TEAM_DIR/alias) are preferred
 
     return warnings
 

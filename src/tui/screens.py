@@ -246,8 +246,12 @@ class ReplyModal(ModalScreen):
         text_area = self.query_one(TextArea)
         draft = text_area.text
         if draft.strip():
-            write_reply_job(self._item, draft)
-        self.dismiss("sent")
+            if write_reply_job(self._item, draft):
+                self.dismiss("sent")
+            else:
+                self.dismiss("error")
+        else:
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -369,10 +373,20 @@ class ItemPane(Widget):
         """Override in subclass to load items from disk."""
         return []
 
+    def _title_width(self) -> int:
+        """Max character width for titles in list items."""
+        try:
+            w = self.size.width
+            return max(25, w - 30) if w > 30 else 55
+        except Exception:
+            return 55
+
     def compose(self) -> ComposeResult:
         yield ListView()
         with VerticalScroll(classes="detail-container"):
-            yield Static("Select an item to view details")
+            yield Static("[dim]Select an item to view details\n\n"
+                         "  d = snooze (1d)   a = archive (30d)\n"
+                         "  r = reply         n = note[/dim]")
 
     def on_mount(self) -> None:
         self.load_data()
@@ -386,11 +400,12 @@ class ItemPane(Widget):
         lv = self.query_one(ListView)
         lv.clear()
         if not self._items:
-            lv.append(ListItem(Label("[dim]No items[/dim]")))
+            lv.append(ListItem(Label("[dim]No items — press ^T triage or ^D digest to fetch[/dim]")))
             return
+        tw = self._title_width()
         for item in self._items:
             priority = item.get("priority", "?")
-            title = item.get("title", "?")[:55]
+            title = item.get("title", "?")[:tw]
             source = item.get("source", "")
             text = _priority_markup(priority, title, source)
             lv.append(ListItem(Label(text)))
@@ -426,7 +441,7 @@ class ItemPane(Widget):
                     preview = draft[:120] + ("..." if len(draft) > 120 else "")
                     lines.append(f"  [dim]{preview}[/dim]")
 
-        lines += ["", "[dim]  d = dismiss   r = reply   n = note[/dim]"]
+        lines += ["", "[dim]  d = snooze (1d)   a = archive (30d)   r = reply   n = note[/dim]"]
         detail.update("\n".join(lines))
 
     def get_selected_item(self) -> dict | None:
@@ -463,6 +478,8 @@ class ItemPane(Widget):
     def _on_reply_result(self, result) -> None:
         if result == "sent":
             self.notify("Reply job queued — daemon will send it")
+        elif result == "error":
+            self.notify("Failed to queue reply — check PULSE_HOME/jobs/", severity="error")
 
     def _on_note_result(self, result) -> None:
         if result == "saved":
@@ -480,6 +497,7 @@ class InboxPane(ItemPane):
         super().__init__(**kwargs)
         self._show_dismissed: bool = False
         self._dismissed_count: int = 0
+        self._list_to_item: list[int] = []  # Maps ListView index -> _items index (-1 for separator)
 
     def _load_items(self) -> list[dict]:
         items, self._dismissed_count = _load_inbox_items(
@@ -490,28 +508,55 @@ class InboxPane(ItemPane):
     def _refresh_list(self) -> None:
         lv = self.query_one(ListView)
         lv.clear()
+        self._list_to_item = []
+        tw = self._title_width()
+
         if not self._items:
-            lv.append(ListItem(Label("[dim]No items[/dim]")))
+            lv.append(ListItem(Label(
+                "[dim]Inbox empty — press ^T to run triage or ^D for digest[/dim]"
+            )))
+            self._list_to_item.append(-1)
             return
-        for item in self._items:
+
+        separator_added = False
+        for i, item in enumerate(self._items):
+            # Insert visual separator before first dismissed item
+            if item.get("_is_dismissed") and not separator_added:
+                lv.append(ListItem(Label(
+                    "[dim]──── Dismissed ─────────────────────────────────[/dim]"
+                )))
+                self._list_to_item.append(-1)
+                separator_added = True
+
             if item.get("_is_dismissed"):
-                # Dismissed item rendering
                 status = item.get("status", "archived")
                 label = STATUS_LABELS.get(status, "ARCHIVED")
                 color = STATUS_COLORS.get(status, "dim")
-                title = (item.get("title") or item.get("item", "?"))[:50]
+                title = (item.get("title") or item.get("item", "?"))[:tw]
                 age = _age_str(item.get("dismissed_at", ""))
                 text = f"[{color}][{label}][/{color}] {title}  [dim]({age} ago)[/dim]"
             else:
-                # Active item rendering with origin badge
                 priority = item.get("priority", "?")
-                title = item.get("title", "?")[:50]
+                title = item.get("title", "?")[:tw]
                 source = item.get("source", "")
                 origin = item.get("_origin", "")
                 project = item.get("project", "")
                 proj_tag = f"  [cyan][{project}][/cyan]" if project else ""
                 text = _priority_markup(priority, title, source, origin) + proj_tag
+
             lv.append(ListItem(Label(text)))
+            self._list_to_item.append(i)
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """Override to handle separator items in the ListView index mapping."""
+        if event.item is None:
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._list_to_item):
+            item_idx = self._list_to_item[idx]
+            if item_idx >= 0 and item_idx < len(self._items):
+                self._selected_idx = item_idx
+                self._show_detail(self._items[item_idx])
 
     def _show_detail(self, item: dict) -> None:
         if item.get("_is_dismissed"):
@@ -548,7 +593,7 @@ class InboxPane(ItemPane):
                     preview = draft[:120] + ("..." if len(draft) > 120 else "")
                     lines.append(f"  [dim]{preview}[/dim]")
 
-        lines += ["", "[dim]  d = dismiss   r = reply   n = note[/dim]"]
+        lines += ["", "[dim]  d = snooze (1d)   a = archive (30d)   r = reply   n = note[/dim]"]
         detail.update("\n".join(lines))
 
     def _show_dismissed_detail(self, item: dict) -> None:
@@ -610,13 +655,24 @@ class InboxPane(ItemPane):
         self.notify("Item snoozed (comes back tomorrow if still relevant)")
 
     def archive_selected(self) -> None:
-        """Archive a dismissed item (only works on dismissed items)."""
+        """Archive an item (works on both active and dismissed items)."""
         item = self.get_selected_item()
-        if item and item.get("_is_dismissed"):
+        if not item:
+            return
+        if item.get("_is_dismissed"):
             archive_item(item.get("item", ""))
             item["status"] = "archived"
             self._refresh_list()
-            self.notify("Item archived permanently")
+        else:
+            archive_item(
+                item.get("id", ""),
+                title=item.get("title", ""),
+                source=item.get("source", ""),
+            )
+            self._items.pop(self._selected_idx)
+            self._selected_idx = max(0, self._selected_idx - 1)
+            self._refresh_list()
+        self.notify("Item archived (30-day suppress)")
 
     def restore_selected(self) -> None:
         """Restore a dismissed item (only works on dismissed items)."""
@@ -655,10 +711,20 @@ class ProjectsPane(Widget):
         self._projects: list[dict] = []
         self._selected_idx: int = 0
 
+    def _title_width(self) -> int:
+        """Max character width for project names in list items."""
+        try:
+            w = self.size.width
+            return max(20, w - 35) if w > 35 else 40
+        except Exception:
+            return 40
+
     def compose(self) -> ComposeResult:
         yield ListView()
         with VerticalScroll(classes="detail-container"):
-            yield Static("Select a project to view details")
+            yield Static("[dim]Select a project to view details\n\n"
+                         "Projects are auto-discovered from\n"
+                         "meetings, emails, and digest cycles.[/dim]")
 
     def on_mount(self) -> None:
         self.load_data()
@@ -671,11 +737,14 @@ class ProjectsPane(Widget):
         lv = self.query_one(ListView)
         lv.clear()
         if not self._projects:
-            lv.append(ListItem(Label("[dim]No project files found[/dim]")))
+            lv.append(ListItem(Label(
+                "[dim]No projects yet — run ^D digest to discover engagements[/dim]"
+            )))
             return
 
+        tw = self._title_width()
         for p in self._projects:
-            name = p.get("project", p.get("_id", "?"))[:40]
+            name = p.get("project", p.get("_id", "?"))[:tw]
             status = p.get("status", "active")
             risk = p.get("risk_level", "medium")
             sc = self.PROJECT_STATUS_COLORS.get(status, "white")

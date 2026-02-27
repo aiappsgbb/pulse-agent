@@ -562,15 +562,15 @@ async def test_send_email_reply_queues_action(tmp_dir):
 
 
 async def test_send_task_to_agent_success(tmp_dir):
-    (tmp_dir / "alice-onedrive").mkdir()
+    """Convention-based paths — PULSE_TEAM_DIR/alias/ is auto-derived."""
+    team_dir = tmp_dir / "Pulse-Team"
+    (team_dir / "alice").mkdir(parents=True)
     team_config = {
-        "team": [
-            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice-onedrive")},
-        ],
-        "user": {"name": "Artur Zielinski"},
-        "onedrive": {"path": str(tmp_dir / "my-onedrive")},
+        "team": [{"name": "Alice Test", "alias": "alice"}],
+        "user": {"name": "Artur Zielinski", "alias": "artur"},
     }
-    with patch("core.config.load_config", return_value=team_config):
+    with patch("core.config.load_config", return_value=team_config), \
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
         result = await send_task_to_agent.handler({"arguments": {
             "agent": "alice",
             "task": "What do you know about Vodafone?",
@@ -580,8 +580,8 @@ async def test_send_task_to_agent_success(tmp_dir):
     assert "Alice Test" in result["textResultForLlm"]
     assert "Request ID" in result["textResultForLlm"]
 
-    # Verify YAML was written to alice's Jobs folder
-    jobs_dir = tmp_dir / "alice-onedrive" / "Jobs"
+    # Verify YAML was written to alice's convention path
+    jobs_dir = team_dir / "alice" / "jobs" / "pending"
     yaml_files = list(jobs_dir.glob("*.yaml"))
     assert len(yaml_files) == 1
     data = yaml.safe_load(yaml_files[0].read_text())
@@ -595,9 +595,7 @@ async def test_send_task_to_agent_success(tmp_dir):
 
 async def test_send_task_to_agent_unknown_agent(tmp_dir):
     team_config = {
-        "team": [
-            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
-        ],
+        "team": [{"name": "Alice Test", "alias": "alice"}],
     }
     with patch("core.config.load_config", return_value=team_config):
         result = await send_task_to_agent.handler({"arguments": {
@@ -620,12 +618,14 @@ async def test_send_task_to_agent_no_team_config(tmp_dir):
 
 
 async def test_send_task_to_agent_path_not_accessible(tmp_dir):
+    """Convention path doesn't exist — team folder not synced."""
+    team_dir = tmp_dir / "Pulse-Team"
+    # Don't create alice dir — simulates unsynced OneDrive
     team_config = {
-        "team": [
-            {"name": "Alice", "alias": "alice", "agent_path": str(tmp_dir / "nonexistent-path")},
-        ],
+        "team": [{"name": "Alice", "alias": "alice"}],
     }
-    with patch("core.config.load_config", return_value=team_config):
+    with patch("core.config.load_config", return_value=team_config), \
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
         result = await send_task_to_agent.handler({"arguments": {
             "agent": "alice",
             "task": "Hello",
@@ -635,15 +635,14 @@ async def test_send_task_to_agent_path_not_accessible(tmp_dir):
 
 
 async def test_send_task_to_agent_case_insensitive(tmp_dir):
-    (tmp_dir / "alice").mkdir()
+    team_dir = tmp_dir / "Pulse-Team"
+    (team_dir / "alice").mkdir(parents=True)
     team_config = {
-        "team": [
-            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
-        ],
-        "user": {"name": "Artur"},
-        "onedrive": {"path": str(tmp_dir)},
+        "team": [{"name": "Alice Test", "alias": "alice"}],
+        "user": {"name": "Artur", "alias": "artur"},
     }
-    with patch("core.config.load_config", return_value=team_config):
+    with patch("core.config.load_config", return_value=team_config), \
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
         result = await send_task_to_agent.handler({"arguments": {
             "agent": "Alice",
             "task": "Test case insensitivity",
@@ -652,17 +651,35 @@ async def test_send_task_to_agent_case_insensitive(tmp_dir):
 
 
 async def test_send_task_to_agent_match_by_name(tmp_dir):
-    (tmp_dir / "alice").mkdir()
+    team_dir = tmp_dir / "Pulse-Team"
+    (team_dir / "alice").mkdir(parents=True)
     team_config = {
-        "team": [
-            {"name": "Alice Test", "alias": "alice", "agent_path": str(tmp_dir / "alice")},
-        ],
-        "user": {"name": "Artur"},
-        "onedrive": {"path": str(tmp_dir)},
+        "team": [{"name": "Alice Test", "alias": "alice"}],
+        "user": {"name": "Artur", "alias": "artur"},
     }
-    with patch("core.config.load_config", return_value=team_config):
+    with patch("core.config.load_config", return_value=team_config), \
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
         result = await send_task_to_agent.handler({"arguments": {
             "agent": "alice test",
             "task": "Test name matching",
         }})
     assert result["resultType"] == "success"
+
+
+async def test_send_task_to_agent_explicit_agent_path(tmp_dir):
+    """Backward compat — explicit agent_path in config still works."""
+    (tmp_dir / "alice-custom").mkdir()
+    team_config = {
+        "team": [{"name": "Alice", "alias": "alice", "agent_path": str(tmp_dir / "alice-custom")}],
+        "user": {"name": "Artur", "alias": "artur"},
+    }
+    with patch("core.config.load_config", return_value=team_config):
+        result = await send_task_to_agent.handler({"arguments": {
+            "agent": "alice",
+            "task": "Test backward compat",
+        }})
+    assert result["resultType"] == "success"
+    # Should write to explicit path's Jobs/ folder (not convention path)
+    jobs_dir = tmp_dir / "alice-custom" / "Jobs"
+    yaml_files = list(jobs_dir.glob("*.yaml"))
+    assert len(yaml_files) == 1

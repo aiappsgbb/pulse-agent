@@ -60,13 +60,27 @@ class StatusBar(Static):
     """
 
     def update_status(self) -> None:
+        from datetime import datetime
         status = read_daemon_status()
         if status:
+            # Check if status file is stale (daemon died without cleanup)
+            updated_at = status.get("updated_at", "")
+            try:
+                last_update = datetime.fromisoformat(updated_at)
+                age_s = (datetime.now() - last_update).total_seconds()
+            except (ValueError, TypeError):
+                age_s = 999
+            if age_s > 120:  # >2 min stale = daemon is dead
+                self.update(
+                    " Daemon: offline — start with: python src/main.py"
+                    "  |  ^R refresh  q quit"
+                )
+                return
             uptime_s = status.get("uptime_s", 0)
             h, m = divmod(uptime_s // 60, 60)
             uptime_str = f"{h}h{m:02d}m" if h else f"{m}m"
             queue_size = status.get("queue_size", 0)
-            updated = status.get("updated_at", "")[:16].replace("T", " ")
+            updated = updated_at[:16].replace("T", " ")
             self.update(
                 f" Daemon: up {uptime_str}  |  Queue: {queue_size}  |  Updated: {updated}"
                 f"  |  ^D digest  ^T triage  ^I intel  ^H dismissed  q quit"
@@ -93,6 +107,7 @@ class PulseApp(App):
         Binding("ctrl+l", "view_latest_inbox", "Latest", show=True),
         Binding("ctrl+r", "refresh_all", "Refresh", show=True),
         Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=True),
+        Binding("ctrl+e", "clear_chat", "Clear Chat", show=False),
         # Item actions
         Binding("d", "item_dismiss", "Dismiss", show=False),
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
@@ -145,6 +160,7 @@ class PulseApp(App):
 
     def on_mount(self) -> None:
         self._prev_item_count = len(self.query_one(InboxPane)._items)
+        self._update_tab_labels()
         # Periodic background tasks
         self.set_interval(30, self._auto_refresh_panes)
         self.set_interval(5, self._update_status_bar)
@@ -177,11 +193,35 @@ class PulseApp(App):
             inbox = self.query_one(InboxPane)
             inbox.load_data()
             self.query_one(ProjectsPane).load_data()
+            self._update_tab_labels()
             new_count = len(inbox._items)
             if new_count > self._prev_item_count:
                 _play_alert()
                 self.bell()
             self._prev_item_count = new_count
+        except Exception:
+            pass
+
+    def _update_tab_labels(self) -> None:
+        """Update tab labels with item/project counts."""
+        try:
+            tabs = self.query_one(TabbedContent)
+            inbox = self.query_one(InboxPane)
+            active_count = sum(1 for i in inbox._items if not i.get("_is_dismissed"))
+            dismissed = inbox._dismissed_count
+
+            if dismissed and not inbox._show_dismissed:
+                label = f"Inbox ({active_count} + {dismissed} hidden)"
+            elif active_count:
+                label = f"Inbox ({active_count})"
+            else:
+                label = "Inbox"
+            tabs.get_tab("tab-inbox").label = label
+
+            proj_count = len(self.query_one(ProjectsPane)._projects)
+            tabs.get_tab("tab-projects").label = (
+                f"Projects ({proj_count})" if proj_count else "Projects"
+            )
         except Exception:
             pass
 
@@ -229,6 +269,7 @@ class PulseApp(App):
         tabs = self.query_one(TabbedContent)
         tabs.active = "tab-inbox"
         self.query_one(InboxPane).load_data()
+        self._update_tab_labels()
 
     def action_refresh_all(self) -> None:
         self._auto_refresh_panes()
@@ -236,6 +277,14 @@ class PulseApp(App):
 
     def action_toggle_dismissed(self) -> None:
         self.query_one(InboxPane).toggle_dismissed()
+        self._update_tab_labels()
+
+    def action_clear_chat(self) -> None:
+        """Clear chat log (Ctrl+E)."""
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == "tab-chat":
+            self.query_one(ChatPane).clear_chat()
+            self.notify("Chat cleared")
 
     # -------------------------------------------------------------------------
     # Item actions (delegate to active pane)
@@ -273,7 +322,7 @@ class PulseApp(App):
         if self._input_is_focused():
             return
         pane = self._get_active_item_pane()
-        if pane and pane.is_dismissed_selected():
+        if pane:
             pane.archive_selected()
 
     def _get_active_item_pane(self) -> InboxPane | None:

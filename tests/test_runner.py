@@ -84,13 +84,14 @@ def test_carry_forward_all_stale():
 
 
 def test_load_previous_digest_missing_dir(tmp_dir):
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", tmp_dir / "nonexistent"):
         assert _load_previous_digest() is None
 
 
 def test_load_previous_digest_no_json_files(tmp_dir):
-    (tmp_dir / "digests").mkdir()
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    digests_dir = tmp_dir / "digests"
+    digests_dir.mkdir()
+    with patch("sdk.runner.DIGESTS_DIR", digests_dir):
         assert _load_previous_digest() is None
 
 
@@ -108,7 +109,7 @@ def test_load_previous_digest_corrupt_json(tmp_dir):
     digests_dir = tmp_dir / "digests"
     digests_dir.mkdir()
     (digests_dir / "2026-02-17.json").write_text("not valid json {{{", encoding="utf-8")
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", digests_dir):
         assert _load_previous_digest() is None
 
 
@@ -137,7 +138,7 @@ def test_trigger_variables_monitor_default(sample_config):
 
 
 def test_trigger_variables_digest_no_previous(sample_config, tmp_dir):
-    with patch("sdk.runner.OUTPUT_DIR", tmp_dir):
+    with patch("sdk.runner.DIGESTS_DIR", tmp_dir / "nonexistent"):
         result = _build_trigger_variables("digest", sample_config, {
             "content_block": "some content",
             "teams_inbox_block": "## 2 Unread Messages",

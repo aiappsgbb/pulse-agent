@@ -12,7 +12,7 @@ import re
 import yaml
 
 from core.constants import (
-    OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME,
+    OUTPUT_DIR, JOBS_DIR, PROJECTS_DIR, PULSE_HOME, PULSE_TEAM_DIR,
     TRANSCRIPTS_DIR, DOCUMENTS_DIR, EMAILS_DIR, TEAMS_MESSAGES_DIR,
     DIGESTS_DIR, INTEL_DIR,
 )
@@ -259,7 +259,7 @@ def cancel_schedule(params: CancelScheduleParams, invocation: ToolInvocation) ->
     name="send_task_to_agent",
     description=(
         "Send a task or question to another team member's Pulse Agent. "
-        "The task is delivered via their shared OneDrive folder. "
+        "The task is delivered via their shared OneDrive folder (convention-based path). "
         "Their agent will process it and send back a response. "
         "Use 'agent' to specify the team member (alias from team directory). "
         "Use 'kind' to specify the type: question, research, intel, or review."
@@ -271,7 +271,7 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
 
     config = load_config()
 
-    # Look up agent in team directory
+    # Look up agent in team directory (by alias or name)
     team = config.get("team", [])
     agent_entry = None
     for member in team:
@@ -286,24 +286,35 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
         available = ", ".join(m.get("alias", m.get("name", "?")) for m in team)
         return f"ERROR: Agent '{params.agent}' not found in team directory. Available: {available}"
 
-    agent_path = Path(agent_entry["agent_path"])
-    jobs_dir = agent_path / "Jobs"
+    alias = agent_entry.get("alias", "").lower()
+    if not alias:
+        return f"ERROR: Agent '{params.agent}' has no alias configured."
+
+    # Convention-based path: PULSE_TEAM_DIR/{alias}/jobs/pending/
+    # Falls back to explicit agent_path if set (backward compat)
+    explicit_path = agent_entry.get("agent_path")
+    if explicit_path:
+        agent_path = Path(explicit_path)
+        jobs_dir = agent_path / "Jobs"
+    else:
+        agent_path = PULSE_TEAM_DIR / alias
+        jobs_dir = agent_path / "jobs" / "pending"
 
     if not agent_path.exists():
         return (
-            f"ERROR: Path for agent '{params.agent}' not accessible: {agent_path}. "
-            f"Is their OneDrive folder shared and synced on this machine?"
+            f"ERROR: Path for agent '{alias}' not accessible: {agent_path}. "
+            f"Make sure the Pulse-Team OneDrive folder is shared and synced."
         )
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build reply_to path (this agent's own incoming jobs folder)
-    reply_to = str(JOBS_DIR)
-
-    # Build this agent's identity
+    # Build reply_to path — convention-based: PULSE_TEAM_DIR/{my_alias}/jobs/pending/
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = from_name.lower().split()[0] if from_name else "unknown"
+    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+    my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
+    my_team_dir.mkdir(parents=True, exist_ok=True)
+    reply_to = str(my_team_dir)
 
     request_id = str(uuid.uuid4())
     timestamp = datetime.now().isoformat()

@@ -1,7 +1,13 @@
 """Single source of truth for all path constants.
 
-PULSE_HOME env var controls where all persistent data lives.
-Set it to your OneDrive/Pulse folder. Falls back to PROJECT_ROOT for dev.
+Zero-config path resolution:
+  1. PULSE_HOME env var (explicit override, used by tests)
+  2. OneDriveCommercial env var + /Documents/Pulse (auto-detected on Windows)
+  3. PROJECT_ROOT (dev fallback)
+
+Convention: every team member's data lives at the SAME relative path under
+their OneDrive. Inter-agent paths are derived from alias — no per-member
+config needed.
 """
 
 import os
@@ -13,11 +19,28 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 PROMPTS_DIR = CONFIG_DIR / "prompts"
 INSTRUCTIONS_DIR = CONFIG_DIR / "instructions"
 
-# PULSE_HOME: all persistent data (transcripts, digests, logs, state files).
-# Production: set PULSE_HOME to OneDrive/Pulse folder.
-# Dev/testing: defaults to PROJECT_ROOT (tests patch individual constants).
+# --- PULSE_HOME: all persistent data (transcripts, digests, logs, state) ---
+# Resolution: PULSE_HOME env > OneDriveCommercial/Documents/Pulse > PROJECT_ROOT
 _pulse_home_env = os.environ.get("PULSE_HOME", "")
-PULSE_HOME = Path(os.path.expandvars(_pulse_home_env)) if _pulse_home_env else PROJECT_ROOT
+_onedrive_biz = os.environ.get("OneDriveCommercial", "")
+
+if _pulse_home_env:
+    PULSE_HOME = Path(os.path.expandvars(_pulse_home_env))
+elif _onedrive_biz:
+    PULSE_HOME = Path(_onedrive_biz) / "Documents" / "Pulse"
+else:
+    PULSE_HOME = PROJECT_ROOT  # dev/testing fallback
+
+# --- PULSE_TEAM_DIR: shared team folder for inter-agent communication ---
+# Convention: OneDrive/Documents/Pulse-Team/{alias}/ per team member.
+# Each member's jobs folder: PULSE_TEAM_DIR / alias / "jobs" / "pending"
+if _pulse_home_env:
+    # Explicit override — team dir is sibling of PULSE_HOME
+    PULSE_TEAM_DIR = PULSE_HOME.parent / "Pulse-Team"
+elif _onedrive_biz:
+    PULSE_TEAM_DIR = Path(_onedrive_biz) / "Documents" / "Pulse-Team"
+else:
+    PULSE_TEAM_DIR = PROJECT_ROOT / "Pulse-Team"  # dev fallback
 
 # Named data directories (flat under PULSE_HOME)
 TRANSCRIPTS_DIR = PULSE_HOME / "transcripts"

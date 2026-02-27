@@ -54,10 +54,8 @@ intelligence:
 team:
   - name: "Artur Zielinski"
     alias: "artur"
-    agent_path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse"
   - name: "Agent Beta"
     alias: "beta"
-    agent_path: "$USERPROFILE/OneDrive - Microsoft/Documents/Pulse-Team/agent-beta"
 
 telegram:
   enabled: false
