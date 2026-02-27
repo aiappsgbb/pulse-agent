@@ -1,9 +1,8 @@
 """Textual TUI panes and modals for Pulse Agent.
 
 Panes (used as tab content):
-  TriagePane    — latest monitoring JSON items with D/R/N actions
-  DigestPane    — latest digest JSON items with D/R/N actions
-  ProjectsPane  — per-engagement project YAML files
+  InboxPane     — unified actionable items (triage + digest, dismissed toggle)
+  ProjectsPane  — per-engagement project YAML files with linked items
   ChatPane      — streaming chat with the agent via file IPC
 
 Modals:
@@ -49,12 +48,41 @@ PRIORITY_COLORS: dict[str, str] = {
     "low": "dim white",
 }
 
+ORIGIN_COLORS: dict[str, str] = {
+    "triage": "magenta",
+    "digest": "blue",
+}
 
-def _priority_markup(priority: str, title: str, source: str = "") -> str:
+STATUS_LABELS: dict[str, str] = {
+    "dismissed": "SNOOZED",
+    "archived": "ARCHIVED",
+}
+
+STATUS_COLORS: dict[str, str] = {
+    "dismissed": "yellow",
+    "archived": "dim",
+}
+
+
+def _priority_markup(priority: str, title: str, source: str = "", origin: str = "") -> str:
     p = priority.upper()
     color = PRIORITY_COLORS.get(priority.lower(), "white")
     src = f"  [dim]{source}[/dim]" if source else ""
-    return f"[{color}][{p}][/{color}] {title}{src}"
+    orig = f"  [{ORIGIN_COLORS.get(origin, 'dim')}]{origin}[/{ORIGIN_COLORS.get(origin, 'dim')}]" if origin else ""
+    return f"[{color}][{p}][/{color}] {title}{src}{orig}"
+
+
+def _age_str(iso_ts: str) -> str:
+    """Human-readable age from ISO timestamp (e.g. '2h', '3d')."""
+    try:
+        dt = datetime.fromisoformat(iso_ts)
+        delta = datetime.now() - dt
+        if delta.days > 0:
+            return f"{delta.days}d"
+        hours = delta.seconds // 3600
+        return f"{hours}h" if hours else "<1h"
+    except Exception:
+        return "?"
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +129,75 @@ def _load_projects() -> list[dict]:
         except Exception:
             pass
     return projects
+
+
+# ---------------------------------------------------------------------------
+# Inbox data merging
+# ---------------------------------------------------------------------------
+
+_PRIORITY_ORDER = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _inbox_sort_key(item: dict) -> tuple:
+    """Sort: urgent first, then high, then triage before digest."""
+    priority = item.get("priority", "medium").lower()
+    origin = item.get("_origin", "digest")
+    return (
+        _PRIORITY_ORDER.get(priority, 2),
+        0 if origin == "triage" else 1,
+        item.get("title", ""),
+    )
+
+
+def _load_inbox_items(include_dismissed: bool = False) -> tuple[list[dict], int]:
+    """Merge triage + digest items, dedup by ID, optionally include dismissed.
+
+    Returns (items, dismissed_count).
+    """
+    triage_items = _load_triage_items()
+    digest_items = _load_digest_items()
+    dismissed = load_dismissed_items()
+    dismissed_ids = {d.get("item") for d in dismissed}
+
+    # Tag items with origin
+    for item in triage_items:
+        item["_origin"] = "triage"
+    for item in digest_items:
+        item["_origin"] = "digest"
+
+    # Merge: triage first (more recent), then digest. Dedup by ID.
+    seen_ids: set[str] = set()
+    active: list[dict] = []
+    for item in triage_items:
+        item_id = item.get("id", "")
+        if item_id and item_id in dismissed_ids:
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        active.append(item)
+    for item in digest_items:
+        item_id = item.get("id", "")
+        if item_id and (item_id in seen_ids or item_id in dismissed_ids):
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        active.append(item)
+
+    active.sort(key=_inbox_sort_key)
+
+    dismissed_count = len(dismissed)
+
+    if include_dismissed and dismissed:
+        # Append dismissed items at the bottom
+        for d in dismissed:
+            d["_origin"] = "dismissed"
+            d["_is_dismissed"] = True
+            # Ensure basic fields for display
+            d.setdefault("priority", "low")
+            d.setdefault("title", d.get("item", "?"))
+        active.extend(dismissed)
+
+    return active, dismissed_count
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +324,11 @@ class QuestionModal(ModalScreen):
 
 
 # ---------------------------------------------------------------------------
-# Base item pane (shared by Triage and Digest)
+# Base item pane (shared logic)
 # ---------------------------------------------------------------------------
 
 class ItemPane(Widget):
-    """Base widget for triage/digest item views.
+    """Base widget for item views with list + detail layout.
 
     Subclasses override _load_items() to provide data.
     """
@@ -299,7 +396,6 @@ class ItemPane(Widget):
                 draft = a.get("draft", "")
                 lines.append(f"  [{label}]")
                 if draft:
-                    # Show first 120 chars of draft
                     preview = draft[:120] + ("..." if len(draft) > 120 else "")
                     lines.append(f"  [dim]{preview}[/dim]")
 
@@ -347,199 +443,88 @@ class ItemPane(Widget):
 
 
 # ---------------------------------------------------------------------------
-# Concrete item panes
+# Inbox pane (replaces Triage + Digest + Dismissed)
 # ---------------------------------------------------------------------------
 
-class TriagePane(ItemPane):
-    """Triage items from the latest monitoring JSON."""
-
-    def _load_items(self) -> list[dict]:
-        return _load_triage_items()
-
-
-class DigestPane(ItemPane):
-    """Digest items from the latest digest JSON."""
-
-    def _load_items(self) -> list[dict]:
-        return _load_digest_items()
-
-
-# ---------------------------------------------------------------------------
-# Projects pane
-# ---------------------------------------------------------------------------
-
-class ProjectsPane(Widget):
-    """Projects list from PULSE_HOME/projects/*.yaml."""
+class InboxPane(ItemPane):
+    """Unified inbox: triage + digest items, with dismissed toggle (Ctrl+H)."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._projects: list[dict] = []
-        self._selected_idx: int = 0
+        self._show_dismissed: bool = False
+        self._dismissed_count: int = 0
 
-    def compose(self) -> ComposeResult:
-        yield ListView()
-        with VerticalScroll(classes="detail-container"):
-            yield Static("Select a project to view details")
-
-    def on_mount(self) -> None:
-        self.load_data()
-
-    def load_data(self) -> None:
-        self._projects = _load_projects()
-        self._refresh_list()
-
-    def _refresh_list(self) -> None:
-        lv = self.query_one(ListView)
-        lv.clear()
-        if not self._projects:
-            lv.append(ListItem(Label("[dim]No project files found[/dim]")))
-            return
-
-        STATUS_COLORS = {
-            "active": "green", "blocked": "red",
-            "on-hold": "yellow", "completed": "dim",
-        }
-        RISK_COLORS = {
-            "critical": "bold red", "high": "yellow",
-            "medium": "cyan", "low": "green",
-        }
-
-        for p in self._projects:
-            name = p.get("project", p.get("_id", "?"))[:40]
-            status = p.get("status", "active")
-            risk = p.get("risk_level", "medium")
-            sc = STATUS_COLORS.get(status, "white")
-            rc = RISK_COLORS.get(risk, "white")
-            text = f"[{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}"
-            lv.append(ListItem(Label(text)))
-
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.item is None:
-            return
-        idx = event.list_view.index
-        if idx is not None and 0 <= idx < len(self._projects):
-            self._selected_idx = idx
-            self._show_detail(self._projects[idx])
-
-    def _show_detail(self, project: dict) -> None:
-        detail = self.query_one(Static)
-
-        lines = [
-            f"[bold]{project.get('project', '?')}[/bold]",
-            f"Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
-            "",
-            project.get("summary", ""),
-        ]
-
-        stakeholders = project.get("stakeholders", [])
-        if stakeholders:
-            lines += ["", "[bold]Stakeholders:[/bold]"]
-            for s in stakeholders:
-                name = s.get("name", "?")
-                role = s.get("role", "")
-                lines.append(f"  {name}" + (f" ({role})" if role else ""))
-
-        commitments = project.get("commitments", [])
-        if commitments:
-            lines += ["", "[bold]Commitments:[/bold]"]
-            for c in commitments:
-                c_status = c.get("status", "open").upper()
-                what = c.get("what", "?")
-                due = c.get("due", "")
-                color = "red" if c_status == "OVERDUE" else ("yellow" if c_status == "OPEN" else "dim")
-                lines.append(
-                    f"  [{color}][{c_status}][/{color}] {what}"
-                    + (f"  (due: {due})" if due else "")
-                )
-
-        next_mtg = project.get("next_meeting", "")
-        if next_mtg:
-            lines += ["", f"Next meeting: [cyan]{next_mtg}[/cyan]"]
-
-        key_dates = project.get("key_dates", [])
-        if key_dates:
-            lines += ["", "[bold]Key dates:[/bold]"]
-            for kd in key_dates[:5]:
-                lines.append(f"  {kd.get('date', '?')} — {kd.get('event', '?')}")
-
-        detail.update("\n".join(lines))
-
-
-# ---------------------------------------------------------------------------
-# Dismissed pane
-# ---------------------------------------------------------------------------
-
-STATUS_LABELS: dict[str, str] = {
-    "dismissed": "SNOOZED",
-    "archived": "ARCHIVED",
-}
-
-STATUS_COLORS: dict[str, str] = {
-    "dismissed": "yellow",
-    "archived": "dim",
-}
-
-
-def _age_str(iso_ts: str) -> str:
-    """Human-readable age from ISO timestamp (e.g. '2h', '3d')."""
-    try:
-        dt = datetime.fromisoformat(iso_ts)
-        delta = datetime.now() - dt
-        if delta.days > 0:
-            return f"{delta.days}d"
-        hours = delta.seconds // 3600
-        return f"{hours}h" if hours else "<1h"
-    except Exception:
-        return "?"
-
-
-class DismissedPane(Widget):
-    """Dismissed/archived items with restore and archive actions."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._items: list[dict] = []
-        self._selected_idx: int = 0
-
-    def compose(self) -> ComposeResult:
-        yield ListView()
-        with VerticalScroll(classes="detail-container"):
-            yield Static("Select an item to view details")
-
-    def on_mount(self) -> None:
-        self.load_data()
-
-    def load_data(self) -> None:
-        self._items = load_dismissed_items()
-        self._refresh_list()
+    def _load_items(self) -> list[dict]:
+        items, self._dismissed_count = _load_inbox_items(
+            include_dismissed=self._show_dismissed,
+        )
+        return items
 
     def _refresh_list(self) -> None:
         lv = self.query_one(ListView)
         lv.clear()
         if not self._items:
-            lv.append(ListItem(Label("[dim]No dismissed items[/dim]")))
+            lv.append(ListItem(Label("[dim]No items[/dim]")))
             return
         for item in self._items:
-            status = item.get("status", "archived")
-            label = STATUS_LABELS.get(status, "ARCHIVED")
-            color = STATUS_COLORS.get(status, "dim")
-            title = item.get("title") or item.get("item", "?")
-            title = title[:50]
-            age = _age_str(item.get("dismissed_at", ""))
-            source = item.get("source", "")
-            src = f"  [dim]{source}[/dim]" if source else ""
-            text = f"[{color}][{label}][/{color}] {title}{src}  [dim]({age} ago)[/dim]"
+            if item.get("_is_dismissed"):
+                # Dismissed item rendering
+                status = item.get("status", "archived")
+                label = STATUS_LABELS.get(status, "ARCHIVED")
+                color = STATUS_COLORS.get(status, "dim")
+                title = (item.get("title") or item.get("item", "?"))[:50]
+                age = _age_str(item.get("dismissed_at", ""))
+                text = f"[{color}][{label}][/{color}] {title}  [dim]({age} ago)[/dim]"
+            else:
+                # Active item rendering with origin badge
+                priority = item.get("priority", "?")
+                title = item.get("title", "?")[:50]
+                source = item.get("source", "")
+                origin = item.get("_origin", "")
+                project = item.get("project", "")
+                proj_tag = f"  [cyan][{project}][/cyan]" if project else ""
+                text = _priority_markup(priority, title, source, origin) + proj_tag
             lv.append(ListItem(Label(text)))
 
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.item is None:
-            return
-        idx = event.list_view.index
-        if idx is not None and 0 <= idx < len(self._items):
-            self._selected_idx = idx
-            self._show_detail(self._items[idx])
-
     def _show_detail(self, item: dict) -> None:
+        if item.get("_is_dismissed"):
+            self._show_dismissed_detail(item)
+        else:
+            self._show_active_detail(item)
+
+    def _show_active_detail(self, item: dict) -> None:
+        detail = self.query_one(Static)
+        priority = item.get("priority", "?").upper()
+        color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
+        origin = item.get("_origin", "")
+        origin_tag = f"  [{ORIGIN_COLORS.get(origin, 'dim')}]{origin}[/{ORIGIN_COLORS.get(origin, 'dim')}]" if origin else ""
+
+        lines = [
+            f"[{color}][{priority}][/{color}]{origin_tag} [bold]{item.get('title', '')}[/bold]",
+            f"Source: {item.get('source', '?')}  |  Date: {item.get('date', '?')}",
+        ]
+
+        project = item.get("project", "")
+        if project:
+            lines.append(f"Project: [cyan]{project}[/cyan]")
+
+        lines += ["", item.get("summary", "")]
+
+        suggested = item.get("suggested_actions", [])
+        if suggested:
+            lines += ["", "[bold]Suggested actions:[/bold]"]
+            for a in suggested:
+                label = a.get("label", a.get("action_type", "?"))
+                draft = a.get("draft", "")
+                lines.append(f"  [{label}]")
+                if draft:
+                    preview = draft[:120] + ("..." if len(draft) > 120 else "")
+                    lines.append(f"  [dim]{preview}[/dim]")
+
+        lines += ["", "[dim]  d = dismiss   r = reply   n = note[/dim]"]
+        detail.update("\n".join(lines))
+
+    def _show_dismissed_detail(self, item: dict) -> None:
         detail = self.query_one(Static)
         status = item.get("status", "archived")
         label = STATUS_LABELS.get(status, "ARCHIVED")
@@ -572,27 +557,215 @@ class DismissedPane(Widget):
             ]
         detail.update("\n".join(lines))
 
-    def get_selected_item(self) -> dict | None:
-        if 0 <= self._selected_idx < len(self._items):
-            return self._items[self._selected_idx]
-        return None
+    def toggle_dismissed(self) -> None:
+        """Toggle showing/hiding dismissed items."""
+        self._show_dismissed = not self._show_dismissed
+        self.load_data()
+        if self._show_dismissed:
+            self.notify(f"Showing {self._dismissed_count} dismissed items")
+        else:
+            hidden = self._dismissed_count
+            self.notify(f"Hiding {hidden} dismissed items" if hidden else "No dismissed items")
+
+    def dismiss_selected(self) -> None:
+        item = self.get_selected_item()
+        if not item or item.get("_is_dismissed"):
+            return
+        dismiss_item(
+            item.get("id", ""),
+            reason="",
+            title=item.get("title", ""),
+            source=item.get("source", ""),
+        )
+        self._items.pop(self._selected_idx)
+        self._selected_idx = max(0, self._selected_idx - 1)
+        self._refresh_list()
+        self.notify("Item snoozed (comes back tomorrow if still relevant)")
 
     def archive_selected(self) -> None:
+        """Archive a dismissed item (only works on dismissed items)."""
         item = self.get_selected_item()
-        if item:
+        if item and item.get("_is_dismissed"):
             archive_item(item.get("item", ""))
             item["status"] = "archived"
             self._refresh_list()
             self.notify("Item archived permanently")
 
     def restore_selected(self) -> None:
+        """Restore a dismissed item (only works on dismissed items)."""
         item = self.get_selected_item()
-        if item:
+        if item and item.get("_is_dismissed"):
             restore_item(item.get("item", ""))
             self._items.pop(self._selected_idx)
             self._selected_idx = max(0, self._selected_idx - 1)
             self._refresh_list()
             self.notify("Item restored — will appear in next triage/digest")
+
+    def is_dismissed_selected(self) -> bool:
+        """Check if the currently selected item is a dismissed item."""
+        item = self.get_selected_item()
+        return bool(item and item.get("_is_dismissed"))
+
+
+# ---------------------------------------------------------------------------
+# Projects pane (enhanced with linked items + commitment highlights)
+# ---------------------------------------------------------------------------
+
+class ProjectsPane(Widget):
+    """Projects list from PULSE_HOME/projects/*.yaml with linked items."""
+
+    PROJECT_STATUS_COLORS: dict[str, str] = {
+        "active": "green", "blocked": "red",
+        "on-hold": "yellow", "completed": "dim",
+    }
+    RISK_COLORS: dict[str, str] = {
+        "critical": "bold red", "high": "yellow",
+        "medium": "cyan", "low": "green",
+    }
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._projects: list[dict] = []
+        self._selected_idx: int = 0
+
+    def compose(self) -> ComposeResult:
+        yield ListView()
+        with VerticalScroll(classes="detail-container"):
+            yield Static("Select a project to view details")
+
+    def on_mount(self) -> None:
+        self.load_data()
+
+    def load_data(self) -> None:
+        self._projects = _load_projects()
+        self._refresh_list()
+
+    def _refresh_list(self) -> None:
+        lv = self.query_one(ListView)
+        lv.clear()
+        if not self._projects:
+            lv.append(ListItem(Label("[dim]No project files found[/dim]")))
+            return
+
+        for p in self._projects:
+            name = p.get("project", p.get("_id", "?"))[:40]
+            status = p.get("status", "active")
+            risk = p.get("risk_level", "medium")
+            sc = self.PROJECT_STATUS_COLORS.get(status, "white")
+            rc = self.RISK_COLORS.get(risk, "white")
+
+            # Count overdue commitments for badge
+            overdue = sum(
+                1 for c in p.get("commitments", [])
+                if c.get("status", "").lower() == "overdue"
+            )
+            overdue_badge = f"  [bold red]({overdue} overdue)[/bold red]" if overdue else ""
+            text = f"[{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{overdue_badge}"
+            lv.append(ListItem(Label(text)))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item is None:
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._projects):
+            self._selected_idx = idx
+            self._show_detail(self._projects[idx])
+
+    def _show_detail(self, project: dict) -> None:
+        detail = self.query_one(Static)
+
+        lines = [
+            f"[bold]{project.get('project', '?')}[/bold]",
+            f"Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
+            "",
+            project.get("summary", ""),
+        ]
+
+        # Commitments — overdue first, then open, highlighted
+        commitments = project.get("commitments", [])
+        if commitments:
+            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
+            upcoming = [c for c in commitments if c.get("status", "").lower() == "open"]
+            done = [c for c in commitments if c.get("status", "").lower() in ("done", "cancelled")]
+
+            if overdue:
+                lines += ["", "[bold red]Overdue commitments:[/bold red]"]
+                for c in overdue:
+                    what = c.get("what", "?")
+                    due = c.get("due", "")
+                    who = c.get("who", "")
+                    to = c.get("to", "")
+                    line = f"  [red][OVERDUE][/red] {what}"
+                    if due:
+                        line += f"  (due: {due})"
+                    if who:
+                        line += f"  — {who}"
+                    if to:
+                        line += f" to {to}"
+                    lines.append(line)
+
+            if upcoming:
+                lines += ["", "[bold yellow]Open commitments:[/bold yellow]"]
+                for c in upcoming:
+                    what = c.get("what", "?")
+                    due = c.get("due", "")
+                    who = c.get("who", "")
+                    color = "yellow"
+                    line = f"  [{color}][OPEN][/{color}] {what}"
+                    if due:
+                        line += f"  (due: {due})"
+                    if who:
+                        line += f"  — {who}"
+                    lines.append(line)
+
+            if done:
+                lines += ["", "[dim]Completed/cancelled:[/dim]"]
+                for c in done[:3]:  # Show max 3
+                    what = c.get("what", "?")
+                    lines.append(f"  [dim][{c.get('status', '?').upper()}] {what}[/dim]")
+
+        # Linked inbox items (digest items referencing this project)
+        project_id = project.get("_id", "")
+        if project_id:
+            linked = self._get_linked_items(project_id)
+            if linked:
+                lines += ["", f"[bold cyan]Linked inbox items ({len(linked)}):[/bold cyan]"]
+                for item in linked[:5]:  # Show max 5
+                    p_color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
+                    title = item.get("title", "?")[:50]
+                    lines.append(f"  [{p_color}][{item.get('priority', '?').upper()}][/{p_color}] {title}")
+
+        # Stakeholders
+        stakeholders = project.get("stakeholders", [])
+        if stakeholders:
+            lines += ["", "[bold]Stakeholders:[/bold]"]
+            for s in stakeholders:
+                name = s.get("name", "?")
+                role = s.get("role", "")
+                lines.append(f"  {name}" + (f" ({role})" if role else ""))
+
+        # Next meeting + key dates
+        next_mtg = project.get("next_meeting", "")
+        if next_mtg:
+            lines += ["", f"Next meeting: [cyan]{next_mtg}[/cyan]"]
+
+        key_dates = project.get("key_dates", [])
+        if key_dates:
+            lines += ["", "[bold]Key dates:[/bold]"]
+            for kd in key_dates[:5]:
+                lines.append(f"  {kd.get('date', '?')} — {kd.get('event', '?')}")
+
+        detail.update("\n".join(lines))
+
+    def _get_linked_items(self, project_id: str) -> list[dict]:
+        """Find digest items that reference this project."""
+        digest_items = _load_digest_items()
+        linked = []
+        for item in digest_items:
+            item_project = item.get("project", "")
+            if isinstance(item_project, str) and item_project.lower() == project_id.lower():
+                linked.append(item)
+        return linked
 
 
 # ---------------------------------------------------------------------------

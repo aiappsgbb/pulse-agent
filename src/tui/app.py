@@ -1,21 +1,21 @@
 """Pulse Agent TUI — main Textual application.
 
-Provides a 5-tab interactive dashboard:
-  Triage     — latest triage items with dismiss/reply/note actions
-  Digest     — morning digest items
-  Dismissed  — snoozed/archived items with restore/archive actions
-  Projects   — per-engagement project memory
-  Chat       — streaming chat with the agent
+Provides a 3-tab interactive dashboard:
+  Inbox     — unified actionable items (triage + digest + dismissed toggle)
+  Projects  — per-engagement project memory with linked items
+  Chat      — streaming chat with the agent
 
 Key bindings:
   ctrl+d/t/i/x  — queue digest/triage/intel/transcript jobs
-  ctrl+l        — jump to Digest tab and reload
+  ctrl+l        — jump to Inbox tab and reload
   ctrl+r        — force refresh all panes
-  d / r / n     — dismiss / reply / note (on Triage and Digest tabs)
-  a             — archive (on Dismissed tab)
-  r             — restore (on Dismissed tab) / reply (on Triage/Digest)
+  ctrl+h        — toggle show/hide dismissed items in Inbox
+  d / r / n     — dismiss / reply (or restore) / note
+  a             — archive (on dismissed items in Inbox)
   q             — quit
 """
+
+import threading
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -25,12 +25,23 @@ from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPan
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
     ChatPane,
-    DigestPane,
-    DismissedPane,
+    InboxPane,
     ProjectsPane,
     QuestionModal,
-    TriagePane,
 )
+
+
+def _play_alert() -> None:
+    """Play a retro 3-tone ascending chime in a background thread (non-blocking)."""
+    def _beep():
+        try:
+            import winsound
+            winsound.Beep(660, 80)   # E5
+            winsound.Beep(880, 80)   # A5
+            winsound.Beep(1320, 120) # E6
+        except Exception:
+            pass
+    threading.Thread(target=_beep, daemon=True).start()
 
 
 class StatusBar(Static):
@@ -55,7 +66,7 @@ class StatusBar(Static):
             updated = status.get("updated_at", "")[:16].replace("T", " ")
             self.update(
                 f" Daemon: up {uptime_str}  |  Queue: {queue_size}  |  Updated: {updated}"
-                f"  |  ^D digest  ^T triage  ^I intel  ^X transcripts  ^L latest  q quit"
+                f"  |  ^D digest  ^T triage  ^I intel  ^H dismissed  q quit"
             )
         else:
             self.update(
@@ -76,9 +87,10 @@ class PulseApp(App):
         Binding("ctrl+t", "trigger_triage", "Triage", show=True),
         Binding("ctrl+i", "trigger_intel", "Intel", show=True),
         Binding("ctrl+x", "trigger_transcripts", "Transcripts", show=True),
-        Binding("ctrl+l", "view_latest_digest", "Latest Digest", show=True),
+        Binding("ctrl+l", "view_latest_inbox", "Latest", show=True),
         Binding("ctrl+r", "refresh_all", "Refresh", show=True),
-        # Item actions — active on Triage and Digest tabs
+        Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=True),
+        # Item actions
         Binding("d", "item_dismiss", "Dismiss", show=False),
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
@@ -89,12 +101,8 @@ class PulseApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent(id="tabs"):
-            with TabPane("Triage", id="tab-triage"):
-                yield TriagePane(id="triage-pane")
-            with TabPane("Digest", id="tab-digest"):
-                yield DigestPane(id="digest-pane")
-            with TabPane("Dismissed", id="tab-dismissed"):
-                yield DismissedPane(id="dismissed-pane")
+            with TabPane("Inbox", id="tab-inbox"):
+                yield InboxPane(id="inbox-pane")
             with TabPane("Projects", id="tab-projects"):
                 yield ProjectsPane(id="projects-pane")
             with TabPane("Chat", id="tab-chat"):
@@ -103,6 +111,7 @@ class PulseApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._prev_item_count = len(self.query_one(InboxPane)._items)
         # Periodic background tasks
         self.set_interval(30, self._auto_refresh_panes)
         self.set_interval(5, self._update_status_bar)
@@ -121,12 +130,16 @@ class PulseApp(App):
     # -------------------------------------------------------------------------
 
     def _auto_refresh_panes(self) -> None:
-        """Reload all data panes every 30s."""
+        """Reload all data panes every 30s. Play alert on new items."""
         try:
-            self.query_one(TriagePane).load_data()
-            self.query_one(DigestPane).load_data()
-            self.query_one(DismissedPane).load_data()
+            inbox = self.query_one(InboxPane)
+            inbox.load_data()
             self.query_one(ProjectsPane).load_data()
+            new_count = len(inbox._items)
+            if new_count > self._prev_item_count:
+                _play_alert()
+                self.bell()
+            self._prev_item_count = new_count
         except Exception:
             pass
 
@@ -170,14 +183,17 @@ class PulseApp(App):
         queue_job("transcripts")
         self.notify("Transcript collection queued")
 
-    def action_view_latest_digest(self) -> None:
+    def action_view_latest_inbox(self) -> None:
         tabs = self.query_one(TabbedContent)
-        tabs.active = "tab-digest"
-        self.query_one(DigestPane).load_data()
+        tabs.active = "tab-inbox"
+        self.query_one(InboxPane).load_data()
 
     def action_refresh_all(self) -> None:
         self._auto_refresh_panes()
         self.notify("All panes refreshed")
+
+    def action_toggle_dismissed(self) -> None:
+        self.query_one(InboxPane).toggle_dismissed()
 
     # -------------------------------------------------------------------------
     # Item actions (delegate to active pane)
@@ -195,16 +211,14 @@ class PulseApp(App):
             pane.dismiss_selected()
 
     def action_item_reply_or_restore(self) -> None:
-        """Reply on Triage/Digest tabs, Restore on Dismissed tab."""
+        """Reply on active items, Restore on dismissed items."""
         if self._input_is_focused():
             return
-        tabs = self.query_one(TabbedContent)
-        if tabs.active == "tab-dismissed":
-            self.query_one(DismissedPane).restore_selected()
-        else:
-            pane = self._get_active_item_pane()
-            if pane:
-                pane.reply_selected()
+        pane = self._get_active_item_pane()
+        if pane and pane.is_dismissed_selected():
+            pane.restore_selected()
+        elif pane:
+            pane.reply_selected()
 
     def action_item_note(self) -> None:
         if self._input_is_focused():
@@ -216,15 +230,13 @@ class PulseApp(App):
     def action_item_archive(self) -> None:
         if self._input_is_focused():
             return
-        tabs = self.query_one(TabbedContent)
-        if tabs.active == "tab-dismissed":
-            self.query_one(DismissedPane).archive_selected()
+        pane = self._get_active_item_pane()
+        if pane and pane.is_dismissed_selected():
+            pane.archive_selected()
 
-    def _get_active_item_pane(self) -> TriagePane | DigestPane | None:
-        """Return TriagePane or DigestPane if that tab is currently active."""
+    def _get_active_item_pane(self) -> InboxPane | None:
+        """Return InboxPane if inbox tab is active."""
         tabs = self.query_one(TabbedContent)
-        if tabs.active == "tab-triage":
-            return self.query_one(TriagePane)
-        elif tabs.active == "tab-digest":
-            return self.query_one(DigestPane)
+        if tabs.active == "tab-inbox":
+            return self.query_one(InboxPane)
         return None

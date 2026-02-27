@@ -20,21 +20,21 @@ TabbedContent {
     height: 1fr;
 }
 
-/* ─── Item panes (Triage, Digest) ───────────────────────── */
+/* ─── Inbox pane (unified triage + digest + dismissed) ──── */
 
-TriagePane, DigestPane {
+InboxPane {
     layout: vertical;
     height: 1fr;
 }
 
-TriagePane ListView, DigestPane ListView {
+InboxPane ListView {
     height: 55%;
     border: solid $panel;
     border-title-color: $accent;
     padding: 0 1;
 }
 
-TriagePane .detail-container, DigestPane .detail-container {
+InboxPane .detail-container {
     height: 45%;
     border: solid $panel;
     border-title-color: $text-muted;

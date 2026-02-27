@@ -28,6 +28,8 @@ def notify_desktop(title: str, body: str, urgency: str = "normal") -> None:
         )
         if urgency == "urgent":
             toast.set_audio(audio.LoopingAlarm, loop=False)
+        else:
+            toast.set_audio(audio.Default, loop=False)
         toast.show()
         log.debug(f"Toast: [{urgency}] {title} — {body[:60]}")
     except ImportError:
