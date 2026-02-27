@@ -31,12 +31,14 @@ def safe_encode(text: str) -> str:
     return text.encode("ascii", "replace").decode("ascii")
 
 
-def setup_logging(run_id: str | None = None) -> logging.Logger:
+def setup_logging(run_id: str | None = None, console: bool = True) -> logging.Logger:
     """Configure the root Pulse logger.
 
     Returns a logger that writes:
-    - Human-readable lines to stderr (for live terminal output)
+    - Human-readable lines to stderr (for live terminal output) — unless console=False
     - JSON lines to logs/YYYY-MM-DD.jsonl (for audit/ops)
+
+    Set console=False when running alongside a TUI to prevent output bleed.
     """
     logger = logging.getLogger("pulse")
     if logger.handlers:
@@ -44,11 +46,12 @@ def setup_logging(run_id: str | None = None) -> logging.Logger:
 
     logger.setLevel(logging.DEBUG)
 
-    # Console handler — human-readable, INFO+
-    console = logging.StreamHandler(sys.stderr)
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(console)
+    # Console handler — human-readable, INFO+ (skip in TUI mode)
+    if console:
+        ch = logging.StreamHandler(sys.stderr)
+        ch.setLevel(logging.INFO)
+        ch.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(ch)
 
     # File handler — structured JSON, DEBUG+
     LOGS_DIR.mkdir(parents=True, exist_ok=True)

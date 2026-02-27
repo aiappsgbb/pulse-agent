@@ -341,12 +341,22 @@ async def _daemon_main_headless():
 # ---------------------------------------------------------------------------
 
 def _run_daemon_thread(shutdown_event: threading.Event):
-    """Run the daemon's asyncio event loop in a background thread."""
+    """Run the daemon's asyncio event loop in a background thread.
+
+    Redirects stdout/stderr to devnull so neither our logs nor the
+    Copilot CLI subprocess output bleed into the Textual TUI.
+    """
+    import os
+    devnull = open(os.devnull, "w")
+    sys.stdout = devnull
+    sys.stderr = devnull
     try:
         asyncio.run(_daemon_main_threaded(shutdown_event))
     except Exception as e:
         import logging
         logging.getLogger("pulse").error(f"Daemon thread crashed: {e}", exc_info=True)
+    finally:
+        devnull.close()
 
 
 async def _daemon_main_threaded(shutdown_event: threading.Event):
@@ -360,7 +370,7 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     from core.logging import setup_logging, new_run_id, log
 
     run_id = new_run_id()
-    setup_logging(run_id=run_id)
+    setup_logging(run_id=run_id, console=False)  # No console output — TUI owns the terminal
 
     try:
         config = load_config()
