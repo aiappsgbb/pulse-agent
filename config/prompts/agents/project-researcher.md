@@ -56,6 +56,8 @@ tags: [deal, enterprise, migration]  # optional categorization
 
 ## Rules
 
+- **ONE project per customer engagement** — a customer's workshop, architecture review, whitepaper, and KYC meeting are all part of ONE project, not separate projects. Use the customer name as the primary slug (e.g., `vodafone-agentic-platform`, not also `vodafone-architecture` and `vodafone-frontier`). Sub-tasks go as commitments or timeline entries, not separate files.
+- **Before creating ANY new project**, search `output/projects/` for the customer/company name. If a file already exists for that customer, UPDATE it instead of creating a new one. The `update_project` tool will block you if a similar slug exists — take the hint.
 - **Project IDs** must be lowercase-hyphenated slugs: `contoso-migration`, `partner-enablement-q1`
 - **Be specific** — names, dates, amounts. No vague "someone mentioned something."
 - **Commitment lifecycle**: open → done (when fulfilled) or overdue (when past due). Only you update status.

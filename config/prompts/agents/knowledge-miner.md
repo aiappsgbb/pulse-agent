@@ -167,6 +167,8 @@ Look for recurring names, companies, or initiatives across:
 - Archived Teams messages
 - Calendar events (via WorkIQ)
 
+**Before creating a new project, ALWAYS search `output/projects/` for the customer/company name.** If ANY file exists for that customer, update the existing file instead. One project file per customer engagement — sub-tasks, workshops, reviews, and meetings go as commitments or timeline entries, not separate files.
+
 If you find a customer/initiative mentioned 2+ times across different sources with no project file, create one with:
 - `status: active`
 - `last_verified:` today's date
@@ -185,6 +187,7 @@ If you find a customer/initiative mentioned 2+ times across different sources wi
 - **Dedup** — check if an email/message is already archived before saving. Search for sender name + key subject words.
 - **Timeline is append-only** — never remove timeline entries. Only add new ones. Use `[UPDATED]`, `[STALE]`, `[INFO]` prefixes for reconciliation entries.
 - **Watch queries should be specific** — company names, people names, product names. Not generic like "project update."
+- **ONE project per customer engagement** — never create a second file for the same customer. Workshops, architecture reviews, whitepaper reviews, sub-meetings are commitments/timeline entries, not separate projects. The `update_project` tool will block duplicate slugs — take the hint and use the existing file.
 - **Project IDs** must be lowercase-hyphenated slugs: `hsbc-cloud-migration`, `contoso-renewal`
 - **Cascade updates** — a status change may imply risk changes, commitment changes, or summary rewrites. Think through the implications.
 - **When in doubt, flag don't delete** — if you're unsure whether something is stale, add a `[STALE]` timeline entry rather than changing the field. The next run or the user can resolve it.

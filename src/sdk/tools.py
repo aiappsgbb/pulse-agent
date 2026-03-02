@@ -458,13 +458,41 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
 
 # --- Project memory ---
 
+def _find_similar_projects(project_id: str) -> list[str]:
+    """Find existing project files whose slugs share 2+ tokens with the new ID.
+
+    Returns a list of similar slug names (without .yaml extension).
+    """
+    if not PROJECTS_DIR.exists():
+        return []
+
+    new_tokens = set(project_id.split("-"))
+    # Ignore very short tokens (single char) that cause false positives
+    new_tokens = {t for t in new_tokens if len(t) > 1}
+    if not new_tokens:
+        return []
+
+    similar = []
+    for path in PROJECTS_DIR.glob("*.yaml"):
+        existing_slug = path.stem
+        if existing_slug == project_id:
+            continue  # exact match — this is an update, not a conflict
+        existing_tokens = {t for t in existing_slug.split("-") if len(t) > 1}
+        overlap = new_tokens & existing_tokens
+        if len(overlap) >= 2:
+            similar.append(existing_slug)
+    return sorted(similar)
+
+
 @define_tool(
     name="update_project",
     description=(
         "Create or update a project memory file. Takes a project_id (slug) and the "
         "full YAML content. Use this to track active projects, stakeholders, commitments, "
         "and timeline. Read the existing file first (output/projects/{id}.yaml), modify, "
-        "then write back the full content. The tool auto-sets updated_at timestamp."
+        "then write back the full content. The tool auto-sets updated_at timestamp. "
+        "IMPORTANT: One project file per customer engagement. Before creating a NEW file, "
+        "check if a similar project already exists — the tool will warn you if it finds one."
     ),
 )
 def update_project(params: UpdateProjectParams, invocation: ToolInvocation) -> str:
@@ -478,6 +506,21 @@ def update_project(params: UpdateProjectParams, invocation: ToolInvocation) -> s
     # Path traversal guard (same pattern as write_output)
     if not str(project_path).startswith(str(PROJECTS_DIR.resolve())):
         return f"ERROR: Path traversal blocked — '{params.project_id}' resolves outside projects/"
+
+    # --- Duplicate detection: warn on NEW files with similar slugs ---
+    is_new_file = not project_path.exists()
+    if is_new_file:
+        similar = _find_similar_projects(params.project_id)
+        if similar:
+            similar_list = ", ".join(similar)
+            return (
+                f"BLOCKED: Similar project(s) already exist: {similar_list}. "
+                f"You are probably creating a duplicate. Instead, read the existing file "
+                f"(use search_local_files to find it), merge your new information into it, "
+                f"and call update_project with the EXISTING project_id. "
+                f"If this is genuinely a separate project, add a distinguishing word to "
+                f"make the slug clearly different."
+            )
 
     # Validate YAML content
     try:

@@ -10,36 +10,52 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 ## Quick Start
 
-### 1. Prerequisites
+### Option A: AI-assisted setup (recommended)
 
-- **Python 3.12+**
-- **GitHub Copilot CLI** installed and authenticated (`gh extension install github/gh-copilot`)
-- **Microsoft Edge** signed into Teams (for transcript + inbox scanning)
-- **OneDrive for Business** syncing (data directory is auto-detected)
+Open **GitHub Copilot Chat**, **Claude Code**, or any AI assistant and say:
 
-### 2. Install
+> Follow the instructions in SETUP.md to set up Pulse Agent on my machine.
 
-```powershell
-# One-command setup (checks prerequisites, creates venv, installs everything)
-powershell -ExecutionPolicy Bypass -File setup.ps1
-```
+The AI will walk through every step -- installing prerequisites, setting up the environment, and verifying everything works. See [SETUP.md](SETUP.md) for the full guide.
 
-Or manually:
+### Option B: Double-click installer
+
+Double-click **`install.bat`**. The installer automatically:
+
+- Installs Python, Node.js, and GitHub CLI via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
+- Installs the WorkIQ MCP server and Copilot CLI extension
+- Creates a Python virtual environment and installs all dependencies
+- Sets up Playwright Edge for browser automation
+- Seeds the data directory on OneDrive
+- Creates a **"Start Pulse"** shortcut on your Desktop
+
+### After install
+
+1. Open Edge and sign into [teams.microsoft.com](https://teams.microsoft.com) (one time, for transcript/inbox scanning)
+2. Double-click **"Start Pulse"** on your Desktop
+3. On first run, the Chat tab walks you through personalization -- name, role, priorities, team members
+
+<details>
+<summary>Option C: Manual install</summary>
+
+**Prerequisites:** Python 3.12+, Node.js, GitHub Copilot CLI authenticated, OneDrive for Business syncing.
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 playwright install msedge
-```
-
-### 3. Run
-
-```bash
+npm install -g @microsoft/workiq
 python src/pulse.py
 ```
 
-That's it. Daemon and TUI launch together. On first run, the Chat tab walks you through setup -- name, role, priorities, team members. No config files to edit manually.
+Or run the setup script directly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+</details>
 
 ---
 
@@ -186,7 +202,7 @@ See [docs/RAI.md](docs/RAI.md) for full details.
 
 ## Testing
 
-590 tests covering real browser selectors, prompt-to-code contracts, TTL/staleness, streaming IPC, and full reply round-trips.
+690 tests covering real browser selectors, prompt-to-code contracts, TTL/staleness, streaming IPC, and full reply round-trips.
 
 ```bash
 python -m pytest tests/ -q          # Run all

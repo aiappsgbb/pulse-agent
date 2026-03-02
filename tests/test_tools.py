@@ -19,6 +19,7 @@ from sdk.tools import (
     cancel_schedule,
     search_local_files,
     update_project,
+    _find_similar_projects,
     send_teams_message,
     send_email_reply,
     send_task_to_agent,
@@ -502,6 +503,91 @@ async def test_update_project_with_commitments(tmp_dir):
     data = yaml.safe_load((tmp_dir / "qbe-migration.yaml").read_text())
     assert len(data["commitments"]) == 1
     assert data["commitments"][0]["id"] == "commit-send-plan"
+
+
+# --- project dedup ---
+
+
+def test_find_similar_projects_empty_dir(tmp_dir):
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        assert _find_similar_projects("vodafone-frontier") == []
+
+
+def test_find_similar_projects_no_overlap(tmp_dir):
+    (tmp_dir / "contoso-migration.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        assert _find_similar_projects("vodafone-frontier") == []
+
+
+def test_find_similar_projects_one_token_overlap_ignored(tmp_dir):
+    """One shared token is not enough — needs 2+."""
+    (tmp_dir / "vodafone-billing.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        # Only "vodafone" overlaps — not enough (need 2+)
+        assert _find_similar_projects("vodafone-frontier") == []
+
+
+def test_find_similar_projects_two_token_overlap_detected(tmp_dir):
+    (tmp_dir / "gsk-investigations.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        # "gsk" + "investigations" overlap
+        assert _find_similar_projects("gsk-investigations-ai") == ["gsk-investigations"]
+
+
+def test_find_similar_projects_skips_exact_match(tmp_dir):
+    """Exact same slug = update, not a conflict."""
+    (tmp_dir / "vodafone-frontier.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        assert _find_similar_projects("vodafone-frontier") == []
+
+
+def test_find_similar_projects_short_tokens_ignored(tmp_dir):
+    """Single-char tokens (like 'ai') should not cause false positives."""
+    (tmp_dir / "some-ai-project.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        # "ai" is only 2 chars, but there's no second overlapping token
+        assert _find_similar_projects("other-ai-thing") == []
+
+
+def test_find_similar_projects_multiple_matches(tmp_dir):
+    (tmp_dir / "qbe-foundry.yaml").write_text("project: x")
+    (tmp_dir / "qbe-foundry-migration.yaml").write_text("project: x")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = _find_similar_projects("qbe-foundry-escalation")
+        assert "qbe-foundry" in result
+        assert "qbe-foundry-migration" in result
+
+
+@pytest.mark.asyncio
+async def test_update_project_blocks_new_duplicate(tmp_dir):
+    """Creating a new file with a similar slug should be blocked."""
+    (tmp_dir / "gsk-investigations.yaml").write_text("project: GSK\nstatus: active\n")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "gsk-investigations-ai",
+            "yaml_content": "project: GSK AI\nstatus: active\n",
+        }})
+    assert result["resultType"] == "success"
+    assert "BLOCKED" in result["textResultForLlm"]
+    assert "gsk-investigations" in result["textResultForLlm"]
+    # File should NOT have been created
+    assert not (tmp_dir / "gsk-investigations-ai.yaml").exists()
+
+
+@pytest.mark.asyncio
+async def test_update_project_allows_updating_existing(tmp_dir):
+    """Updating an existing file should NOT be blocked even if similar slugs exist."""
+    (tmp_dir / "gsk-investigations.yaml").write_text("project: GSK\nstatus: active\n")
+    (tmp_dir / "gsk-investigations-ai.yaml").write_text("project: GSK AI\nstatus: active\n")
+    with patch("sdk.tools.PROJECTS_DIR", tmp_dir):
+        result = await update_project.handler({"arguments": {
+            "project_id": "gsk-investigations-ai",
+            "yaml_content": "project: GSK AI Updated\nstatus: active\n",
+        }})
+    assert result["resultType"] == "success"
+    assert "BLOCKED" not in result["textResultForLlm"]
+    data = yaml.safe_load((tmp_dir / "gsk-investigations-ai.yaml").read_text())
+    assert data["project"] == "GSK AI Updated"
 
 
 # --- send_teams_message ---
