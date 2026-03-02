@@ -28,6 +28,7 @@ from textual.screen import ModalScreen
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
     ChatPane,
+    HelpModal,
     InboxPane,
     ProjectsPane,
     QuestionModal,
@@ -73,7 +74,6 @@ class StatusBar(Static):
             if age_s > 120:  # >2 min stale = daemon is dead
                 self.update(
                     " Daemon: offline — start with: python src/pulse.py"
-                    "  |  ^R refresh  q quit"
                 )
                 return
             uptime_s = status.get("uptime_s", 0)
@@ -97,12 +97,10 @@ class StatusBar(Static):
 
             self.update(
                 f" Daemon: up {uptime_str}  |  Queue: {queue_size}{job_part}"
-                f"  |  ^D digest  ^T triage  ^I intel  ^H dismissed  q quit"
             )
         else:
             self.update(
                 " Daemon: offline — start with: python src/pulse.py"
-                "  |  ^R refresh  q quit"
             )
 
 
@@ -117,19 +115,23 @@ class PulseApp(App):
     needs_onboarding: bool = False
 
     BINDINGS = [
-        Binding("ctrl+d", "trigger_digest", "Digest", show=True),
-        Binding("ctrl+t", "trigger_triage", "Triage", show=True),
-        Binding("ctrl+i", "trigger_intel", "Intel", show=True),
-        Binding("ctrl+x", "trigger_transcripts", "Transcripts", show=True),
-        Binding("ctrl+l", "view_latest_inbox", "Latest", show=True),
-        Binding("ctrl+r", "refresh_all", "Refresh", show=True),
-        Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=True),
+        # Job triggers (hidden from footer — shown in help modal)
+        Binding("ctrl+d", "trigger_digest", "Digest", show=False),
+        Binding("ctrl+t", "trigger_triage", "Triage", show=False),
+        Binding("ctrl+i", "trigger_intel", "Intel", show=False),
+        Binding("ctrl+x", "trigger_transcripts", "Transcripts", show=False),
+        Binding("ctrl+l", "view_latest_inbox", "Latest", show=False),
+        Binding("ctrl+r", "refresh_all", "Refresh", show=False),
+        Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=False),
         Binding("ctrl+e", "clear_chat", "Clear Chat", show=False),
         # Item actions
         Binding("d", "item_dismiss", "Dismiss", show=False),
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
         Binding("a", "item_archive", "Archive", show=False),
+        # Always visible
+        Binding("question_mark", "show_help", "? Help", show=True),
+        Binding("ctrl+p", "command_palette", "Palette", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -315,6 +317,11 @@ class PulseApp(App):
     def action_toggle_dismissed(self) -> None:
         self.query_one(InboxPane).toggle_dismissed()
         self._update_tab_labels()
+
+    def action_show_help(self) -> None:
+        """Show keybindings help modal (?)."""
+        if not any(isinstance(s, HelpModal) for s in self.screen_stack):
+            self.push_screen(HelpModal())
 
     def action_clear_chat(self) -> None:
         """Clear chat log (Ctrl+E)."""

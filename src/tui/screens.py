@@ -30,6 +30,7 @@ from tui.ipc import (
     dismiss_item,
     load_dismissed_items,
     read_chat_stream_deltas,
+    read_job_notification,
     read_pending_question,
     restore_item,
     send_chat_request,
@@ -203,6 +204,39 @@ def _load_inbox_items(include_dismissed: bool = False) -> tuple[list[dict], int]
 # ---------------------------------------------------------------------------
 # Modals
 # ---------------------------------------------------------------------------
+
+class HelpModal(ModalScreen):
+    """Quick-reference keybindings modal."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Close"),
+        Binding("question_mark", "dismiss_modal", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Widget(id="help-dialog"):
+            yield Static(
+                "[bold]Pulse Agent — Keyboard Shortcuts[/bold]\n"
+                "\n"
+                "[bold cyan]Jobs[/bold cyan]\n"
+                "  Ctrl+D  Queue digest        Ctrl+T  Queue triage\n"
+                "  Ctrl+I  Queue intel          Ctrl+X  Queue transcripts\n"
+                "\n"
+                "[bold cyan]Navigation[/bold cyan]\n"
+                "  Ctrl+L  Jump to Inbox        Ctrl+R  Refresh all\n"
+                "  Ctrl+H  Toggle dismissed      Ctrl+E  Clear chat\n"
+                "  Ctrl+P  Command palette       Q       Quit\n"
+                "\n"
+                "[bold cyan]Inbox actions[/bold cyan]\n"
+                "  D  Snooze (1 day)            A  Archive (30 days)\n"
+                "  R  Reply / Restore           N  Add note\n"
+                "\n"
+                "[dim]Press Esc or ? to close[/dim]"
+            )
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
+
 
 class ReplyModal(ModalScreen):
     """Modal for reviewing and sending a reply draft."""
@@ -384,9 +418,7 @@ class ItemPane(Widget):
     def compose(self) -> ComposeResult:
         yield ListView()
         with VerticalScroll(classes="detail-container"):
-            yield Static("[dim]Select an item to view details\n\n"
-                         "  d = snooze (1d)   a = archive (30d)\n"
-                         "  r = reply         n = note[/dim]")
+            yield Static("[dim]Select an item to view details[/dim]")
 
     def on_mount(self) -> None:
         self.load_data()
@@ -441,7 +473,6 @@ class ItemPane(Widget):
                     preview = draft[:120] + ("..." if len(draft) > 120 else "")
                     lines.append(f"  [dim]{preview}[/dim]")
 
-        lines += ["", "[dim]  d = snooze (1d)   a = archive (30d)   r = reply   n = note[/dim]"]
         detail.update("\n".join(lines))
 
     def get_selected_item(self) -> dict | None:
@@ -593,7 +624,6 @@ class InboxPane(ItemPane):
                     preview = draft[:120] + ("..." if len(draft) > 120 else "")
                     lines.append(f"  [dim]{preview}[/dim]")
 
-        lines += ["", "[dim]  d = snooze (1d)   a = archive (30d)   r = reply   n = note[/dim]"]
         detail.update("\n".join(lines))
 
     def _show_dismissed_detail(self, item: dict) -> None:
@@ -615,17 +645,12 @@ class InboxPane(ItemPane):
         if status == "dismissed":
             lines += [
                 "",
-                "[yellow]This item is snoozed for today.[/yellow]",
-                "It will come back tomorrow if still relevant.",
-                "",
-                "[dim]  a = archive permanently   r = restore to active[/dim]",
+                "[yellow]Snoozed for today — comes back tomorrow if still relevant.[/yellow]",
             ]
         else:
             lines += [
                 "",
-                "[dim]This item is permanently archived (30-day expiry).[/dim]",
-                "",
-                "[dim]  r = restore to active[/dim]",
+                "[dim]Archived (30-day expiry).[/dim]",
             ]
         detail.update("\n".join(lines))
 
@@ -926,6 +951,21 @@ class ChatPane(Widget):
         self._streaming = True
 
     def _poll_stream(self) -> None:
+        # Always check for job completion notifications (even when not streaming)
+        notif = read_job_notification()
+        if notif:
+            chat_log = self.query_one(RichLog)
+            summary = notif.get("summary", "Job complete")
+            job_type = notif.get("job_type", "")
+            safe_summary = summary.encode("ascii", "replace").decode("ascii")
+            chat_log.write(f"[bold yellow]{job_type.capitalize()} complete:[/bold yellow] {safe_summary}")
+            chat_log.write("")
+            # Refresh inbox/projects since new data arrived
+            try:
+                self.app.action_refresh_all()
+            except Exception:
+                pass
+
         if not self._streaming:
             return
 

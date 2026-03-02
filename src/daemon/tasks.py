@@ -8,7 +8,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from core.constants import PULSE_HOME
+from core.constants import PULSE_HOME, JOBS_DIR
 from core.logging import log
 
 
@@ -24,12 +24,25 @@ async def write_daemon_status_loop(
     """Write .daemon-status.json every 60s for TUI status bar."""
     status_file = PULSE_HOME / ".daemon-status.json"
 
+    def _count_pending_files() -> int:
+        """Count job files on disk not yet enqueued to in-memory queue."""
+        pending_dir = JOBS_DIR / "pending"
+        if not pending_dir.exists():
+            return 0
+        try:
+            return sum(1 for f in pending_dir.iterdir() if f.suffix in (".yaml", ".yml"))
+        except Exception:
+            return 0
+
     def _write_status():
         uptime_s = int((datetime.now() - boot_time).total_seconds())
+        # Count both in-memory queue AND pending files on disk
+        in_memory = job_queue.qsize()
+        on_disk = _count_pending_files()
         status = {
             "boot_time": boot_time.isoformat(),
             "uptime_s": uptime_s,
-            "queue_size": job_queue.qsize(),
+            "queue_size": in_memory + on_disk,
             "updated_at": datetime.now().isoformat(),
         }
         # Include current job info if one is running
@@ -46,7 +59,7 @@ async def write_daemon_status_loop(
 
     while not shutdown_event.is_set():
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+            await asyncio.wait_for(shutdown_event.wait(), timeout=10)
         except asyncio.TimeoutError:
             pass
         try:

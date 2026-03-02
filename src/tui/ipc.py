@@ -12,6 +12,7 @@ TUI WRITES:
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,8 @@ from pathlib import Path
 import yaml
 
 from core.constants import PULSE_HOME, JOBS_DIR
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # IPC file paths
@@ -130,6 +133,38 @@ def clear_chat_stream() -> None:
         CHAT_STREAM_FILE.write_text("", encoding="utf-8")
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Daemon writes: job completion notifications (shown in Chat tab)
+# ---------------------------------------------------------------------------
+
+JOB_NOTIFICATION_FILE = PULSE_HOME / ".job-notification.json"
+
+
+def write_job_notification(job_type: str, summary: str) -> None:
+    """Write a job completion notification for the Chat pane to pick up."""
+    try:
+        data = {
+            "job_type": job_type,
+            "summary": summary,
+            "timestamp": datetime.now().isoformat(),
+        }
+        JOB_NOTIFICATION_FILE.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def read_job_notification() -> dict | None:
+    """Read and delete job notification. Returns None if no notification."""
+    try:
+        if JOB_NOTIFICATION_FILE.exists():
+            data = json.loads(JOB_NOTIFICATION_FILE.read_text(encoding="utf-8"))
+            JOB_NOTIFICATION_FILE.unlink(missing_ok=True)
+            return data
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -372,24 +407,32 @@ def write_reply_job(item: dict, draft: str) -> bool:
     action = suggested[0]
     action_type = action.get("action_type", "")
 
-    if action_type in ("teams_reply", "teams_send"):
+    # Accept both LLM prompt values (draft_teams_reply, send_email_reply)
+    # and internal values (teams_reply, teams_send, email_reply)
+    teams_types = ("teams_reply", "teams_send", "draft_teams_reply")
+    email_types = ("email_reply", "send_email_reply")
+
+    if action_type in teams_types:
         job: dict = {
             "type": "teams_send",
             "message": draft,
             "_source": "tui",
         }
+        # LLM outputs "target", internal uses "chat_name"/"recipient"
         if action.get("chat_name"):
             job["chat_name"] = action["chat_name"]
         elif action.get("recipient"):
             job["recipient"] = action["recipient"]
-        elif item.get("source") == "teams":
+        elif action.get("target"):
+            job["chat_name"] = action["target"]
+        elif item.get("source", "").lower().startswith("teams"):
             # Fall back to title as chat name hint
             job["chat_name"] = item.get("title", "")[:50]
-    elif action_type == "email_reply":
+    elif action_type in email_types:
         job = {
             "type": "email_reply",
             "message": draft,
-            "search_query": action.get("search_query", item.get("title", "")),
+            "search_query": action.get("search_query", action.get("target", item.get("title", ""))),
             "_source": "tui",
         }
     else:
@@ -403,4 +446,5 @@ def write_reply_job(item: dict, draft: str) -> bool:
         file_path.write_text(yaml.dump(job, default_flow_style=False), encoding="utf-8")
         return True
     except Exception:
+        log.exception("write_reply_job failed to write YAML to %s", JOBS_DIR / "pending")
         return False

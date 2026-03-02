@@ -11,6 +11,7 @@ from core.constants import PULSE_HOME, JOBS_DIR
 from core.config import mark_task_completed
 from core.logging import log
 from core.notify import notify_desktop, build_toast_summary
+from tui.ipc import write_job_notification
 
 
 _PROXY_RETRY_DELAY = 300       # 5 minutes between retries
@@ -182,6 +183,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     if "_file" in job:
                         mark_task_completed(job)
                     notify_desktop("Pulse — Research", f"Research complete: {job_name}")
+                    write_job_notification("research", f"Research complete: {job_name}")
 
                 elif job_type == "transcripts":
                     # Standalone mode — no SDK session, uses Playwright directly
@@ -190,6 +192,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     if "_file" in job:
                         mark_task_completed(job)
                     notify_desktop("Pulse — Transcripts", "Transcript collection complete.")
+                    write_job_notification("transcripts", "Transcript collection complete.")
 
                 elif job_type == "knowledge":
                     # Pipeline mode — archive + per-project enrichment sessions
@@ -198,6 +201,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     if "_file" in job:
                         mark_task_completed(job)
                     notify_desktop("Pulse — Knowledge", "Knowledge mining complete.")
+                    write_job_notification("knowledge", "Knowledge mining complete.")
 
                 elif job_type in ("digest", "monitor", "intel"):
                     await run_job(client, config, job_type)
@@ -206,6 +210,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     toast_title, toast_body = build_toast_summary(job_type, PULSE_HOME)
                     urgency = "urgent" if job_type == "monitor" else "normal"
                     notify_desktop(toast_title, toast_body, urgency=urgency)
+                    write_job_notification(job_type, toast_body)
 
                 elif job_type == "agent_request":
                     result_text = await _handle_agent_request(client, config, job)

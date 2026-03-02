@@ -222,6 +222,111 @@ def test_load_pending_tasks_includes_past_retry(tmp_dir):
     assert tasks[0]["type"] == "monitor"
 
 
+# --- write_daemon_status_loop: queue_size includes pending files ---
+
+
+async def test_status_queue_size_includes_pending_files(tmp_dir):
+    """queue_size counts both in-memory queue items and pending YAML files on disk."""
+    import json
+    from unittest.mock import patch
+
+    pending_dir = tmp_dir / "jobs" / "pending"
+    pending_dir.mkdir(parents=True)
+
+    # 2 pending files on disk
+    (pending_dir / "digest-job.yaml").write_text("type: digest\n", encoding="utf-8")
+    (pending_dir / "intel-job.yml").write_text("type: intel\n", encoding="utf-8")
+
+    # 1 item in memory queue
+    q = asyncio.Queue()
+    q.put_nowait({"type": "monitor"})
+
+    shutdown = asyncio.Event()
+    shutdown.set()  # Stop immediately after first write
+
+    status_file = tmp_dir / ".daemon-status.json"
+    boot_time = datetime.now()
+
+    with patch("daemon.tasks.PULSE_HOME", tmp_dir), \
+         patch("daemon.tasks.JOBS_DIR", tmp_dir / "jobs"):
+        from daemon.tasks import write_daemon_status_loop
+        await write_daemon_status_loop(q, boot_time, shutdown)
+
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    assert status["queue_size"] == 3  # 1 in-memory + 2 on disk
+
+
+async def test_status_queue_size_no_pending_dir(tmp_dir):
+    """queue_size works when pending/ dir doesn't exist."""
+    import json
+    from unittest.mock import patch
+
+    q = asyncio.Queue()
+    shutdown = asyncio.Event()
+    shutdown.set()
+
+    status_file = tmp_dir / ".daemon-status.json"
+    boot_time = datetime.now()
+
+    with patch("daemon.tasks.PULSE_HOME", tmp_dir), \
+         patch("daemon.tasks.JOBS_DIR", tmp_dir / "jobs"):
+        from daemon.tasks import write_daemon_status_loop
+        await write_daemon_status_loop(q, boot_time, shutdown)
+
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    assert status["queue_size"] == 0
+
+
+async def test_status_queue_size_ignores_non_yaml(tmp_dir):
+    """Only .yaml/.yml files counted, not .json or other files."""
+    import json
+    from unittest.mock import patch
+
+    pending_dir = tmp_dir / "jobs" / "pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "digest.yaml").write_text("type: digest\n", encoding="utf-8")
+    (pending_dir / "notes.txt").write_text("not a job\n", encoding="utf-8")
+    (pending_dir / "state.json").write_text("{}\n", encoding="utf-8")
+
+    q = asyncio.Queue()
+    shutdown = asyncio.Event()
+    shutdown.set()
+
+    status_file = tmp_dir / ".daemon-status.json"
+    boot_time = datetime.now()
+
+    with patch("daemon.tasks.PULSE_HOME", tmp_dir), \
+         patch("daemon.tasks.JOBS_DIR", tmp_dir / "jobs"):
+        from daemon.tasks import write_daemon_status_loop
+        await write_daemon_status_loop(q, boot_time, shutdown)
+
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    assert status["queue_size"] == 1  # Only the .yaml file
+
+
+async def test_status_includes_current_job(tmp_dir):
+    """current_job info is included in status when a job is running."""
+    import json
+    from unittest.mock import patch
+
+    q = asyncio.Queue()
+    shutdown = asyncio.Event()
+    shutdown.set()
+
+    status_file = tmp_dir / ".daemon-status.json"
+    boot_time = datetime.now()
+
+    with patch("daemon.tasks.PULSE_HOME", tmp_dir), \
+         patch("daemon.tasks.JOBS_DIR", tmp_dir / "jobs"), \
+         patch("daemon.tasks.current_job", {"type": "digest", "started": "2026-03-02T10:00:00"}):
+        from daemon.tasks import write_daemon_status_loop
+        await write_daemon_status_loop(q, boot_time, shutdown)
+
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    assert status["current_job"] == "digest"
+    assert status["current_job_started"] == "2026-03-02T10:00:00"
+
+
 def test_load_pending_tasks_normal_jobs_unaffected(tmp_dir):
     """load_pending_tasks picks up normal jobs (no _retry_after) as before."""
     from core.config import load_pending_tasks

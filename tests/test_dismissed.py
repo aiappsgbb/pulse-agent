@@ -113,3 +113,59 @@ def test_backwards_compat_legacy_entries(tmp_dir):
     # No status field — callers should default to "archived"
     assert items[0].get("status") is None
     assert items[0].get("title") is None
+
+
+# ---------------------------------------------------------------------------
+# TUI IPC: job completion notifications
+# ---------------------------------------------------------------------------
+
+
+def test_write_job_notification(tmp_dir):
+    """write_job_notification creates a JSON file with job details."""
+    from tui.ipc import write_job_notification, JOB_NOTIFICATION_FILE
+
+    notif_file = tmp_dir / ".job-notification.json"
+    with patch("tui.ipc.JOB_NOTIFICATION_FILE", notif_file):
+        write_job_notification("digest", "10 items, 4 new")
+    assert notif_file.exists()
+    data = json.loads(notif_file.read_text(encoding="utf-8"))
+    assert data["job_type"] == "digest"
+    assert data["summary"] == "10 items, 4 new"
+    assert "timestamp" in data
+
+
+def test_read_job_notification_returns_and_deletes(tmp_dir):
+    """read_job_notification returns data and deletes the file."""
+    from tui.ipc import write_job_notification, read_job_notification, JOB_NOTIFICATION_FILE
+
+    notif_file = tmp_dir / ".job-notification.json"
+    with patch("tui.ipc.JOB_NOTIFICATION_FILE", notif_file):
+        write_job_notification("monitor", "3 urgent items")
+        result = read_job_notification()
+    assert result is not None
+    assert result["job_type"] == "monitor"
+    assert result["summary"] == "3 urgent items"
+    assert not notif_file.exists()
+
+
+def test_read_job_notification_returns_none_when_absent(tmp_dir):
+    """read_job_notification returns None when no notification file exists."""
+    from tui.ipc import read_job_notification
+
+    notif_file = tmp_dir / ".job-notification.json"
+    with patch("tui.ipc.JOB_NOTIFICATION_FILE", notif_file):
+        result = read_job_notification()
+    assert result is None
+
+
+def test_write_job_notification_overwrites_previous(tmp_dir):
+    """Second notification overwrites the first (only latest shown)."""
+    from tui.ipc import write_job_notification, read_job_notification
+
+    notif_file = tmp_dir / ".job-notification.json"
+    with patch("tui.ipc.JOB_NOTIFICATION_FILE", notif_file):
+        write_job_notification("digest", "First digest")
+        write_job_notification("intel", "Intel brief ready")
+        result = read_job_notification()
+    assert result["job_type"] == "intel"
+    assert result["summary"] == "Intel brief ready"

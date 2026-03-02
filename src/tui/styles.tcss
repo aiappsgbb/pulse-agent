@@ -92,8 +92,17 @@ ChatPane {
 
 /* ─── Modals ─────────────────────────────────────────────── */
 
-ReplyModal, NoteModal, QuestionModal {
+ReplyModal, NoteModal, QuestionModal, HelpModal {
     align: center middle;
+}
+
+#help-dialog {
+    background: $surface;
+    border: double $accent;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+    max-height: 70%;
 }
 
 #reply-dialog, #note-dialog, #question-dialog {
