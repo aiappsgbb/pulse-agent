@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head><title>Teams Chat List</title></head>
+<body>
+<!-- Realistic Teams chat list DOM as of Feb 2026 -->
+<div role="tree" aria-label="Chat list">
+  <!-- Category: Recent -->
+  <div role="treeitem" aria-level="1" aria-expanded="true">
+    <span>Recent</span>
+    <div role="group">
+      <!-- Unread chat with badge -->
+      <div role="treeitem" aria-level="2" data-item-type="chat" class="chat-item">
+        <span class="UnreadBadge_unread__abc">2</span>
+        Unread
+        Fatos Ismali
+        Fatos: Can you review the Vodafone architecture doc?
+        <time datetime="2026-03-02T08:30:00">8:30 AM</time>
+      </div>
+
+      <!-- Read chat (no badge) -->
+      <div role="treeitem" aria-level="2" data-item-type="chat" class="chat-item">
+        Alice Johnson
+        Alice: Sure, I'll send that over tomorrow
+        <time datetime="2026-03-01T16:45:00">Yesterday</time>
+      </div>
+
+      <!-- Unread group chat -->
+      <div role="treeitem" aria-level="2" data-item-type="chat" class="chat-item">
+        <span class="Badge_badge__xyz">1</span>
+        Unread
+        Data Engineering and Data Science
+        Sneha: Updated the pipeline config
+        <time datetime="2026-03-02T09:15:00">9:15 AM</time>
+      </div>
+
+      <!-- Read chat with no preview -->
+      <div role="treeitem" aria-level="2" data-item-type="chat" class="chat-item">
+        Bob Wilson
+        You: Thanks for the pricing doc
+        <time datetime="2026-02-28T14:00:00">Feb 28</time>
+      </div>
+
+      <!-- Unread chat with long name -->
+      <div role="treeitem" aria-level="2" data-item-type="chat" class="chat-item">
+        <span class="unread-indicator">3</span>
+        Unread
+        Power BI (Mohammed Fadin)
+        Mohammed: The dashboard is ready for review
+        <time datetime="2026-03-02T07:00:00">7:00 AM</time>
+      </div>
+    </div>
+  </div>
+
+  <!-- Category: Earlier (collapsed) -->
+  <div role="treeitem" aria-level="1" aria-expanded="false">
+    <span>Earlier</span>
+  </div>
+</div>
+
+<!-- Fallback navigation container -->
+<nav role="navigation" aria-label="Chat navigation">
+  <div>Chat list content for fallback</div>
+</nav>
+</body>
+</html>

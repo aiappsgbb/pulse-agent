@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head><title>Teams Transcript Viewer</title></head>
+<body>
+<!-- Transcript tab -->
+<div role="tablist">
+  <div role="menuitem" name="Transcript" id="transcript-tab-menuitem">Transcript</div>
+  <div role="tab" name="Transcript" id="transcript-tab" style="display:none">Transcript</div>
+</div>
+
+<!-- Fluent UI virtualized list structure -->
+<!-- ms-FocusZone is the REAL scroll container (overflow-y: auto) -->
+<div class="ms-FocusZone" style="overflow-y: auto; height: 200px;" id="scroll-container">
+  <div>
+    <div class="ms-List" role="list">
+      <!-- Page container with virtualized items -->
+      <div>
+        <!-- Speaker group 1 -->
+        <div role="group" aria-label="Sarah Chen 0 minutes 15 seconds">
+          <div role="listitem" aria-setsize="24">
+            Good morning everyone. Let's start with the Vodafone update.
+          </div>
+        </div>
+
+        <!-- Speaker group 2 -->
+        <div role="group" aria-label="Fatos Ismali 0 minutes 42 seconds">
+          <div role="listitem" aria-setsize="24">
+            Thanks Sarah. The architecture review is complete. We need to send the rationale document to the customer by tomorrow.
+          </div>
+        </div>
+
+        <!-- Speaker group 3 -->
+        <div role="group" aria-label="Artur Zielinski 1 minutes 10 seconds">
+          <div role="listitem" aria-setsize="24">
+            I'll review the whitepaper today and get back to Fatos with my recommendations.
+          </div>
+        </div>
+
+        <!-- Speaker group 4 -->
+        <div role="group" aria-label="Sarah Chen 1 minutes 35 seconds">
+          <div role="listitem" aria-setsize="24">
+            Great. Next item - the GSK investigation data. Charlie sent an urgent request.
+          </div>
+        </div>
+
+        <!-- Speaker group 5 - longer entry -->
+        <div role="group" aria-label="Bob Wilson 2 minutes 5 seconds">
+          <div role="listitem" aria-setsize="24">
+            I've been working on the Q1 pricing proposal. The updated numbers are in the shared drive. We need sign-off from the team before sending to the customer.
+          </div>
+        </div>
+
+        <!-- Speaker group 6 -->
+        <div role="group" aria-label="Sarah Chen 2 minutes 45 seconds">
+          <div role="listitem" aria-setsize="24">
+            Action items: Artur reviews Vodafone doc, Bob gets pricing sign-off, team responds to GSK by EOD. Let's wrap up.
+          </div>
+        </div>
+
+        <!-- Group with empty aria-label (should be skipped) -->
+        <div role="group" aria-label="">
+          <div role="listitem" aria-setsize="24"></div>
+        </div>
+
+        <!-- Group with "Transcript." prefix (should be skipped) -->
+        <div role="group" aria-label="Transcript. Auto-generated">
+          <div role="listitem" aria-setsize="24">Auto-generated transcript</div>
+        </div>
+
+        <!-- Speaker with hours -->
+        <div role="group" aria-label="Long Speaker 1 hours 5 minutes 30 seconds">
+          <div role="listitem" aria-setsize="24">
+            This is from a very long meeting.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Account picker (for SSO) -->
+<div id="account-picker" style="display:none">
+  <button data-test-id="artur@microsoft.com">artur@microsoft.com</button>
+</div>
+</body>
+</html>
