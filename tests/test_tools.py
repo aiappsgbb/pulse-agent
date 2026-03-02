@@ -558,6 +558,88 @@ async def test_send_email_reply_queues_action(tmp_dir):
     assert data["message"] == "Approved, thanks!"
 
 
+# --- send_teams_message / send_email_reply dedup ---
+
+
+async def test_send_teams_message_dedup_rejects_identical(tmp_dir):
+    """Second call with same recipient + message should be rejected."""
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        # First call — should succeed
+        r1 = await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Hello there",
+        }})
+        assert "queued" in r1["textResultForLlm"].lower()
+
+        # Second call with same recipient + message — should be rejected
+        r2 = await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Hello there",
+        }})
+        assert "already queued" in r2["textResultForLlm"].lower()
+
+    # Only one action file should exist
+    assert len(list(pending.glob("teams-send-*.json"))) == 1
+
+
+async def test_send_teams_message_dedup_case_insensitive(tmp_dir):
+    """Dedup should be case-insensitive on target name."""
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Hello there",
+        }})
+        r2 = await send_teams_message.handler({"arguments": {
+            "recipient": "alice", "message": "Hello there",
+        }})
+        assert "already queued" in r2["textResultForLlm"].lower()
+
+
+async def test_send_teams_message_dedup_allows_different_message(tmp_dir):
+    """Different messages to the same person should both be allowed."""
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Message one",
+        }})
+        r2 = await send_teams_message.handler({"arguments": {
+            "recipient": "Alice", "message": "Message two",
+        }})
+        assert "queued" in r2["textResultForLlm"].lower()
+        assert "already" not in r2["textResultForLlm"].lower()
+
+    assert len(list(pending.glob("teams-send-*.json"))) == 2
+
+
+async def test_send_teams_message_dedup_chat_name(tmp_dir):
+    """Dedup should work with chat_name (reply flow)."""
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        await send_teams_message.handler({"arguments": {
+            "recipient": "", "message": "Reply", "chat_name": "Fatos Ismali",
+        }})
+        r2 = await send_teams_message.handler({"arguments": {
+            "recipient": "", "message": "Reply", "chat_name": "Fatos Ismali",
+        }})
+        assert "already queued" in r2["textResultForLlm"].lower()
+
+
+async def test_send_email_reply_dedup_rejects_identical(tmp_dir):
+    """Second call with same search_query + message should be rejected."""
+    pending = tmp_dir / ".pending-actions"
+    with patch("sdk.tools.PENDING_ACTIONS_DIR", pending):
+        r1 = await send_email_reply.handler({"arguments": {
+            "search_query": "Bob budget review", "message": "Approved!",
+        }})
+        assert "queued" in r1["textResultForLlm"].lower()
+
+        r2 = await send_email_reply.handler({"arguments": {
+            "search_query": "Bob budget review", "message": "Approved!",
+        }})
+        assert "already queued" in r2["textResultForLlm"].lower()
+
+    assert len(list(pending.glob("email-reply-*.json"))) == 1
+
+
 # --- send_task_to_agent ---
 
 

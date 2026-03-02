@@ -412,9 +412,9 @@ async def _do_reply_to_chat(page, chat_name: str, message: str) -> dict:
 async def _type_and_send(page, message: str, target: str) -> dict:
     """Find compose box, type message, send with Ctrl+Enter.
 
-    Uses insertText() instead of keyboard.type() to avoid character-by-character
-    input which triggers Teams' autocomplete, smart quotes, and CKEditor event
-    handlers — causing duplicated/garbled text.
+    Uses direct DOM manipulation to clear leftover content (CKEditor drafts)
+    and insertText() to avoid character-by-character input issues.
+    Verifies the compose box content matches the intended message before sending.
     """
     # Find the compose box
     compose_found = await page.evaluate(FIND_COMPOSE_BOX_JS)
@@ -430,10 +430,38 @@ async def _type_and_send(page, message: str, target: str) -> dict:
 
     await page.wait_for_timeout(300)
 
-    # Clear any leftover content in the compose box
-    await page.keyboard.press("Control+a")
-    await page.keyboard.press("Backspace")
-    await page.wait_for_timeout(200)
+    # Clear compose box via direct DOM manipulation.
+    # Ctrl+A/Backspace is unreliable with CKEditor — it may not clear drafts
+    # that Teams auto-saved server-side. Direct innerHTML/textContent reset
+    # bypasses CKEditor's event handlers entirely.
+    cleared = await page.evaluate("""
+    () => {
+        const selectors = [
+            '[role="textbox"][aria-label*="Type a message" i]',
+            '[role="textbox"][aria-label*="message" i]',
+            '[data-tid="ckeditor"] [contenteditable="true"]',
+            '[role="textbox"][contenteditable="true"]',
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                // Clear both innerHTML and textContent to handle all CKEditor states
+                el.innerHTML = '';
+                el.textContent = '';
+                el.focus();
+                return true;
+            }
+        }
+        return false;
+    }
+    """)
+
+    if not cleared:
+        # Fallback to keyboard clearing
+        await page.keyboard.press("Control+a")
+        await page.keyboard.press("Backspace")
+
+    await page.wait_for_timeout(300)
 
     # Insert the full message at once (not character-by-character).
     # keyboard.type() fires individual key events that trigger Teams'
@@ -441,6 +469,48 @@ async def _type_and_send(page, message: str, target: str) -> dict:
     # insertText() bypasses all of that.
     await page.keyboard.insert_text(message)
     await page.wait_for_timeout(500)
+
+    # Verify compose box contains ONLY the intended message before sending.
+    # This catches CKEditor draft contamination where old text gets concatenated.
+    compose_content = await page.evaluate("""
+    () => {
+        const selectors = [
+            '[role="textbox"][aria-label*="Type a message" i]',
+            '[role="textbox"][aria-label*="message" i]',
+            '[data-tid="ckeditor"] [contenteditable="true"]',
+            '[role="textbox"][contenteditable="true"]',
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) return (el.innerText || el.textContent || '').trim();
+        }
+        return null;
+    }
+    """)
+
+    if compose_content and compose_content != message.strip():
+        log.warning(
+            f"  Compose box content mismatch — expected {len(message)} chars, "
+            f"got {len(compose_content)} chars. Clearing and retrying."
+        )
+        # Clear and retry once
+        await page.evaluate("""
+        () => {
+            const selectors = [
+                '[role="textbox"][aria-label*="Type a message" i]',
+                '[role="textbox"][aria-label*="message" i]',
+                '[data-tid="ckeditor"] [contenteditable="true"]',
+                '[role="textbox"][contenteditable="true"]',
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) { el.innerHTML = ''; el.textContent = ''; el.focus(); return; }
+            }
+        }
+        """)
+        await page.wait_for_timeout(300)
+        await page.keyboard.insert_text(message)
+        await page.wait_for_timeout(500)
 
     # Send with Ctrl+Enter
     await page.keyboard.press("Control+Enter")

@@ -515,6 +515,19 @@ PENDING_ACTIONS_DIR = PULSE_HOME / ".pending-actions"
 )
 def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocation) -> str:
     PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    target = params.chat_name or params.recipient
+
+    # Dedup: reject if an identical send is already pending
+    try:
+        for existing in PENDING_ACTIONS_DIR.glob("teams-send-*.json"):
+            data = json.loads(existing.read_text(encoding="utf-8"))
+            existing_target = data.get("chat_name") or data.get("recipient", "")
+            if (existing_target.lower() == target.lower()
+                    and data.get("message", "").strip() == params.message.strip()):
+                return f"Message to {target} is already queued — not sending again."
+    except Exception:
+        pass  # dedup is best-effort; proceed if check fails
+
     timestamp = datetime.now().strftime("%H%M%S")
     uid = uuid.uuid4().hex[:8]
     action_file = PENDING_ACTIONS_DIR / f"teams-send-{timestamp}-{uid}.json"
@@ -526,8 +539,7 @@ def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocatio
         "queued_at": datetime.now().isoformat(),
     }
     action_file.write_text(json.dumps(action_data), encoding="utf-8")
-    target = params.chat_name or params.recipient
-    return f"Teams message to {target} queued for delivery. User will receive confirmation via Telegram."
+    return f"Teams message to {target} queued for delivery. Do NOT call this tool again for the same message."
 
 
 @define_tool(
@@ -540,6 +552,17 @@ def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocatio
 )
 def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -> str:
     PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Dedup: reject if an identical reply is already pending
+    try:
+        for existing in PENDING_ACTIONS_DIR.glob("email-reply-*.json"):
+            data = json.loads(existing.read_text(encoding="utf-8"))
+            if (data.get("search_query", "").lower() == params.search_query.lower()
+                    and data.get("message", "").strip() == params.message.strip()):
+                return f"Email reply for '{params.search_query}' is already queued — not sending again."
+    except Exception:
+        pass
+
     timestamp = datetime.now().strftime("%H%M%S")
     uid = uuid.uuid4().hex[:8]
     action_file = PENDING_ACTIONS_DIR / f"email-reply-{timestamp}-{uid}.json"
@@ -550,7 +573,7 @@ def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -
         "queued_at": datetime.now().isoformat(),
     }
     action_file.write_text(json.dumps(action_data), encoding="utf-8")
-    return f"Email reply for '{params.search_query}' queued for delivery. User will receive confirmation via Telegram."
+    return f"Email reply for '{params.search_query}' queued for delivery. Do NOT call this tool again for the same message."
 
 
 # --- Onboarding config tool ---

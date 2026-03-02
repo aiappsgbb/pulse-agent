@@ -128,7 +128,7 @@ async def test_new_chat_to_field_found_immediately():
     """To field appears on first check after clicking new chat."""
     page = _make_page()
     # evaluate calls: _navigate readiness, FIND_NEW_CHAT_BUTTON (found), FIND_TO_FIELD (found),
-    #   then autocomplete, click suggestion, compose, focus, and so on
+    #   then autocomplete, click suggestion, compose, focus, clear, verify, send-verify
     page.evaluate = AsyncMock(side_effect=[
         # _navigate_to_teams
         {"hasTree": True, "hasNewChat": True, "ready": True},
@@ -144,6 +144,10 @@ async def test_new_chat_to_field_found_immediately():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # JS clear compose box
+        True,
+        # Content verification (matches message)
+        "Hi",
         # Send verification (compose empty)
         True,
     ])
@@ -172,6 +176,10 @@ async def test_new_chat_to_field_needs_retries():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # JS clear compose box
+        True,
+        # Content verification
+        "Hi",
         # Send verification (compose empty)
         True,
     ])
@@ -205,6 +213,10 @@ async def test_new_chat_to_field_retries_new_chat_button():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # JS clear compose box
+        True,
+        # Content verification
+        "Hi",
         # Send verification (compose empty)
         True,
     ])
@@ -257,6 +269,10 @@ async def test_new_chat_button_not_found_uses_keyboard():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # JS clear compose box
+        True,
+        # Content verification
+        "Hi",
         # Send verification (compose empty)
         True,
     ])
@@ -301,18 +317,19 @@ async def test_type_and_send_no_compose_box():
 async def test_type_and_send_success():
     page = _make_page()
     page.evaluate = AsyncMock(side_effect=[
-        "ckeditor",  # FIND_COMPOSE_BOX_JS
-        True,        # FOCUS_COMPOSE_BOX_JS
-        True,        # Send verification (compose empty)
+        "ckeditor",      # FIND_COMPOSE_BOX_JS
+        True,            # FOCUS_COMPOSE_BOX_JS
+        True,            # JS clear compose box
+        "Hello there",   # Content verification (matches message)
+        True,            # Send verification (compose empty)
     ])
 
     result = await _type_and_send(page, "Hello there", "Alice")
     assert result["success"] is True
     assert "Alice" in result["detail"]
     page.keyboard.insert_text.assert_called_once_with("Hello there")
-    # Ctrl+A, Backspace (clear), then Control+Enter (send)
+    # Control+Enter (send) — no more Ctrl+A since we use JS clearing
     press_calls = [c.args[0] for c in page.keyboard.press.call_args_list]
-    assert "Control+a" in press_calls
     assert "Control+Enter" in press_calls
 
 
@@ -383,3 +400,59 @@ async def test_reply_to_chat_login_page():
     with patch(_BROWSER_PATCH, return_value=mgr):
         result = await reply_to_chat("Team Chat", "Hello")
     assert result["success"] is False
+
+
+# --- Compose box clearing and content verification ---
+
+
+async def test_type_and_send_js_clear_fallback():
+    """If JS clear returns False, falls back to Ctrl+A/Backspace."""
+    page = _make_page()
+    page.evaluate = AsyncMock(side_effect=[
+        "ckeditor",    # FIND_COMPOSE_BOX_JS
+        True,          # FOCUS_COMPOSE_BOX_JS
+        False,         # JS clear compose box — fails
+        "Hello",       # Content verification (matches)
+        True,          # Send verification (compose empty)
+    ])
+
+    result = await _type_and_send(page, "Hello", "Alice")
+    assert result["success"] is True
+    # Should have used keyboard fallback
+    press_calls = [c.args[0] for c in page.keyboard.press.call_args_list]
+    assert "Control+a" in press_calls
+    assert "Backspace" in press_calls
+
+
+async def test_type_and_send_content_mismatch_retries():
+    """If compose box has extra content (draft contamination), clears and retries."""
+    page = _make_page()
+    page.evaluate = AsyncMock(side_effect=[
+        "ckeditor",                          # FIND_COMPOSE_BOX_JS
+        True,                                # FOCUS_COMPOSE_BOX_JS
+        True,                                # JS clear compose box
+        "OLD DRAFT Hello",                   # Content verification — MISMATCH
+        None,                                # JS clear retry
+        True,                                # Send verification (compose empty)
+    ])
+
+    result = await _type_and_send(page, "Hello", "Alice")
+    assert result["success"] is True
+    # insert_text should have been called twice (original + retry)
+    assert page.keyboard.insert_text.call_count == 2
+
+
+async def test_type_and_send_compose_not_empty_after_send():
+    """If compose box isn't empty after send, reports failure."""
+    page = _make_page()
+    page.evaluate = AsyncMock(side_effect=[
+        "ckeditor",    # FIND_COMPOSE_BOX_JS
+        True,          # FOCUS_COMPOSE_BOX_JS
+        True,          # JS clear compose box
+        "Hello",       # Content verification (matches)
+        False,         # Send verification — NOT empty
+    ])
+
+    result = await _type_and_send(page, "Hello", "Alice")
+    assert result["success"] is False
+    assert "compose box still has content" in result["detail"]

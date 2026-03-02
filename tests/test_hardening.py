@@ -258,6 +258,8 @@ async def test_teams_send_verification_compose_not_empty():
     page.evaluate = AsyncMock(side_effect=[
         "ckeditor",  # FIND_COMPOSE_BOX_JS
         True,        # FOCUS_COMPOSE_BOX_JS
+        True,        # JS clear compose box
+        "Hello",     # Content verification (matches message)
         False,       # Send verification — compose NOT empty
     ])
     page.keyboard.press = AsyncMock()

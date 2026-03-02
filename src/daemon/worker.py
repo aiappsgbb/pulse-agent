@@ -377,6 +377,10 @@ async def process_pending_actions():
 
     Called after each chat session completes. Picks up .json files from
     .pending-actions/ and executes them via the deterministic senders.
+
+    Dedup: tracks (type, target, message) to skip duplicate sends within
+    a single batch — prevents the LLM calling the tool multiple times
+    from sending the same message repeatedly.
     """
     from sdk.tools import PENDING_ACTIONS_DIR
 
@@ -388,10 +392,27 @@ async def process_pending_actions():
         return
 
     log.info(f"Processing {len(action_files)} pending browser action(s)...")
+    seen: set[tuple[str, str, str]] = set()  # (type, target, message_hash)
+
     for action_file in action_files:
         try:
             action = json.loads(action_file.read_text(encoding="utf-8"))
             action_type = action.get("type", "")
+            message = action.get("message", "").strip()
+
+            # Build dedup key
+            if action_type == "teams_send":
+                target = (action.get("chat_name") or action.get("recipient", "")).lower()
+            elif action_type == "email_reply":
+                target = action.get("search_query", "").lower()
+            else:
+                target = ""
+
+            dedup_key = (action_type, target, message)
+            if dedup_key in seen:
+                log.warning(f"  Skipping duplicate {action_type} to {target}")
+                continue
+            seen.add(dedup_key)
 
             if action_type == "teams_send":
                 result = await _execute_teams_send(action)
