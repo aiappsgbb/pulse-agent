@@ -6,20 +6,21 @@ Pulse Agent is designed as an **autonomous information processor** that handles 
 
 ## Data Protection
 
-### Local-First Architecture
-All processing happens on the user's local machine. Content never leaves the local environment except through the user's own M365 tenant (OneDrive sync, WorkIQ queries). There is no cloud backend, no external API calls for content processing, and no data sharing between users outside of explicit inter-agent OneDrive file exchange.
+### Where Data Goes
+Pulse Agent processes content through multiple paths. It is important to understand what goes where:
+
+- **Local only (never leaves your machine):** File scanning, text extraction from .docx/.pdf/.pptx, RSS feed fetching, Playwright browser automation (transcript scraping, inbox scanning, message sending)
+- **GitHub Copilot SDK (Microsoft cloud):** Meeting transcripts, email content, Teams messages, and calendar data are sent to LLMs (Claude, GPT-4.1) via the GitHub Copilot CLI for analysis, summarization, and triage. This is the core of how the agent works — it cannot function without cloud LLM processing.
+- **WorkIQ (Microsoft 365 Copilot):** Queries about your emails, calendar, Teams messages, and people are routed through the M365 Copilot data layer.
+- **OneDrive sync:** All output files (digests, intel, project memory) are stored in `$PULSE_HOME` which syncs via OneDrive for Business.
+
+**There is no third-party cloud backend** — all cloud processing goes through Microsoft/GitHub infrastructure. But content absolutely leaves your local machine. If your organization has data residency or classification requirements, evaluate whether sending meeting transcripts and email content through GitHub Copilot SDK is acceptable.
 
 ### Scoped Access
 - **WorkIQ** only accesses data within the user's own M365 permission scope — meetings they attended, emails they received, Teams channels they're in
 - **Playwright browser automation** uses the user's own authenticated Edge session — no service accounts, no elevated privileges
 - **Local file scanning** only processes folders explicitly configured in `standing-instructions.yaml`
-
-### PII Filtering
-Output destined for display is scrubbed of personally identifiable information using regex-based filters (with optional Presidio integration):
-- Email addresses
-- Phone numbers
-- Credit card numbers
-- IBANs
+- **Inter-agent communication** uses explicit OneDrive file exchange — no hidden data sharing
 
 ## Human-in-the-Loop Controls
 
@@ -62,11 +63,13 @@ File write operations are protected at two layers:
 1. **Hook layer** (`on_pre_tool_use`) — blocks `..` path traversal in `write_output` and validates project ID format in `update_project` before the tool handler executes
 2. **Handler layer** — each tool's handler independently validates paths as a second defense
 
-### No Destructive Actions
-The agent has no tools to delete files, cancel meetings, or overwrite existing content. All operations are additive:
+### Minimal Destructive Actions
+The agent has no tools to delete user files, cancel meetings, or remove content. Most operations are additive:
 - `write_output` creates new files
 - `update_project` creates or updates (never deletes) project memory
 - `dismiss_item` marks items as handled (soft state, auto-expires after 30 days)
+
+**Exception:** Transcript compression deletes the original raw `.txt` file after successfully producing a compressed `.md` version. This is the only destructive file operation.
 
 ### Minimum Interval Guards
 Recurring schedules enforce a minimum 5-minute interval to prevent runaway loops.

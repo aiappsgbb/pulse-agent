@@ -188,15 +188,13 @@ From chat: *"Ask Esther what context she has on the Vodafone deal"* -- Pulse wri
 
 ## Security & Responsible AI
 
-- **Local-first** -- all processing on your machine, no data leaves the tenant
-- **Draft-first** -- outbound messages always shown for review before sending
-- **Full audit trail** -- every tool call auto-logged to `logs/YYYY-MM-DD.jsonl` via session hooks
-- **Path guardrails** -- defense-in-depth validation at both hook and handler level
-- **PII filtering** -- emails, phone numbers, credit cards, IBANs scrubbed from output
-- **No destructive actions** -- the agent cannot delete, cancel, or overwrite anything
-- **Scoped access** -- WorkIQ sees only your M365 data, Playwright uses your browser session
+- **Draft-first** -- outbound messages always shown for review before sending. The agent never auto-sends.
+- **Full audit trail** -- every tool call auto-logged to `logs/YYYY-MM-DD.jsonl` via session hooks (100% coverage, not optional)
+- **Path guardrails** -- defense-in-depth validation at both hook and handler level blocks path traversal
+- **Scoped access** -- WorkIQ sees only your M365 data, Playwright uses your authenticated browser session
+- **Microsoft-tenant processing** -- content is processed through GitHub Copilot SDK (Microsoft cloud). No third-party services. Data stays within the Microsoft ecosystem but is NOT processed purely locally.
 
-See [docs/RAI.md](docs/RAI.md) for full details.
+See [docs/RAI.md](docs/RAI.md) for full details and honest limitations.
 
 ---
 
