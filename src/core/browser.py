@@ -48,14 +48,15 @@ def _kill_orphan_edge(user_data_dir: str):
 
     Only kills processes whose command line includes our specific profile path,
     not the user's normal Edge browser.
+    Uses PowerShell (WMIC is deprecated on Windows 11).
     """
     try:
-        # Use WMIC to find Edge processes with our profile in the command line
         result = subprocess.run(
-            ["wmic", "process", "where",
-             f"name='msedge.exe' and commandline like '%{DAEMON_PROFILE}%'",
-             "get", "processid"],
-            capture_output=True, text=True, timeout=5,
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+             f"Where-Object {{ $_.CommandLine -like '*{DAEMON_PROFILE}*' }} | "
+             f"Select-Object -ExpandProperty ProcessId"],
+            capture_output=True, text=True, timeout=10,
         )
         for line in result.stdout.strip().splitlines():
             line = line.strip()
@@ -149,6 +150,22 @@ class BrowserManager:
             await asyncio.sleep(2)  # Give OS time to release locks
             await self._launch_fresh(retry=False)
 
+    @property
+    def is_alive(self) -> bool:
+        """Check if the browser context is still responsive.
+
+        Returns False if the browser crashed or the CDP connection was lost.
+        Callers should return None (scan unavailable) when this is False.
+        """
+        if not self._context:
+            return False
+        try:
+            # Accessing pages on a dead context raises
+            _ = self._context.pages
+            return True
+        except Exception:
+            return False
+
     async def new_page(self) -> Page:
         """Create a new page in the shared browser context."""
         if not self._context:
@@ -162,7 +179,7 @@ class BrowserManager:
         if self._connected_via_cdp and self._browser:
             # Don't close the browser itself — just disconnect
             try:
-                self._browser.close()
+                await self._browser.close()
             except Exception:
                 pass
             self._browser = None

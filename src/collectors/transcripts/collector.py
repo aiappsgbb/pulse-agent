@@ -328,10 +328,11 @@ async def _find_cdp_port() -> int | None:
     import subprocess
     try:
         result = subprocess.run(
-            ["wmic", "process", "where",
-             "name='msedge.exe' and commandline like '%remote-debugging-port%' and commandline like '%mcp-msedge%'",
-             "get", "commandline"],
-            capture_output=True, text=True, timeout=5,
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+             "Where-Object { $_.CommandLine -like '*remote-debugging-port*' -and $_.CommandLine -like '*mcp-msedge*' } | "
+             "Select-Object -ExpandProperty CommandLine"],
+            capture_output=True, text=True, timeout=10,
         )
         import re as _re
         match = _re.search(r'remote-debugging-port=(\d+)', result.stdout)

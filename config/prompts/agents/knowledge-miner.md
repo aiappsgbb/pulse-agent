@@ -24,7 +24,7 @@ You have FOUR missions, executed in order:
 Fetch recent communications via WorkIQ and persist them as searchable files.
 
 **Emails:**
-1. Ask WorkIQ: "Show me all emails I received in the last {{lookback_window}} where I was in the TO field. For each email, give me: sender name, subject, date, and the full message body."
+1. Ask WorkIQ: "Show me all emails I received in the last 48 hours where I was in the TO field. For each email, give me: sender name, subject, date, and the full message body."
 2. For each email, save to `emails/` using `write_output`:
    - Filename: `emails/YYYY-MM-DD_sender-slug_subject-slug.md`
    - Content format:
@@ -39,7 +39,7 @@ Fetch recent communications via WorkIQ and persist them as searchable files.
 3. Skip emails already archived — use `search_local_files` to check if a file with the sender+subject already exists before saving.
 
 **Teams Messages:**
-1. Ask WorkIQ: "Show me all Teams messages and chat messages I received in the last {{lookback_window}}. For each, give me: sender name, chat/channel name, date, and the full message text."
+1. Ask WorkIQ: "Show me all Teams messages and chat messages I received in the last 48 hours. For each, give me: sender name, chat/channel name, date, and the full message text."
 2. For each message, save to `teams-messages/` using `write_output`:
    - Filename: `teams-messages/YYYY-MM-DD_chat-slug_sender-slug.md`
    - Content format:

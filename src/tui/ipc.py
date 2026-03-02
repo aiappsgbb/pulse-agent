@@ -13,6 +13,7 @@ TUI WRITES:
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ def read_daemon_status() -> dict:
         if STATUS_FILE.exists():
             return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
     except Exception:
-        pass
+        log.debug("Failed to read daemon status", exc_info=True)
     return {}
 
 
@@ -114,7 +115,7 @@ def write_chat_delta(text: str, request_id: str) -> None:
         with CHAT_STREAM_FILE.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
-        pass
+        log.debug("Failed to write chat delta", exc_info=True)
 
 
 def finish_chat_stream(request_id: str) -> None:
@@ -124,7 +125,7 @@ def finish_chat_stream(request_id: str) -> None:
         with CHAT_STREAM_FILE.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
-        pass
+        log.debug("Failed to finish chat stream", exc_info=True)
 
 
 def clear_chat_stream() -> None:
@@ -152,7 +153,7 @@ def write_job_notification(job_type: str, summary: str) -> None:
         }
         JOB_NOTIFICATION_FILE.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
-        pass
+        log.debug("Failed to write job notification", exc_info=True)
 
 
 def read_job_notification() -> dict | None:
@@ -163,7 +164,7 @@ def read_job_notification() -> dict | None:
             JOB_NOTIFICATION_FILE.unlink(missing_ok=True)
             return data
     except Exception:
-        pass
+        log.debug("Failed to read job notification", exc_info=True)
     return None
 
 
@@ -191,7 +192,7 @@ def write_question_response(session_id: str, answer: str) -> None:
         }
         QUESTION_RESPONSE_FILE.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
-        pass
+        log.debug("Failed to write question response", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +209,7 @@ def write_pending_question(question: str, session_id: str) -> None:
         }
         PENDING_QUESTION_FILE.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
-        pass
+        log.debug("Failed to write pending question", exc_info=True)
 
 
 def read_question_response(session_id: str) -> str | None:
@@ -270,7 +271,8 @@ def queue_onboarding_chat() -> None:
         pending_dir = JOBS_DIR / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-        file_path = pending_dir / f"{ts}-onboarding-tui.yaml"
+        uid = uuid.uuid4().hex[:8]
+        file_path = pending_dir / f"{ts}-onboarding-tui-{uid}.yaml"
         data = {
             "type": "chat",
             "prompt": "Let's set up my agent",
@@ -281,7 +283,7 @@ def queue_onboarding_chat() -> None:
         }
         file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
     except Exception:
-        pass
+        log.debug("Failed to queue onboarding chat", exc_info=True)
 
 
 def queue_job(job_type: str) -> None:
@@ -290,11 +292,12 @@ def queue_job(job_type: str) -> None:
         pending_dir = JOBS_DIR / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-        file_path = pending_dir / f"{ts}-{job_type}-tui.yaml"
+        uid = uuid.uuid4().hex[:8]
+        file_path = pending_dir / f"{ts}-{job_type}-tui-{uid}.yaml"
         data = {"type": job_type, "_source": "tui"}
         file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
     except Exception:
-        pass
+        log.debug("Failed to queue job %s", job_type, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -306,16 +309,22 @@ def _load_digest_actions() -> dict:
         if DIGEST_ACTIONS_FILE.exists():
             return json.loads(DIGEST_ACTIONS_FILE.read_text(encoding="utf-8"))
     except Exception:
-        pass
+        log.debug("Failed to load digest actions", exc_info=True)
     return {"dismissed": [], "notes": {}}
 
 
 def _save_digest_actions(actions: dict) -> bool:
-    """Save digest actions. Returns True on success, False on failure."""
+    """Save digest actions atomically (write-to-tmp-then-rename).
+
+    Both TUI and daemon read/write this file — atomic rename prevents corruption.
+    """
     try:
-        DIGEST_ACTIONS_FILE.write_text(json.dumps(actions, indent=2), encoding="utf-8")
+        tmp_path = DIGEST_ACTIONS_FILE.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(actions, indent=2), encoding="utf-8")
+        os.replace(tmp_path, DIGEST_ACTIONS_FILE)
         return True
     except Exception:
+        log.debug("Failed to save digest actions", exc_info=True)
         return False
 
 
@@ -584,7 +593,8 @@ def write_reply_job(item: dict, draft: str) -> bool:
         pending_dir = JOBS_DIR / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-        file_path = pending_dir / f"{ts}-reply-tui.yaml"
+        uid = uuid.uuid4().hex[:8]
+        file_path = pending_dir / f"{ts}-reply-tui-{uid}.yaml"
         file_path.write_text(yaml.dump(job, default_flow_style=False), encoding="utf-8")
         return True
     except Exception:

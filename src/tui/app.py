@@ -15,15 +15,48 @@ Key bindings:
   q             — quit
 """
 
+import logging
 import threading
 
 from textual import events
+
+log = logging.getLogger(__name__)
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.theme import Theme
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPane, TextArea
 
 from textual.screen import ModalScreen
+
+
+# ---------------------------------------------------------------------------
+# Custom Pulse brand theme — cyan/green/amber on deep dark
+# ---------------------------------------------------------------------------
+
+PULSE_THEME = Theme(
+    name="pulse-dark",
+    primary="#00D4FF",       # Cyan — borders, tabs, focus
+    secondary="#00CC88",     # Green — success, agent messages
+    accent="#FFB020",        # Amber — alerts, attention
+    warning="#FFB020",       # Amber
+    error="#FF3366",         # Hot pink — errors, urgent
+    success="#00CC88",       # Green
+    foreground="#B8C4D8",    # Cool light gray
+    background="#0A0E14",    # Near-black (deep space)
+    surface="#0F1923",       # Slightly lighter for content areas
+    panel="#162233",         # Panel borders/backgrounds
+    dark=True,
+    variables={
+        "footer-key-foreground": "#00D4FF",
+        "footer-description-foreground": "#5A6A80",
+        "footer-background": "#0A0E14",
+        "input-cursor-background": "#00D4FF",
+        "block-cursor-background": "#00D4FF",
+        "scrollbar": "#1A3040",
+        "scrollbar-hover": "#00D4FF 40%",
+    },
+)
 
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
@@ -182,6 +215,10 @@ class PulseApp(App):
         await super().on_event(event)
 
     def on_mount(self) -> None:
+        # Apply Pulse brand theme
+        self.register_theme(PULSE_THEME)
+        self.theme = "pulse-dark"
+
         self._prev_item_count = len(self.query_one(InboxPane)._items)
         self._update_tab_labels()
         # Periodic background tasks
@@ -228,7 +265,7 @@ class PulseApp(App):
                 self.bell()
             self._prev_item_count = new_count
         except Exception:
-            pass
+            log.debug("Failed to refresh panes", exc_info=True)
 
     def _update_tab_labels(self) -> None:
         """Update tab labels with item/project counts."""
@@ -279,6 +316,12 @@ class PulseApp(App):
                 if question and session_id:
                     # Only show if no QuestionModal already open
                     if not any(isinstance(s, QuestionModal) for s in self.screen_stack):
+                        # Delete file BEFORE pushing modal to prevent re-triggering on next tick
+                        try:
+                            from tui.ipc import PENDING_QUESTION_FILE
+                            PENDING_QUESTION_FILE.unlink(missing_ok=True)
+                        except Exception:
+                            pass
                         self.push_screen(QuestionModal(question, session_id))
         except Exception:
             pass

@@ -1,6 +1,7 @@
 """Custom tool definitions for the GHCP SDK agent."""
 
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -126,7 +127,8 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
     pending_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d")
     slug = params.task.lower().replace(" ", "-")[:50]
-    task_file = pending_dir / f"{date_str}-{slug}.yaml"
+    uid = uuid.uuid4().hex[:8]
+    task_file = pending_dir / f"{date_str}-{slug}-{uid}.yaml"
 
     task_data = {
         "type": params.type,
@@ -514,7 +516,8 @@ PENDING_ACTIONS_DIR = PULSE_HOME / ".pending-actions"
 def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocation) -> str:
     PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%H%M%S")
-    action_file = PENDING_ACTIONS_DIR / f"teams-send-{timestamp}.json"
+    uid = uuid.uuid4().hex[:8]
+    action_file = PENDING_ACTIONS_DIR / f"teams-send-{timestamp}-{uid}.json"
     action_data = {
         "type": "teams_send",
         "recipient": params.recipient,
@@ -538,7 +541,8 @@ def send_teams_message(params: SendTeamsMessageParams, invocation: ToolInvocatio
 def send_email_reply(params: SendEmailReplyParams, invocation: ToolInvocation) -> str:
     PENDING_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%H%M%S")
-    action_file = PENDING_ACTIONS_DIR / f"email-reply-{timestamp}.json"
+    uid = uuid.uuid4().hex[:8]
+    action_file = PENDING_ACTIONS_DIR / f"email-reply-{timestamp}-{uid}.json"
     action_data = {
         "type": "email_reply",
         "search_query": params.search_query,

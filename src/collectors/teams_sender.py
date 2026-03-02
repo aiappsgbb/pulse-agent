@@ -129,11 +129,16 @@ FOCUS_COMPOSE_BOX_JS = """
 # Find a chat by name in the sidebar
 FIND_CHAT_IN_SIDEBAR_JS = """
 (chatName) => {
-    const lower = chatName.toLowerCase();
+    const lower = chatName.toLowerCase().trim();
     const items = document.querySelectorAll('[role="treeitem"][data-item-type="chat"]');
     for (const item of items) {
-        const text = (item.innerText || '').toLowerCase();
-        if (text.includes(lower)) {
+        const text = (item.innerText || '');
+        // Match on first line only (chat title) — not preview text
+        const firstLine = text.split('\\n').map(l => l.trim()).filter(Boolean)[0] || '';
+        const fl = firstLine.toLowerCase();
+        // Require exact match or word-boundary match (not substring)
+        if (fl === lower || fl.startsWith(lower + ' ') || fl.endsWith(' ' + lower)
+            || fl.includes(' ' + lower + ' ')) {
             item.click();
             return { found: true, text: item.innerText.substring(0, 200) };
         }
@@ -440,6 +445,33 @@ async def _type_and_send(page, message: str, target: str) -> dict:
     # Send with Ctrl+Enter
     await page.keyboard.press("Control+Enter")
     await page.wait_for_timeout(2000)
+
+    # Verify send: compose box should be empty after successful send
+    compose_empty = await page.evaluate("""
+    () => {
+        const selectors = [
+            '[role="textbox"][aria-label*="Type a message" i]',
+            '[role="textbox"][aria-label*="message" i]',
+            '[data-tid="ckeditor"] [contenteditable="true"]',
+            '[role="textbox"][contenteditable="true"]',
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                const text = (el.innerText || el.textContent || '').trim();
+                return text.length === 0;
+            }
+        }
+        return true;  // no compose box found = likely already sent
+    }
+    """)
+
+    if not compose_empty:
+        log.warning(f"  Compose box not empty after send — message may not have been sent to {safe_encode(target)}")
+        return {
+            "success": False,
+            "detail": f"Message may not have been sent to {target} — compose box still has content",
+        }
 
     log.info(f"  Message sent to {safe_encode(target)}")
     return {

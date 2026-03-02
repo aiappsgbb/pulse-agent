@@ -237,11 +237,10 @@ async def _do_reply(page, search_query: str, message: str) -> dict:
 
     await page.wait_for_timeout(300)
 
-    # Step 6: Clear any existing content and insert the reply.
-    # Use insertText() instead of keyboard.type() to avoid character-by-character
-    # input triggering Outlook's autocomplete/autocorrect and rich text handlers.
-    await page.keyboard.press("Control+a")
-    await page.keyboard.press("Backspace")
+    # Step 6: Position cursor at beginning and insert reply text.
+    # Do NOT Ctrl+A + Backspace — that clears the quoted email thread.
+    # Instead, press Home/Ctrl+Home to move cursor to the start, then insert.
+    await page.keyboard.press("Control+Home")
     await page.wait_for_timeout(200)
     await page.keyboard.insert_text(message)
     await page.wait_for_timeout(500)
@@ -255,6 +254,23 @@ async def _do_reply(page, search_query: str, message: str) -> dict:
 
     log.info(f"  Send: {send_result}")
     await page.wait_for_timeout(2000)
+
+    # Verify send: compose area should disappear or be empty after send
+    compose_gone = await page.evaluate("""
+    () => {
+        const box = document.querySelector('[role="textbox"][aria-label*="Message body" i]');
+        if (!box) return true;  // compose area gone = sent
+        const text = (box.innerText || '').trim();
+        return text.length === 0;
+    }
+    """)
+
+    if not compose_gone:
+        log.warning(f"  Compose area still visible after send — reply may not have been sent for {safe_encode(search_query)}")
+        return {
+            "success": False,
+            "detail": f"Reply may not have been sent for '{search_query}' — compose area still has content",
+        }
 
     log.info(f"  Email reply sent for: {safe_encode(search_query)}")
     return {

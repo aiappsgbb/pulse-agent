@@ -144,6 +144,8 @@ async def test_new_chat_to_field_found_immediately():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # Send verification (compose empty)
+        True,
     ])
 
     result = await _do_send_new_chat(page, "Alice", "Hi")
@@ -169,6 +171,8 @@ async def test_new_chat_to_field_needs_retries():
         # FIND_COMPOSE_BOX_JS
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
+        True,
+        # Send verification (compose empty)
         True,
     ])
 
@@ -200,6 +204,8 @@ async def test_new_chat_to_field_retries_new_chat_button():
         # FIND_COMPOSE_BOX_JS
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
+        True,
+        # Send verification (compose empty)
         True,
     ])
 
@@ -251,6 +257,8 @@ async def test_new_chat_button_not_found_uses_keyboard():
         "ckeditor",
         # FOCUS_COMPOSE_BOX_JS
         True,
+        # Send verification (compose empty)
+        True,
     ])
 
     result = await _do_send_new_chat(page, "Alice", "Hi")
@@ -292,7 +300,11 @@ async def test_type_and_send_no_compose_box():
 
 async def test_type_and_send_success():
     page = _make_page()
-    page.evaluate = AsyncMock(side_effect=["ckeditor", True])
+    page.evaluate = AsyncMock(side_effect=[
+        "ckeditor",  # FIND_COMPOSE_BOX_JS
+        True,        # FOCUS_COMPOSE_BOX_JS
+        True,        # Send verification (compose empty)
+    ])
 
     result = await _type_and_send(page, "Hello there", "Alice")
     assert result["success"] is True

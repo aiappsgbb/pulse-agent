@@ -1,18 +1,20 @@
 /* =========================================================
    Pulse Agent TUI — Textual stylesheet
+   Brand: cyan / green / amber on deep dark
    ========================================================= */
 
 Screen {
-    background: $surface;
+    background: $background;
 }
 
 Header {
-    background: $primary;
+    background: $surface;
+    color: $primary;
     height: 1;
 }
 
 Footer {
-    background: $panel;
+    background: $background;
     height: 1;
 }
 
@@ -20,7 +22,7 @@ TabbedContent {
     height: 1fr;
 }
 
-/* ─── Inbox pane (unified triage + digest + dismissed) ──── */
+/* ─── Inbox pane ───────────────────────────────────────── */
 
 InboxPane {
     layout: vertical;
@@ -29,20 +31,20 @@ InboxPane {
 
 InboxPane ListView {
     height: 55%;
-    border: solid $panel;
-    border-title-color: $accent;
+    border: round $panel;
+    border-title-color: $primary;
     padding: 0 1;
 }
 
 InboxPane .detail-container {
     height: 45%;
-    border: solid $panel;
+    border: round $panel;
     border-title-color: $text-muted;
     padding: 1 2;
     overflow-y: auto;
 }
 
-/* ─── Projects pane ─────────────────────────────────────── */
+/* ─── Projects pane ────────────────────────────────────── */
 
 ProjectsPane {
     layout: vertical;
@@ -51,18 +53,18 @@ ProjectsPane {
 
 ProjectsPane ListView {
     height: 45%;
-    border: solid $panel;
+    border: round $panel;
     padding: 0 1;
 }
 
 ProjectsPane .detail-container {
     height: 55%;
-    border: solid $panel;
+    border: round $panel;
     padding: 1 2;
     overflow-y: auto;
 }
 
-/* ─── Jobs pane ─────────────────────────────────────────── */
+/* ─── Jobs pane ────────────────────────────────────────── */
 
 JobsPane {
     layout: vertical;
@@ -71,18 +73,18 @@ JobsPane {
 
 JobsPane ListView {
     height: 45%;
-    border: solid $panel;
+    border: round $panel;
     padding: 0 1;
 }
 
 JobsPane .detail-container {
     height: 55%;
-    border: solid $panel;
+    border: round $panel;
     padding: 1 2;
     overflow-y: auto;
 }
 
-/* ─── Chat pane ─────────────────────────────────────────── */
+/* ─── Chat pane ────────────────────────────────────────── */
 
 ChatPane {
     layout: vertical;
@@ -91,26 +93,26 @@ ChatPane {
 
 #chat-log {
     height: 1fr;
-    border: solid $panel;
+    border: round $panel;
     padding: 0 1;
 }
 
 #chat-input {
     height: 3;
-    border: solid $accent;
+    border: round $primary;
     margin: 0;
 }
 
-/* ─── Status bar ─────────────────────────────────────────── */
+/* ─── Status bar ───────────────────────────────────────── */
 
 #status-bar {
     height: 1;
-    background: $panel;
+    background: $background;
     color: $text-muted;
     padding: 0 1;
 }
 
-/* ─── Modals ─────────────────────────────────────────────── */
+/* ─── Modals ───────────────────────────────────────────── */
 
 ReplyModal, NoteModal, QuestionModal, HelpModal {
     align: center middle;
@@ -118,7 +120,7 @@ ReplyModal, NoteModal, QuestionModal, HelpModal {
 
 #help-dialog {
     background: $surface;
-    border: double $accent;
+    border: round $primary;
     padding: 1 2;
     width: 60;
     height: auto;
@@ -127,7 +129,7 @@ ReplyModal, NoteModal, QuestionModal, HelpModal {
 
 #reply-dialog, #note-dialog, #question-dialog {
     background: $surface;
-    border: double $accent;
+    border: round $primary;
     padding: 1 2;
     width: 80%;
     height: auto;
@@ -165,16 +167,16 @@ Button {
     margin-left: 1;
 }
 
-/* ─── List items ────────────────────────────────────────── */
+/* ─── List items ───────────────────────────────────────── */
 
 ListItem {
     padding: 0 1;
 }
 
 ListItem:hover {
-    background: $boost;
+    background: $primary 15%;
 }
 
 ListItem.-highlighted {
-    background: $primary 30%;
+    background: $primary 20%;
 }

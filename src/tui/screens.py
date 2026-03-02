@@ -45,15 +45,15 @@ from tui.ipc import (
 # ---------------------------------------------------------------------------
 
 PRIORITY_COLORS: dict[str, str] = {
-    "urgent": "bold red",
-    "high": "bold yellow",
-    "medium": "cyan",
-    "low": "dim white",
+    "urgent": "bold #FF3366",
+    "high": "bold #FFB020",
+    "medium": "#00D4FF",
+    "low": "#5A6A80",
 }
 
 ORIGIN_COLORS: dict[str, str] = {
-    "triage": "magenta",
-    "digest": "blue",
+    "triage": "#FF44CC",
+    "digest": "#00D4FF",
 }
 
 STATUS_LABELS: dict[str, str] = {
@@ -771,12 +771,12 @@ class ProjectsPane(Widget):
     """Projects list from PULSE_HOME/projects/*.yaml with linked items."""
 
     PROJECT_STATUS_COLORS: dict[str, str] = {
-        "active": "green", "blocked": "red",
-        "on-hold": "yellow", "completed": "dim",
+        "active": "#00CC88", "blocked": "#FF3366",
+        "on-hold": "#FFB020", "completed": "#5A6A80",
     }
     RISK_COLORS: dict[str, str] = {
-        "critical": "bold red", "high": "yellow",
-        "medium": "cyan", "low": "green",
+        "critical": "bold #FF3366", "high": "#FFB020",
+        "medium": "#00D4FF", "low": "#00CC88",
     }
 
     def __init__(self, **kwargs):
@@ -942,10 +942,10 @@ class ProjectsPane(Widget):
 # ---------------------------------------------------------------------------
 
 JOB_STATUS_COLORS: dict[str, str] = {
-    "running": "bold cyan",
-    "completed": "green",
-    "failed": "bold red",
-    "queued": "yellow",
+    "running": "bold #00D4FF",
+    "completed": "#00CC88",
+    "failed": "bold #FF3366",
+    "queued": "#FFB020",
 }
 
 

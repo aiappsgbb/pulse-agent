@@ -18,7 +18,12 @@ def parse_front_matter(path: Path) -> tuple[dict, str]:
         return {}, text
 
     # Find the closing ---
-    end = text.index("---", 3)
+    try:
+        end = text.index("---", 3)
+    except ValueError:
+        # Malformed front matter — opening --- but no closing ---
+        return {}, text
+
     front = text[3:end].strip()
     body = text[end + 3:].strip()
     metadata = yaml.safe_load(front) or {}

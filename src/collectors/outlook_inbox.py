@@ -152,7 +152,7 @@ async def scan_outlook_inbox(config: dict) -> list[dict] | None:
     from core.browser import get_browser_manager
 
     browser_mgr = get_browser_manager()
-    if not browser_mgr or not browser_mgr.context:
+    if not browser_mgr or not browser_mgr.context or not browser_mgr.is_alive:
         log.warning("Outlook inbox scan skipped — no shared browser available")
         return None
 
@@ -162,7 +162,7 @@ async def scan_outlook_inbox(config: dict) -> list[dict] | None:
         return await _do_scan(page)
     except Exception as e:
         log.error(f"Outlook inbox scan failed: {e}")
-        return []
+        return None
     finally:
         if page:
             try:
@@ -180,6 +180,12 @@ async def _do_scan(page) -> list[dict]:
         await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:
         pass
+
+    # Check for auth redirect — session may have expired
+    url = page.url.lower()
+    if "login" in url or "oauth" in url or "microsoftonline" in url:
+        log.error("  Outlook session expired — redirected to login page")
+        return None
 
     # Wait for mail items to render
     try:
