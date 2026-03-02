@@ -6,6 +6,8 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 > "I had 8 meetings yesterday. I was distracted in half of them. At 7 AM, Pulse told me the 3 things that actually need my attention -- including an escalation I completely missed."
 
+[![Watch the demo](https://img.shields.io/badge/Watch%20Demo-YouTube-red?style=for-the-badge&logo=youtube)](https://youtu.be/E-IltXvRNkc)
+
 ---
 
 ## Quick Start
