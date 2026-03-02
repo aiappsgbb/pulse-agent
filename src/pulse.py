@@ -314,7 +314,7 @@ async def _daemon_main_headless():
     worker_task = asyncio.create_task(job_worker(client, config, job_queue))
     scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, shutdown_event))
     status_task = asyncio.create_task(write_daemon_status_loop(job_queue, boot_time, shutdown_event))
-    chat_poll_task = asyncio.create_task(poll_tui_chat_requests(client, config, job_queue, shutdown_event))
+    chat_poll_task = asyncio.create_task(poll_tui_chat_requests(client, config, shutdown_event))
 
     log.info("Daemon running (headless). Ctrl+C to stop.")
     await shutdown_event.wait()
@@ -439,7 +439,7 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     worker_task = asyncio.create_task(job_worker(client, config, job_queue))
     scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, aio_shutdown))
     status_task = asyncio.create_task(write_daemon_status_loop(job_queue, boot_time, aio_shutdown))
-    chat_poll_task = asyncio.create_task(poll_tui_chat_requests(client, config, job_queue, aio_shutdown))
+    chat_poll_task = asyncio.create_task(poll_tui_chat_requests(client, config, aio_shutdown))
 
     log.info("Daemon running — scheduler active.")
 

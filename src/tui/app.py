@@ -80,9 +80,23 @@ class StatusBar(Static):
             h, m = divmod(uptime_s // 60, 60)
             uptime_str = f"{h}h{m:02d}m" if h else f"{m}m"
             queue_size = status.get("queue_size", 0)
-            updated = updated_at[:16].replace("T", " ")
+
+            # Show current running job (if any)
+            cur_job = status.get("current_job")
+            job_part = ""
+            if cur_job:
+                started = status.get("current_job_started", "")
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    elapsed_s = int((datetime.now() - started_dt).total_seconds())
+                    em, es = divmod(elapsed_s, 60)
+                    elapsed_str = f"{em}m" if em else f"{es}s"
+                    job_part = f"  |  Running: {cur_job} ({elapsed_str})"
+                except (ValueError, TypeError):
+                    job_part = f"  |  Running: {cur_job}"
+
             self.update(
-                f" Daemon: up {uptime_str}  |  Queue: {queue_size}  |  Updated: {updated}"
+                f" Daemon: up {uptime_str}  |  Queue: {queue_size}{job_part}"
                 f"  |  ^D digest  ^T triage  ^I intel  ^H dismissed  q quit"
             )
         else:

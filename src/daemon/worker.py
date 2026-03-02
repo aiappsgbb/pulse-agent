@@ -159,6 +159,9 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
 
     lock = asyncio.Lock()
 
+    # Shared state for TUI status bar — imported from tasks.py
+    from daemon.tasks import current_job
+
     while True:
         job = await job_queue.get()
         job_type = job.get("type", "unknown")
@@ -167,40 +170,13 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
 
         log.info(f"=== Job: [{job_type}] {job_name} ===")
 
+        # Track current job for status bar
+        current_job["type"] = job_type
+        current_job["started"] = datetime.now().isoformat()
+
         try:
             async with lock:
-                if job_type == "chat":
-                    prompt = job.get("prompt", "")
-                    request_id = job.get("_request_id", "")
-
-                    # Onboarding: inject context exactly ONCE per daemon lifetime.
-                    # The SDK session maintains conversation history — follow-up
-                    # messages need no special handling. The flag survives session
-                    # crashes so we never re-inject even if the session is recreated.
-                    global _onboarding_sent
-                    from core.onboarding import is_first_run
-                    if not _onboarding_sent and (job.get("_onboarding") or is_first_run(config)):
-                        prompt = _build_onboarding_prompt(config, prompt)
-                        _onboarding_sent = True
-
-                    # File-based streaming for TUI — on_delta writes to .chat-stream.jsonl
-                    from tui.ipc import (
-                        write_chat_delta, finish_chat_stream, clear_chat_stream,
-                    )
-                    clear_chat_stream()
-
-                    def _tui_delta(text: str) -> None:
-                        write_chat_delta(text, request_id)
-
-                    await run_chat_query(client, config, prompt, on_delta=_tui_delta)
-                    finish_chat_stream(request_id)
-                    # Mark file-based chat jobs as completed so they aren't re-enqueued
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    # Process any browser actions the agent queued
-                    await process_pending_actions()
-
-                elif job_type == "research":
+                if job_type == "research":
                     context = {"task": job}
                     await run_job(client, config, "research", context=context)
                     if "_file" in job:
@@ -280,6 +256,8 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     reset_run(schedule_id)
 
         finally:
+            current_job["type"] = None
+            current_job["started"] = None
             job_queue.task_done()
             if job_file:
                 enqueued_files = getattr(job_queue, "_enqueued_files", None)
