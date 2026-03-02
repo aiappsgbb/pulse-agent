@@ -5,16 +5,47 @@ You are setting up Pulse Agent on a Windows 11 machine. Follow these instruction
 ## Environment
 
 - **OS**: Windows 11
-- **Shell**: PowerShell or Command Prompt
-- **Required**: OneDrive for Business must be syncing (check that `%OneDriveCommercial%` env var exists)
+- **Shell**: PowerShell
+- **Required**: OneDrive for Business must be syncing (check that `$env:OneDriveCommercial` env var exists)
 
 ---
 
-## Phase 1: Install Prerequisites
+## Phase 1: Clone the Repository
+
+First, make sure Git is installed:
+
+```powershell
+git --version
+```
+
+If Git is not found:
+
+```powershell
+winget install Git.Git --accept-source-agreements --accept-package-agreements
+```
+
+After install, **close and reopen the terminal**, then verify `git --version` works.
+
+Now clone the repo and navigate into it:
+
+```powershell
+mkdir -Force "$env:USERPROFILE\dev" | Out-Null
+cd "$env:USERPROFILE\dev"
+git clone https://github.com/aiappsgbb/pulse-agent.git
+cd pulse-agent
+```
+
+If the repo already exists at a known path, just `cd` into it instead.
+
+**IMPORTANT**: All remaining commands run from the repo root directory (`pulse-agent/`).
+
+---
+
+## Phase 2: Install Prerequisites
 
 Check and install each tool. Use `winget` (built into Windows 11) for missing software.
 
-### 1.1 Python 3.12+
+### 2.1 Python 3.12+
 
 ```powershell
 python --version
@@ -32,7 +63,7 @@ After install, **close and reopen the terminal** so Python is on PATH, then veri
 python --version
 ```
 
-### 1.2 Node.js
+### 2.2 Node.js
 
 ```powershell
 node --version
@@ -51,7 +82,7 @@ node --version
 npm --version
 ```
 
-### 1.3 GitHub CLI
+### 2.3 GitHub CLI
 
 ```powershell
 gh --version
@@ -69,7 +100,7 @@ After install, **close and reopen the terminal**, then verify:
 gh --version
 ```
 
-### 1.4 Authenticate GitHub CLI
+### 2.4 Authenticate GitHub CLI
 
 ```powershell
 gh auth status
@@ -89,7 +120,7 @@ After auth, install the Copilot CLI extension:
 gh extension install github/gh-copilot
 ```
 
-### 1.5 WorkIQ MCP Server
+### 2.5 WorkIQ MCP Server
 
 ```powershell
 npm install -g @microsoft/workiq
@@ -107,27 +138,7 @@ If `workiq` is not found after install, the npm global bin directory may not be 
 npm config get prefix
 ```
 
-And add `{prefix}\bin` to the user's PATH if needed.
-
----
-
-## Phase 2: Clone or Locate the Repository
-
-If the repo is not already on the machine:
-
-```powershell
-cd $env:USERPROFILE\dev
-git clone https://github.com/aiappsgbb/pulse-agent.git
-cd pulse-agent
-```
-
-If the repo already exists, navigate to it:
-
-```powershell
-cd <path-to-pulse-agent>
-```
-
-**IMPORTANT**: All remaining commands run from the repo root directory.
+And add `{prefix}` to the user's PATH if needed.
 
 ---
 
@@ -229,7 +240,7 @@ Write-Host "Created 'Start Pulse.bat' on Desktop"
 
 ## Phase 6: One-time Browser Setup
 
-**ASK THE USER**: "Last step -- open Microsoft Edge and sign into https://teams.microsoft.com. This is needed so Pulse can read your meeting transcripts and inbox. Let me know when you're signed in."
+**ASK THE USER**: "Almost done -- open Microsoft Edge and sign into https://teams.microsoft.com with your work account. This is needed so Pulse can read your meeting transcripts and inbox. Let me know when you're signed in."
 
 ---
 
@@ -249,7 +260,7 @@ Then start Pulse to verify it launches:
 python src/pulse.py --once --mode monitor
 ```
 
-This runs a single triage cycle and exits. If it starts successfully, the install is good.
+This runs a single triage cycle and exits. If it starts without errors, the install is good.
 
 ---
 
@@ -273,6 +284,7 @@ Your data lives on OneDrive and syncs automatically. No cloud backend, no extern
 | Problem | Fix |
 |---------|-----|
 | `winget` not found | Install "App Installer" from the Microsoft Store |
+| `git` not found | `winget install Git.Git` then reopen terminal |
 | Python not on PATH after install | Close and reopen terminal, or add manually via System Settings > Environment Variables |
 | `npm install -g` permission error | Run terminal as Administrator |
 | `gh auth login` fails | Ensure you have a GitHub account with Copilot access |
@@ -286,6 +298,7 @@ Your data lives on OneDrive and syncs automatically. No cloud backend, no extern
 
 | Tool | Purpose | Installed via |
 |------|---------|--------------|
+| Git | Source control | winget |
 | Python 3.12 | Core runtime | winget |
 | Node.js LTS | Needed for WorkIQ MCP server | winget |
 | GitHub CLI | Needed for Copilot CLI extension | winget |

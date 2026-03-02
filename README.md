@@ -12,11 +12,11 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 ### Option A: AI-assisted setup (recommended)
 
-Open **GitHub Copilot Chat**, **Claude Code**, or any AI assistant and say:
+Open **GitHub Copilot Chat**, **Claude Code**, or any AI coding assistant and paste this:
 
-> Follow the instructions in SETUP.md to set up Pulse Agent on my machine.
+> Follow the instructions at https://github.com/aiappsgbb/pulse-agent/blob/main/SETUP.md to set up Pulse Agent on my machine.
 
-The AI will walk through every step -- installing prerequisites, setting up the environment, and verifying everything works. See [SETUP.md](SETUP.md) for the full guide.
+Your AI will clone the repo, install all prerequisites, set up the environment, and verify everything works. No manual steps -- it handles Python, Node.js, GitHub CLI, WorkIQ, everything.
 
 ### Option B: Double-click installer
 
