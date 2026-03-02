@@ -63,6 +63,43 @@ class TestJobHistoryIPC:
             # Should return at most limit * 4 raw entries, but still capped
             assert len(events) == 10  # 10 < 3*4=12, so all fit
 
+    def test_cleanup_orphaned_jobs(self, tmp_dir):
+        """Orphaned 'running' jobs get marked as 'failed' on cleanup."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history, cleanup_orphaned_jobs
+
+            # Simulate: j1 completed normally, j2 left running (daemon killed)
+            append_job_event("j1", "digest", "running", "Digest")
+            append_job_event("j1", "digest", "completed", "Digest")
+            append_job_event("j2", "monitor", "running", "Triage")
+
+            cleaned = cleanup_orphaned_jobs()
+            assert cleaned == 1
+
+            events = read_job_history()
+            # j2 should now have a "failed" event
+            j2_events = [e for e in events if e["job_id"] == "j2"]
+            assert any(e["status"] == "failed" for e in j2_events)
+            assert any("daemon restarted" in e.get("detail", "").lower() for e in j2_events)
+
+    def test_cleanup_no_orphans(self, tmp_dir):
+        """No orphans to clean up returns 0."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, cleanup_orphaned_jobs
+
+            append_job_event("j1", "digest", "running", "Digest")
+            append_job_event("j1", "digest", "completed", "Digest")
+
+            cleaned = cleanup_orphaned_jobs()
+            assert cleaned == 0
+
+    def test_cleanup_empty_history(self, tmp_dir):
+        """Cleanup on empty history returns 0."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import cleanup_orphaned_jobs
+
+            assert cleanup_orphaned_jobs() == 0
+
 
 # ---------------------------------------------------------------------------
 # Job event consolidation (screens.py)
@@ -334,6 +371,55 @@ class TestWorkerReplyNotifications:
         assert "job_id" in source
         assert "job_log_file" in source
         assert "append_job_event" in source
+
+    def test_browser_jobs_have_timeout(self):
+        """Verify teams_send and email_reply are wrapped with asyncio.wait_for timeout."""
+        import inspect
+        from daemon.worker import job_worker
+
+        source = inspect.getsource(job_worker)
+        assert "asyncio.wait_for" in source
+        assert "_BROWSER_JOB_TIMEOUT" in source
+
+
+# ---------------------------------------------------------------------------
+# _write_job_log helper
+# ---------------------------------------------------------------------------
+
+
+class TestWriteJobLog:
+    """_write_job_log writes progress entries to per-job activity log."""
+
+    def test_writes_entry(self, tmp_dir):
+        from daemon.worker import _write_job_log
+
+        log_file = str(tmp_dir / "job-test.jsonl")
+        _write_job_log(log_file, "tool_start", tool="teams_send", target="Alice")
+
+        entries = [json.loads(line) for line in Path(log_file).read_text().strip().splitlines()]
+        assert len(entries) == 1
+        assert entries[0]["type"] == "tool_start"
+        assert entries[0]["tool"] == "teams_send"
+        assert entries[0]["target"] == "Alice"
+        assert "ts" in entries[0]
+
+    def test_no_log_file_no_crash(self):
+        from daemon.worker import _write_job_log
+
+        # Should not raise
+        _write_job_log(None, "tool_start", tool="test")
+
+    def test_multiple_entries(self, tmp_dir):
+        from daemon.worker import _write_job_log
+
+        log_file = str(tmp_dir / "job-multi.jsonl")
+        _write_job_log(log_file, "tool_start", tool="teams_send")
+        _write_job_log(log_file, "tool_result", status="Sent")
+
+        entries = [json.loads(line) for line in Path(log_file).read_text().strip().splitlines()]
+        assert len(entries) == 2
+        assert entries[0]["type"] == "tool_start"
+        assert entries[1]["type"] == "tool_result"
 
 
 # ---------------------------------------------------------------------------

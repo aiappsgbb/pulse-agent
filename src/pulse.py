@@ -302,6 +302,12 @@ async def _daemon_main_headless():
     boot_time = datetime.now()
     job_queue = asyncio.Queue()
 
+    # Clean up orphaned "running" jobs from previous daemon instance
+    from tui.ipc import cleanup_orphaned_jobs
+    orphans = cleanup_orphaned_jobs()
+    if orphans:
+        log.info(f"Cleaned up {orphans} orphaned running job(s) from previous session")
+
     from daemon.sync import sync_jobs_from_onedrive
     sync_jobs_from_onedrive(config, job_queue)
 
@@ -426,6 +432,12 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
 
     boot_time = datetime.now()
     job_queue = asyncio.Queue()
+
+    # Clean up orphaned "running" jobs from previous daemon instance
+    from tui.ipc import cleanup_orphaned_jobs
+    orphans = cleanup_orphaned_jobs()
+    if orphans:
+        log.info(f"Cleaned up {orphans} orphaned running job(s) from previous session")
 
     from daemon.sync import sync_jobs_from_onedrive
     sync_jobs_from_onedrive(config, job_queue)

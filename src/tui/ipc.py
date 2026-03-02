@@ -452,6 +452,48 @@ def read_job_history(limit: int = 200) -> list[dict]:
         return []
 
 
+def cleanup_orphaned_jobs() -> int:
+    """Mark any 'running' jobs as 'failed' if they have no terminal event.
+
+    Called on daemon startup to clean up jobs that were running when the
+    previous daemon instance was killed. Returns the number of jobs cleaned up.
+    """
+    try:
+        if not JOB_HISTORY_FILE.exists():
+            return 0
+
+        lines = JOB_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+        entries = []
+        for line in lines:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
+        # Find jobs whose latest status is "running" — they're orphaned
+        latest_status: dict[str, dict] = {}
+        for e in entries:
+            jid = e.get("job_id", "")
+            if jid:
+                latest_status[jid] = e
+
+        cleaned = 0
+        for jid, event in latest_status.items():
+            if event.get("status") == "running":
+                append_job_event(
+                    jid,
+                    event.get("job_type", "unknown"),
+                    "failed",
+                    "Daemon restarted — job interrupted",
+                    log_file=event.get("log_file", ""),
+                )
+                cleaned += 1
+
+        return cleaned
+    except Exception:
+        return 0
+
+
 def read_job_log(log_file: str) -> list[dict]:
     """Read a per-job activity log (tool calls, messages).
 

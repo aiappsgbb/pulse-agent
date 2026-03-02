@@ -979,14 +979,21 @@ def _consolidate_jobs(events: list[dict]) -> list[dict]:
             if ev.get("status") == "running":
                 existing["started_ts"] = ev.get("ts", "")
 
+    # Safety net: mark jobs "running" for >30 min as stale/failed
+    from datetime import datetime as _dt
+    now = _dt.now()
+    for j in jobs.values():
+        if j["status"] == "running" and j.get("started_ts"):
+            try:
+                started = _dt.fromisoformat(j["started_ts"])
+                if (now - started).total_seconds() > 1800:
+                    j["status"] = "failed"
+                    j["detail"] = "Stale — exceeded 30 min (daemon likely restarted)"
+            except (ValueError, TypeError):
+                pass
+
     result = list(jobs.values())
     # Sort: running first, then most recent
-    def _sort_key(j):
-        is_running = 0 if j["status"] == "running" else 1
-        return (is_running, j.get("ts", ""))
-
-    result.sort(key=_sort_key)
-    # Running first, rest most-recent-first (reverse ts for non-running)
     running = [j for j in result if j["status"] == "running"]
     others = [j for j in result if j["status"] != "running"]
     others.sort(key=lambda j: j.get("ts", ""), reverse=True)

@@ -17,6 +17,23 @@ from tui.ipc import write_job_notification, append_job_event
 
 _PROXY_RETRY_DELAY = 300       # 5 minutes between retries
 _PROXY_MAX_RETRIES = 48        # 4 hours max (48 × 5 min)
+_BROWSER_JOB_TIMEOUT = 180    # 3 minute timeout for Playwright-based jobs
+
+
+def _write_job_log(log_file: str | None, entry_type: str, **kwargs) -> None:
+    """Append a progress entry to the per-job activity log.
+
+    Used for Playwright-based jobs (teams_send, email_reply) that don't
+    have an EventHandler writing to the log.
+    """
+    if not log_file:
+        return
+    try:
+        entry = {"ts": datetime.now().isoformat(), "type": entry_type, **kwargs}
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 
 def _requeue_with_delay(job: dict, retry_count: int, delay_seconds: int = _PROXY_RETRY_DELAY):
@@ -240,27 +257,41 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     )
 
                 elif job_type == "teams_send":
-                    result = await _execute_teams_send(job)
+                    recipient = job.get("chat_name") or job.get("recipient") or ""
+                    _write_job_log(job_log_file, "tool_start", tool="teams_send", target=recipient)
+                    try:
+                        result = await asyncio.wait_for(
+                            _execute_teams_send(job), timeout=_BROWSER_JOB_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
                     ok = result.get("success")
                     status = "Sent" if ok else "Failed"
                     detail = result.get("detail", "")
+                    _write_job_log(job_log_file, "tool_result", tool="teams_send", status=status, detail=detail)
                     log.info(f"  Teams {status}: {detail}")
                     if "_file" in job:
                         mark_task_completed(job)
-                    recipient = job.get("chat_name") or job.get("recipient") or ""
                     summary = f"Teams reply {status.lower()}: {recipient}" + (f" — {detail}" if not ok else "")
                     notify_desktop("Pulse — Teams Reply", summary)
                     write_job_notification("teams_send", summary)
 
                 elif job_type == "email_reply":
-                    result = await _execute_email_reply(job)
+                    query = job.get("search_query", "")
+                    _write_job_log(job_log_file, "tool_start", tool="email_reply", target=query)
+                    try:
+                        result = await asyncio.wait_for(
+                            _execute_email_reply(job), timeout=_BROWSER_JOB_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
                     ok = result.get("success")
                     status = "Sent" if ok else "Failed"
                     detail = result.get("detail", "")
+                    _write_job_log(job_log_file, "tool_result", tool="email_reply", status=status, detail=detail)
                     log.info(f"  Email reply {status}: {detail}")
                     if "_file" in job:
                         mark_task_completed(job)
-                    query = job.get("search_query", "")
                     summary = f"Email reply {status.lower()}: {query}" + (f" — {detail}" if not ok else "")
                     notify_desktop("Pulse — Email Reply", summary)
                     write_job_notification("email_reply", summary)
