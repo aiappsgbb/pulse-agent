@@ -1,11 +1,34 @@
 """Outlook Calendar navigation, meeting discovery, and SharePoint URL extraction."""
 
 import re
+from datetime import datetime, date
 from dataclasses import dataclass
 
 from playwright.async_api import Page
 
 from core.logging import log
+
+
+# Regex to extract date from Outlook Calendar meeting button aria-labels.
+# Format: "..., Monday, March 02, 2026, ..."
+_MEETING_DATE_RE = re.compile(
+    r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+'
+    r'(\w+)\s+(\d{1,2}),\s+(\d{4})'
+)
+
+
+def _parse_meeting_date(label: str) -> date | None:
+    """Extract the meeting date from an Outlook Calendar button aria-label.
+
+    Returns None if the date can't be parsed.
+    """
+    m = _MEETING_DATE_RE.search(label)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
+    except ValueError:
+        return None
 
 
 async def _nav_diag(page, label: str):
@@ -158,6 +181,120 @@ async def find_meeting_buttons(page: Page) -> list[str]:
     return meetings
 
 
+async def _find_recap_element(page: Page):
+    """Search for recap/transcript button or link on the current page.
+
+    Tries multiple patterns and element roles. Returns the first match or None.
+    """
+    recap_patterns = [
+        "View recap", "View recap and transcript", "View transcript",
+        "Open recap", "Recap", "recap",
+    ]
+
+    for pattern in recap_patterns:
+        try:
+            btn = page.get_by_role("button", name=re.compile(pattern, re.IGNORECASE))
+            if await btn.count() > 0:
+                return btn.first
+        except Exception:
+            pass
+        try:
+            link = page.get_by_role("link", name=re.compile(pattern, re.IGNORECASE))
+            if await link.count() > 0:
+                return link.first
+        except Exception:
+            pass
+
+    # Generic text-based search as last resort — catches any element type
+    try:
+        recap_el = page.locator("button, a, [role='button'], [role='link']").filter(
+            has_text=re.compile(r"recap|transcript", re.IGNORECASE)
+        )
+        if await recap_el.count() > 0:
+            return recap_el.first
+    except Exception:
+        pass
+
+    return None
+
+
+async def _log_popup_diagnostics(page: Page, meeting_name: str):
+    """Log diagnostic info about popup elements when recap button not found.
+
+    Searches the FULL page DOM for any element containing 'recap' text,
+    plus inspects elements inside common popup/dialog containers.
+    """
+    try:
+        diag = await page.evaluate("""
+            () => {
+                // 1. Search FULL page for any element with "recap" text
+                const allEls = document.querySelectorAll('*');
+                const recapEls = [];
+                for (const el of allEls) {
+                    const text = (el.textContent || '').toLowerCase();
+                    if (text.includes('recap') && el.children.length < 3) {
+                        recapEls.push({
+                            tag: el.tagName,
+                            role: el.getAttribute('role') || '',
+                            text: (el.textContent || '').trim().substring(0, 100),
+                            aria: el.getAttribute('aria-label') || '',
+                            classes: el.className ? el.className.substring(0, 80) : '',
+                            visible: el.offsetParent !== null || el.style.display !== 'none',
+                        });
+                    }
+                }
+
+                // 2. Get popup/dialog container elements
+                const containerSels = [
+                    '[role="dialog"]', '[role="tooltip"]', '[role="complementary"]',
+                    '[class*="popup"]', '[class*="Popup"]',
+                    '[class*="callout"]', '[class*="Callout"]',
+                    '[class*="flyout"]', '[class*="Flyout"]',
+                    '[class*="panel"]', '[class*="Panel"]',
+                    '#fluent-default-layer-host',
+                ];
+                const popupEls = [];
+                for (const sel of containerSels) {
+                    const containers = document.querySelectorAll(sel);
+                    for (const c of containers) {
+                        const children = c.querySelectorAll('button, a, [role="button"], [role="link"]');
+                        for (const el of children) {
+                            popupEls.push({
+                                container: sel,
+                                tag: el.tagName,
+                                role: el.getAttribute('role') || '',
+                                text: (el.textContent || '').trim().substring(0, 80),
+                                aria: el.getAttribute('aria-label') || '',
+                            });
+                        }
+                    }
+                }
+
+                return {recapEls: recapEls.slice(0, 10), popupEls: popupEls.slice(0, 15)};
+            }
+        """)
+
+        recap_els = diag.get("recapEls", [])
+        popup_els = diag.get("popupEls", [])
+
+        if recap_els:
+            log.info(f"    [DIAG] Found {len(recap_els)} elements with 'recap' text on page:")
+            for el in recap_els[:5]:
+                log.info(f"      <{el['tag']}> role={el['role']!r} visible={el['visible']} text={el['text'][:60]!r} classes={el['classes'][:40]!r}")
+        else:
+            log.info(f"    [DIAG] No elements with 'recap' text found anywhere on page")
+
+        if popup_els:
+            log.info(f"    [DIAG popup] {len(popup_els)} interactive elements in popup containers:")
+            for el in popup_els[:8]:
+                log.info(f"      [{el['container']}] <{el['tag']}> role={el['role']!r} text={el['text'][:50]!r} aria={el['aria'][:50]!r}")
+        else:
+            log.info(f"    [DIAG popup] No interactive elements in any popup containers")
+
+    except Exception as e:
+        log.info(f"    [DIAG] Could not inspect popup for '{meeting_name[:40]}': {e}")
+
+
 async def discover_meetings_with_recaps(
     page: Page,
     skip_slugs: set[str],
@@ -184,88 +321,51 @@ async def discover_meetings_with_recaps(
 
     results = []
     seen_slugs = set()
+    skipped_count = 0
+    future_count = 0
+    today = date.today()
 
     for meeting_name in meeting_buttons:
         slug = slugify_fn(meeting_name)
-        if not slug or slug in seen_slugs or slug in skip_slugs:
+        if not slug or slug in seen_slugs:
             continue
+        if slug in skip_slugs:
+            skipped_count += 1
+            continue
+
+        # Skip future meetings — they can't have recaps yet
+        meeting_date = _parse_meeting_date(meeting_name)
+        if meeting_date and meeting_date > today:
+            future_count += 1
+            continue
+
         seen_slugs.add(slug)
 
         # Click the meeting event to open popup
         try:
             btn = page.get_by_role("button", name=meeting_name)
             await btn.click()
-            await page.wait_for_timeout(2500)  # Allow popup to fully render
         except Exception as e:
             log.warning(f"    Could not click meeting '{meeting_name[:50]}': {e}")
             continue
 
-        # Look for recap-related elements in the popup — try buttons AND links
-        # with multiple text patterns (Outlook UI varies across tenants/versions)
+        # Poll for recap button with increasing wait — "View recap" loads
+        # asynchronously as Outlook checks whether a recording exists.
+        # Total budget: ~8 seconds (1+1+2+2+2)
         recap_btn = None
-        recap_patterns = [
-            "View recap", "View recap and transcript", "View transcript",
-            "Open recap", "Recap", "recap",
-        ]
+        poll_waits = [1000, 1000, 2000, 2000, 2000]
 
-        for pattern in recap_patterns:
-            try:
-                btn = page.get_by_role("button", name=re.compile(pattern, re.IGNORECASE))
-                if await btn.count() > 0:
-                    recap_btn = btn.first
-                    break
-            except Exception:
-                pass
-            try:
-                link = page.get_by_role("link", name=re.compile(pattern, re.IGNORECASE))
-                if await link.count() > 0:
-                    recap_btn = link.first
-                    break
-            except Exception:
-                pass
-
-        # Also try a generic text-based search as last resort
-        if not recap_btn:
-            try:
-                recap_btn_by_text = page.locator("button, a, [role='button'], [role='link']").filter(
-                    has_text=re.compile(r"recap|transcript", re.IGNORECASE)
-                )
-                if await recap_btn_by_text.count() > 0:
-                    recap_btn = recap_btn_by_text.first
-            except Exception:
-                pass
+        for poll_i, wait_ms in enumerate(poll_waits):
+            await page.wait_for_timeout(wait_ms)
+            recap_btn = await _find_recap_element(page)
+            if recap_btn:
+                break
 
         if not recap_btn:
-            # Diagnostic: log what interactive elements ARE in the popup
-            # (only for the first few meetings to avoid log spam)
-            if len(seen_slugs) <= 3:
-                try:
-                    popup_els = await page.evaluate("""
-                        () => {
-                            const els = document.querySelectorAll(
-                                '[role="dialog"] button, [role="dialog"] a, ' +
-                                '[class*="popup"] button, [class*="popup"] a, ' +
-                                '[class*="Popup"] button, [class*="Popup"] a, ' +
-                                '[class*="callout"] button, [class*="callout"] a, ' +
-                                '[class*="Callout"] button, [class*="Callout"] a'
-                            );
-                            return Array.from(els).slice(0, 20).map(el => ({
-                                tag: el.tagName,
-                                role: el.getAttribute('role') || '',
-                                text: (el.textContent || '').trim().substring(0, 80),
-                                aria: el.getAttribute('aria-label') || '',
-                                href: el.getAttribute('href') || '',
-                            }));
-                        }
-                    """)
-                    if popup_els:
-                        log.info(f"    [DIAG popup] {len(popup_els)} elements in popup:")
-                        for el in popup_els[:10]:
-                            log.info(f"      {el.get('tag')} role={el.get('role')!r} text={el.get('text')!r} aria={el.get('aria')!r} href={el.get('href','')[:60]!r}")
-                    else:
-                        log.info(f"    [DIAG popup] No interactive elements found in popup containers")
-                except Exception as e:
-                    log.info(f"    [DIAG popup] Could not inspect popup: {e}")
+            # Diagnostic: log what elements are in the popup
+            # Log for first 5 unique meetings (enough to diagnose, not too spammy)
+            if len(seen_slugs) <= 5:
+                await _log_popup_diagnostics(page, meeting_name)
 
             # No recap — close popup and continue
             try:
@@ -343,6 +443,9 @@ async def discover_meetings_with_recaps(
         else:
             log.warning(f"    No SharePoint URL found for: {meeting_name[:50]}")
 
-    log.info(f"  Discovery complete: {len(results)} meetings with recaps")
+    log.info(
+        f"  Discovery complete: {len(results)} recaps found, {len(seen_slugs)} checked, "
+        f"{skipped_count} skipped (attempted), {future_count} skipped (future)"
+    )
     await _nav_diag(page, "discover-end")
     return results

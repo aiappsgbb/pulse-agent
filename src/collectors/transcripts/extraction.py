@@ -98,12 +98,17 @@ def format_timestamp(seconds: int) -> str:
         return f"{m}:{s:02d}"
 
 
-async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) -> str | None:
+async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) -> str | None | bool:
     """Navigate to SharePoint Stream URL, click Transcript tab, extract text.
 
     The page should be a fresh tab — caller is responsible for creating/closing it.
 
-    Returns cleaned transcript text or None if extraction failed.
+    Returns:
+        str: Extracted transcript text (success).
+        False: No transcript tab exists (permanent — safe to mark attempted).
+        None: Extraction failed for other reasons (transient — should retry).
+    Raises:
+        TransientExtractionError: Auth/page-load failures (caller should NOT mark attempted).
     """
     # Skip API URLs that trigger downloads instead of rendering pages
     if "/_api/" in sharepoint_url or "/media/transcripts/" in sharepoint_url:
@@ -130,7 +135,7 @@ async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) ->
             # Landed on AccessDenied or other error page
             if "AccessDenied" in actual_url:
                 log.info(f"    Access denied for this recording")
-                return None
+                return False
             # Sharing link hasn't redirected yet — keep waiting
             if ":v:" in actual_url:
                 continue
@@ -199,7 +204,9 @@ async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) ->
         except Exception:
             pass
         await _ext_diag(page, "no-transcript-tab")
-        return None
+        # Return False (not None) — this is a permanent condition (recording
+        # exists but transcription wasn't enabled). Safe to mark as attempted.
+        return False
 
     await page.wait_for_timeout(3000)
     await _ext_diag(page, "transcript-tab-clicked")

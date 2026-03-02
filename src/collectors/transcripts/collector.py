@@ -47,13 +47,39 @@ TRANSCRIPT_STATE_FILE = PULSE_HOME / ".transcript-state.json"
 ATTEMPT_TTL_DAYS = 14  # retry after 14 days in case transcript appears later
 
 
-def _load_attempted_slugs() -> dict[str, str]:
-    """Load attempted slugs from state file, pruning entries older than TTL."""
+def _load_attempted_slugs(output_dir: Path | None = None) -> dict[str, str]:
+    """Load attempted slugs from state file, pruning expired and orphaned entries.
+
+    Prunes:
+    - Entries older than ATTEMPT_TTL_DAYS
+    - Entries with no corresponding transcript file (failed extractions from
+      before the False/None distinction was added — these should be retried)
+    """
     state = load_json_state(TRANSCRIPT_STATE_FILE, {"attempted": {}})
     attempted = state.get("attempted", {})
     cutoff = (datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS)).isoformat()
     # Prune expired entries
     pruned = {slug: ts for slug, ts in attempted.items() if ts > cutoff}
+
+    # Also prune attempted slugs that have no transcript file — these were
+    # extraction failures that should be retried now that we distinguish
+    # permanent (False) from transient (None) failures.
+    if output_dir and output_dir.exists():
+        existing_files = set()
+        for f in output_dir.glob("*.txt"):
+            parts = f.stem.split("_", 1)
+            if len(parts) == 2:
+                existing_files.add(parts[1])
+        for f in output_dir.glob("*.md"):
+            parts = f.stem.split("_", 1)
+            if len(parts) == 2:
+                existing_files.add(parts[1])
+
+        orphaned = {s for s in pruned if s not in existing_files}
+        if orphaned:
+            log.info(f"  Pruning {len(orphaned)} attempted slugs with no transcript file (will retry)")
+            pruned = {s: ts for s, ts in pruned.items() if s not in orphaned}
+
     if len(pruned) < len(attempted):
         save_json_state(TRANSCRIPT_STATE_FILE, {"attempted": pruned})
     return pruned
@@ -110,8 +136,9 @@ async def run_transcript_collection(client, config: dict):
     skipped = 0
     errors = []
 
-    # Load persistent attempt tracking — skip meetings we've already tried
-    attempted_history = _load_attempted_slugs()
+    # Load persistent attempt tracking — skip meetings we've already tried.
+    # Pass output_dir to prune orphaned slugs (attempted but no file saved).
+    attempted_history = _load_attempted_slugs(output_dir)
     log.info(f"  Transcript state: {len(attempted_history)} previously attempted slugs (TTL={ATTEMPT_TTL_DAYS}d)")
 
     # Try to connect to an existing authenticated browser via CDP.
@@ -229,7 +256,7 @@ async def run_transcript_collection(client, config: dict):
                     timeout=PER_MEETING_TIMEOUT,
                 )
 
-                if transcript:
+                if isinstance(transcript, str) and transcript:
                     date_str = datetime.now().strftime("%Y-%m-%d")
                     filename = f"{date_str}_{meeting.slug}.txt"
                     filepath = output_dir / filename
@@ -237,13 +264,16 @@ async def run_transcript_collection(client, config: dict):
                     log.info(f"    SAVED: {filename} ({len(transcript)} chars)")
                     collected += 1
                     _mark_attempted(attempted_history, meeting.slug)
-                else:
-                    log.info(f"    No transcript content extracted")
+                elif transcript is False:
+                    # Permanent: no Transcript tab or access denied — won't change.
+                    log.info(f"    No transcript available (permanent — marking attempted)")
                     skipped += 1
-                    # Mark as attempted — if the page loaded but has no Transcript tab,
-                    # it's a recording without transcription (won't change later).
-                    # Auth failures and timeouts are NOT marked (retried next run).
                     _mark_attempted(attempted_history, meeting.slug)
+                else:
+                    # None: extraction failed for unknown reason — DON'T mark attempted.
+                    # Will be retried on next run.
+                    log.info(f"    Extraction returned empty — will retry next run")
+                    skipped += 1
 
             except TransientExtractionError as e:
                 log.warning(f"    TRANSIENT: {meeting.title[:40]}: {e}")
