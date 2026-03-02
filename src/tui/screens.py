@@ -30,6 +30,8 @@ from tui.ipc import (
     dismiss_item,
     load_dismissed_items,
     read_chat_stream_deltas,
+    read_job_history,
+    read_job_log,
     read_job_notification,
     read_pending_question,
     restore_item,
@@ -223,9 +225,10 @@ class HelpModal(ModalScreen):
                 "  Ctrl+I  Queue intel          Ctrl+X  Queue transcripts\n"
                 "\n"
                 "[bold cyan]Navigation[/bold cyan]\n"
-                "  Ctrl+L  Jump to Inbox        Ctrl+R  Refresh all\n"
-                "  Ctrl+H  Toggle dismissed      Ctrl+E  Clear chat\n"
-                "  Ctrl+P  Command palette       Q       Quit\n"
+                "  Ctrl+L  Jump to Inbox        Ctrl+J  Jump to Jobs\n"
+                "  Ctrl+R  Refresh all           Ctrl+H  Toggle dismissed\n"
+                "  Ctrl+E  Clear chat            Ctrl+P  Command palette\n"
+                "  Q       Quit\n"
                 "\n"
                 "[bold cyan]Inbox actions[/bold cyan]\n"
                 "  D  Snooze (1 day)            A  Archive (30 days)\n"
@@ -281,6 +284,14 @@ class ReplyModal(ModalScreen):
         draft = text_area.text
         if draft.strip():
             if write_reply_job(self._item, draft):
+                # Auto-dismiss: item is handled, remove from inbox
+                item_id = self._item.get("id", "")
+                if item_id:
+                    archive_item(
+                        item_id,
+                        title=self._item.get("title", ""),
+                        source=self._item.get("source", ""),
+                    )
                 self.dismiss("sent")
             else:
                 self.dismiss("error")
@@ -292,22 +303,31 @@ class ReplyModal(ModalScreen):
 
 
 class NoteModal(ModalScreen):
-    """Modal for adding a note to an item."""
+    """Modal for adding a note to an item.
+
+    When allow_empty=True (used after dismiss/archive), pressing Enter with
+    no text skips the note instead of doing nothing. This enables the
+    "dismiss + optional note" workflow.
+    """
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, item_id: str, **kwargs):
+    def __init__(self, item_id: str, allow_empty: bool = False, title: str = "Add note", **kwargs):
         super().__init__(**kwargs)
         self._item_id = item_id
+        self._allow_empty = allow_empty
+        self._title = title
 
     def compose(self) -> ComposeResult:
         with Widget(id="note-dialog"):
-            yield Label("Add note", id="note-title")
-            yield Input(placeholder="Enter note text...", id="note-input")
+            yield Label(self._title, id="note-title")
+            placeholder = "Enter note (Enter to skip)..." if self._allow_empty else "Enter note text..."
+            yield Input(placeholder=placeholder, id="note-input")
             with Horizontal(id="note-buttons"):
-                yield Button("Save (Enter)", id="btn-save", variant="primary")
+                label = "Save / Skip (Enter)" if self._allow_empty else "Save (Enter)"
+                yield Button(label, id="btn-save", variant="primary")
                 yield Button("Cancel (Esc)", id="btn-cancel")
 
     def on_mount(self) -> None:
@@ -332,7 +352,11 @@ class NoteModal(ModalScreen):
         note_text = self.query_one(Input).value.strip()
         if note_text:
             add_note(self._item_id, note_text)
-        self.dismiss("saved" if note_text else None)
+            self.dismiss("saved")
+        elif self._allow_empty:
+            self.dismiss("skipped")  # Empty note on dismiss/archive — still counts as done
+        else:
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -508,7 +532,12 @@ class ItemPane(Widget):
 
     def _on_reply_result(self, result) -> None:
         if result == "sent":
-            self.notify("Reply job queued — daemon will send it")
+            # Remove item from list (auto-archived by ReplyModal)
+            if 0 <= self._selected_idx < len(self._items):
+                self._items.pop(self._selected_idx)
+                self._selected_idx = max(0, self._selected_idx - 1)
+                self._refresh_list()
+            self.notify("Reply queued — check Jobs tab for status")
         elif result == "error":
             self.notify("Failed to queue reply — check PULSE_HOME/jobs/", severity="error")
 
@@ -668,8 +697,9 @@ class InboxPane(ItemPane):
         item = self.get_selected_item()
         if not item or item.get("_is_dismissed"):
             return
+        item_id = item.get("id", "")
         dismiss_item(
-            item.get("id", ""),
+            item_id,
             reason="",
             title=item.get("title", ""),
             source=item.get("source", ""),
@@ -677,7 +707,17 @@ class InboxPane(ItemPane):
         self._items.pop(self._selected_idx)
         self._selected_idx = max(0, self._selected_idx - 1)
         self._refresh_list()
-        self.notify("Item snoozed (comes back tomorrow if still relevant)")
+        self.notify("Item snoozed — add a note? (Enter to skip)")
+        # Chain NoteModal for optional note
+        if item_id:
+            self.app.push_screen(
+                NoteModal(item_id, allow_empty=True, title="Add note (optional)"),
+                self._on_dismiss_note_result,
+            )
+
+    def _on_dismiss_note_result(self, result) -> None:
+        if result == "saved":
+            self.notify("Note saved")
 
     def archive_selected(self) -> None:
         """Archive an item (works on both active and dismissed items)."""
@@ -685,19 +725,27 @@ class InboxPane(ItemPane):
         if not item:
             return
         if item.get("_is_dismissed"):
-            archive_item(item.get("item", ""))
+            item_id = item.get("item", "")
+            archive_item(item_id)
             item["status"] = "archived"
             self._refresh_list()
         else:
+            item_id = item.get("id", "")
             archive_item(
-                item.get("id", ""),
+                item_id,
                 title=item.get("title", ""),
                 source=item.get("source", ""),
             )
             self._items.pop(self._selected_idx)
             self._selected_idx = max(0, self._selected_idx - 1)
             self._refresh_list()
-        self.notify("Item archived (30-day suppress)")
+        self.notify("Item archived — add a note? (Enter to skip)")
+        # Chain NoteModal for optional note
+        if item_id:
+            self.app.push_screen(
+                NoteModal(item_id, allow_empty=True, title="Add note (optional)"),
+                self._on_dismiss_note_result,
+            )
 
     def restore_selected(self) -> None:
         """Restore a dismissed item (only works on dismissed items)."""
@@ -887,6 +935,212 @@ class ProjectsPane(Widget):
             if isinstance(item_project, str) and item_project.lower() == project_id.lower():
                 linked.append(item)
         return linked
+
+
+# ---------------------------------------------------------------------------
+# Jobs pane (real-time job visibility + activity logs)
+# ---------------------------------------------------------------------------
+
+JOB_STATUS_COLORS: dict[str, str] = {
+    "running": "bold cyan",
+    "completed": "green",
+    "failed": "bold red",
+    "queued": "yellow",
+}
+
+
+def _consolidate_jobs(events: list[dict]) -> list[dict]:
+    """Consolidate raw job events into one entry per job (latest status wins).
+
+    Returns list of job dicts sorted: running first, then by timestamp desc.
+    """
+    jobs: dict[str, dict] = {}
+    for ev in events:
+        jid = ev.get("job_id", "")
+        if not jid:
+            continue
+        existing = jobs.get(jid)
+        if existing is None:
+            jobs[jid] = {
+                "job_id": jid,
+                "job_type": ev.get("job_type", "?"),
+                "status": ev.get("status", "?"),
+                "detail": ev.get("detail", ""),
+                "log_file": ev.get("log_file", ""),
+                "ts": ev.get("ts", ""),
+                "started_ts": ev.get("ts", "") if ev.get("status") == "running" else "",
+            }
+        else:
+            # Update with later event
+            existing["status"] = ev.get("status", existing["status"])
+            existing["detail"] = ev.get("detail") or existing["detail"]
+            existing["log_file"] = ev.get("log_file") or existing["log_file"]
+            existing["ts"] = ev.get("ts", existing["ts"])
+            if ev.get("status") == "running":
+                existing["started_ts"] = ev.get("ts", "")
+
+    result = list(jobs.values())
+    # Sort: running first, then most recent
+    def _sort_key(j):
+        is_running = 0 if j["status"] == "running" else 1
+        return (is_running, j.get("ts", ""))
+
+    result.sort(key=_sort_key)
+    # Running first, rest most-recent-first (reverse ts for non-running)
+    running = [j for j in result if j["status"] == "running"]
+    others = [j for j in result if j["status"] != "running"]
+    others.sort(key=lambda j: j.get("ts", ""), reverse=True)
+    return running + others
+
+
+class JobsPane(Widget):
+    """Jobs tab showing all job history with activity logs."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._jobs: list[dict] = []
+        self._selected_idx: int = 0
+
+    def compose(self) -> ComposeResult:
+        yield ListView()
+        with VerticalScroll(classes="detail-container"):
+            yield Static("[dim]Select a job to view its activity log[/dim]", id="job-detail")
+
+    def on_mount(self) -> None:
+        self.load_data()
+        self.set_interval(3, self._auto_refresh)
+
+    def _auto_refresh(self) -> None:
+        """Auto-refresh while a job is running."""
+        has_running = any(j["status"] == "running" for j in self._jobs)
+        self.load_data()
+        # Re-render detail for running job
+        if has_running and self._jobs:
+            sel = self._get_selected_job()
+            if sel and sel["status"] == "running":
+                self._show_detail(sel)
+
+    def load_data(self) -> None:
+        events = read_job_history(limit=200)
+        self._jobs = _consolidate_jobs(events)
+        self._refresh_list()
+
+    def _refresh_list(self) -> None:
+        lv = self.query_one(ListView)
+        lv.clear()
+        if not self._jobs:
+            lv.append(ListItem(Label(
+                "[dim]No jobs yet — press ^T triage or ^D digest to queue one[/dim]"
+            )))
+            return
+
+        for job in self._jobs:
+            status = job["status"]
+            color = JOB_STATUS_COLORS.get(status, "white")
+            job_type = job["job_type"]
+            detail = job.get("detail", "")[:40]
+
+            # Duration for running/completed
+            duration = ""
+            started = job.get("started_ts", "")
+            if started and status == "running":
+                try:
+                    dt = datetime.fromisoformat(started)
+                    elapsed = int((datetime.now() - dt).total_seconds())
+                    m, s = divmod(elapsed, 60)
+                    duration = f" ({m}m{s:02d}s)" if m else f" ({s}s)"
+                except Exception:
+                    pass
+            elif status in ("completed", "failed"):
+                age = _age_str(job.get("ts", ""))
+                duration = f" ({age} ago)"
+
+            text = f"[{color}]{status.upper():>9}[/{color}]  {job_type}{duration}"
+            if detail and detail != job_type:
+                text += f"  [dim]{detail}[/dim]"
+            lv.append(ListItem(Label(text)))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item is None:
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._jobs):
+            self._selected_idx = idx
+            self._show_detail(self._jobs[idx])
+
+    def _get_selected_job(self) -> dict | None:
+        if 0 <= self._selected_idx < len(self._jobs):
+            return self._jobs[self._selected_idx]
+        return None
+
+    def _show_detail(self, job: dict) -> None:
+        detail_widget = self.query_one("#job-detail", Static)
+        status = job["status"]
+        color = JOB_STATUS_COLORS.get(status, "white")
+
+        lines = [
+            f"[{color}]{status.upper()}[/{color}] [bold]{job['job_type']}[/bold]",
+            f"Job ID: {job['job_id']}",
+        ]
+        if job.get("started_ts"):
+            lines.append(f"Started: {job['started_ts']}")
+        if job.get("detail") and job["detail"] != job["job_type"]:
+            lines.append(f"Detail: {job['detail']}")
+
+        # Load activity log
+        log_file = job.get("log_file", "")
+        if log_file:
+            log_entries = read_job_log(log_file)
+            if log_entries:
+                lines.append("")
+                lines.append("[bold cyan]Activity log:[/bold cyan]")
+                for entry in log_entries:
+                    ts = entry.get("ts", "")
+                    # Format timestamp as HH:MM:SS
+                    try:
+                        t = datetime.fromisoformat(ts)
+                        ts_short = t.strftime("%H:%M:%S")
+                    except Exception:
+                        ts_short = ts[:8] if ts else ""
+
+                    etype = entry.get("type", "")
+                    if etype == "tool_start":
+                        tool = entry.get("tool", "?")
+                        mcp = f" ({entry['mcp']})" if entry.get("mcp") else ""
+                        args = entry.get("args", "")
+                        args_preview = f" {args[:80]}" if args else ""
+                        lines.append(f"  [cyan]{ts_short}[/cyan] >> [bold]{tool}[/bold]{mcp}{args_preview}")
+                    elif etype == "tool_result":
+                        result = entry.get("result", "")[:120]
+                        lines.append(f"  [dim]{ts_short} << {result}[/dim]")
+                    elif etype == "message":
+                        preview = entry.get("preview", "")[:200]
+                        lines.append(f"  [green]{ts_short}[/green] Agent: {preview}")
+                    elif etype == "error":
+                        err = entry.get("error", "")[:200]
+                        lines.append(f"  [red]{ts_short} ERROR: {err}[/red]")
+                    elif etype == "idle":
+                        lines.append(f"  [dim]{ts_short} Session complete[/dim]")
+            else:
+                lines.append("")
+                if status == "running":
+                    lines.append("[dim]Waiting for activity...[/dim]")
+                else:
+                    lines.append("[dim]No activity log available[/dim]")
+        else:
+            lines.append("")
+            lines.append("[dim]No activity log for this job type[/dim]")
+
+        detail_widget.update("\n".join(lines))
+
+    def get_running_count(self) -> int:
+        return sum(1 for j in self._jobs if j["status"] == "running")
+
+    def get_pending_count(self) -> int:
+        return sum(1 for j in self._jobs if j["status"] == "queued")
+
+    def get_active_count(self) -> int:
+        return self.get_running_count() + self.get_pending_count()
 
 
 # ---------------------------------------------------------------------------

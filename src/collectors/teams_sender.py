@@ -405,7 +405,12 @@ async def _do_reply_to_chat(page, chat_name: str, message: str) -> dict:
 
 
 async def _type_and_send(page, message: str, target: str) -> dict:
-    """Find compose box, type message, send with Ctrl+Enter."""
+    """Find compose box, type message, send with Ctrl+Enter.
+
+    Uses insertText() instead of keyboard.type() to avoid character-by-character
+    input which triggers Teams' autocomplete, smart quotes, and CKEditor event
+    handlers — causing duplicated/garbled text.
+    """
     # Find the compose box
     compose_found = await page.evaluate(FIND_COMPOSE_BOX_JS)
     if not compose_found:
@@ -420,8 +425,16 @@ async def _type_and_send(page, message: str, target: str) -> dict:
 
     await page.wait_for_timeout(300)
 
-    # Type the message
-    await page.keyboard.type(message, delay=20)
+    # Clear any leftover content in the compose box
+    await page.keyboard.press("Control+a")
+    await page.keyboard.press("Backspace")
+    await page.wait_for_timeout(200)
+
+    # Insert the full message at once (not character-by-character).
+    # keyboard.type() fires individual key events that trigger Teams'
+    # autocomplete and CKEditor handlers, causing garbled/duplicated text.
+    # insertText() bypasses all of that.
+    await page.keyboard.insert_text(message)
     await page.wait_for_timeout(500)
 
     # Send with Ctrl+Enter

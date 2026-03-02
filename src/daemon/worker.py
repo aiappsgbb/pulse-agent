@@ -2,16 +2,17 @@
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
 
-from core.constants import PULSE_HOME, JOBS_DIR
+from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR
 from core.config import mark_task_completed
 from core.logging import log
 from core.notify import notify_desktop, build_toast_summary
-from tui.ipc import write_job_notification
+from tui.ipc import write_job_notification, append_job_event
 
 
 _PROXY_RETRY_DELAY = 300       # 5 minutes between retries
@@ -169,17 +170,25 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
         job_name = job.get("task", job_type)
         job_file = job.get("_file")
 
-        log.info(f"=== Job: [{job_type}] {job_name} ===")
+        # Generate unique job ID and per-job activity log
+        job_id = job.get("_job_id") or f"{job_type}-{datetime.now().strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        job_log_file = str(LOGS_DIR / f"job-{job_id}.jsonl")
+
+        log.info(f"=== Job: [{job_type}] {job_name} (id={job_id}) ===")
 
         # Track current job for status bar
         current_job["type"] = job_type
         current_job["started"] = datetime.now().isoformat()
+        current_job["job_id"] = job_id
+
+        append_job_event(job_id, job_type, "running", job_name, log_file=job_log_file)
 
         try:
             async with lock:
                 if job_type == "research":
                     context = {"task": job}
-                    await run_job(client, config, "research", context=context)
+                    await run_job(client, config, "research", context=context, job_log_file=job_log_file)
                     if "_file" in job:
                         mark_task_completed(job)
                     notify_desktop("Pulse — Research", f"Research complete: {job_name}")
@@ -204,7 +213,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     write_job_notification("knowledge", "Knowledge mining complete.")
 
                 elif job_type in ("digest", "monitor", "intel"):
-                    await run_job(client, config, job_type)
+                    await run_job(client, config, job_type, job_log_file=job_log_file)
                     if "_file" in job:
                         mark_task_completed(job)
                     toast_title, toast_body = build_toast_summary(job_type, PULSE_HOME)
@@ -232,18 +241,38 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
 
                 elif job_type == "teams_send":
                     result = await _execute_teams_send(job)
-                    status = "Sent" if result.get("success") else "Failed"
-                    log.info(f"  Teams {status}: {result.get('detail', '')}")
+                    ok = result.get("success")
+                    status = "Sent" if ok else "Failed"
+                    detail = result.get("detail", "")
+                    log.info(f"  Teams {status}: {detail}")
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    recipient = job.get("chat_name") or job.get("recipient") or ""
+                    summary = f"Teams reply {status.lower()}: {recipient}" + (f" — {detail}" if not ok else "")
+                    notify_desktop("Pulse — Teams Reply", summary)
+                    write_job_notification("teams_send", summary)
 
                 elif job_type == "email_reply":
                     result = await _execute_email_reply(job)
-                    status = "Sent" if result.get("success") else "Failed"
-                    log.info(f"  Email reply {status}: {result.get('detail', '')}")
+                    ok = result.get("success")
+                    status = "Sent" if ok else "Failed"
+                    detail = result.get("detail", "")
+                    log.info(f"  Email reply {status}: {detail}")
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    query = job.get("search_query", "")
+                    summary = f"Email reply {status.lower()}: {query}" + (f" — {detail}" if not ok else "")
+                    notify_desktop("Pulse — Email Reply", summary)
+                    write_job_notification("email_reply", summary)
 
                 else:
                     log.warning(f"  Unknown job type: {job_type}")
 
+            # Record success
+            append_job_event(job_id, job_type, "completed", job_name, log_file=job_log_file)
+
         except Exception as e:
+            append_job_event(job_id, job_type, "failed", str(e)[:200], log_file=job_log_file)
             from sdk.runner import ProxyError
             if isinstance(e, ProxyError):
                 retry_count = job.get("_retry_count", 0) + 1
@@ -263,6 +292,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
         finally:
             current_job["type"] = None
             current_job["started"] = None
+            current_job["job_id"] = None
             job_queue.task_done()
             if job_file:
                 enqueued_files = getattr(job_queue, "_enqueued_files", None)

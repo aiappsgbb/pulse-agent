@@ -21,7 +21,7 @@ Contest requires 1-2 slides. Build in `presentations/PulseAgent.pptx`.
 - 30-line digest, not 400
 
 **Bottom Banner: Key Numbers**
-- 391 tests | 14 custom tools | 7 modes | 6 sub-agents | 4 session hooks
+- 590 tests | 14 custom tools | 7 modes | 6 sub-agents | 4 session hooks
 
 ---
 

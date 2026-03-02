@@ -297,8 +297,11 @@ async def test_type_and_send_success():
     result = await _type_and_send(page, "Hello there", "Alice")
     assert result["success"] is True
     assert "Alice" in result["detail"]
-    page.keyboard.type.assert_called_once_with("Hello there", delay=20)
-    page.keyboard.press.assert_called_once_with("Control+Enter")
+    page.keyboard.insert_text.assert_called_once_with("Hello there")
+    # Ctrl+A, Backspace (clear), then Control+Enter (send)
+    press_calls = [c.args[0] for c in page.keyboard.press.call_args_list]
+    assert "Control+a" in press_calls
+    assert "Control+Enter" in press_calls
 
 
 async def test_type_and_send_focus_fails():

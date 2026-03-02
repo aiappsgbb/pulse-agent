@@ -237,8 +237,13 @@ async def _do_reply(page, search_query: str, message: str) -> dict:
 
     await page.wait_for_timeout(300)
 
-    # Step 6: Type the reply
-    await page.keyboard.type(message, delay=20)
+    # Step 6: Clear any existing content and insert the reply.
+    # Use insertText() instead of keyboard.type() to avoid character-by-character
+    # input triggering Outlook's autocomplete/autocorrect and rich text handlers.
+    await page.keyboard.press("Control+a")
+    await page.keyboard.press("Backspace")
+    await page.wait_for_timeout(200)
+    await page.keyboard.insert_text(message)
     await page.wait_for_timeout(500)
 
     # Step 7: Send

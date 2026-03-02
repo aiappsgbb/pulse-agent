@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import PULSE_HOME, JOBS_DIR
+from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR
 
 log = logging.getLogger(__name__)
 
@@ -393,6 +393,83 @@ def add_note(item_id: str, note: str) -> None:
         "added_at": datetime.now().isoformat(),
     }
     _save_digest_actions(actions)
+
+
+# ---------------------------------------------------------------------------
+# Job history (append-only JSONL for Jobs tab)
+# ---------------------------------------------------------------------------
+
+JOB_HISTORY_FILE = PULSE_HOME / ".job-history.jsonl"
+
+
+def append_job_event(
+    job_id: str,
+    job_type: str,
+    status: str,
+    detail: str = "",
+    log_file: str = "",
+) -> None:
+    """Append a job lifecycle event to .job-history.jsonl (daemon-side).
+
+    Status values: queued, running, completed, failed.
+    """
+    try:
+        entry = {
+            "ts": datetime.now().isoformat(),
+            "job_id": job_id,
+            "job_type": job_type,
+            "status": status,
+            "detail": detail,
+        }
+        if log_file:
+            entry["log_file"] = log_file
+        with JOB_HISTORY_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def read_job_history(limit: int = 200) -> list[dict]:
+    """Read job history entries, most recent first.
+
+    Groups events by job_id and returns the latest status per job,
+    enriched with timing info. Returns raw events list for the TUI
+    to consolidate into job cards.
+    """
+    try:
+        if not JOB_HISTORY_FILE.exists():
+            return []
+        lines = JOB_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+        entries = []
+        for line in lines:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        # Return most recent first, capped
+        return list(reversed(entries[-limit * 4:]))  # 4x because multiple events per job
+    except Exception:
+        return []
+
+
+def read_job_log(log_file: str) -> list[dict]:
+    """Read a per-job activity log (tool calls, messages).
+
+    Returns list of log entries for display in Jobs tab detail panel.
+    """
+    try:
+        path = Path(log_file)
+        if not path.exists():
+            return []
+        entries = []
+        for line in path.read_text(encoding="utf-8").strip().splitlines():
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return entries
+    except Exception:
+        return []
 
 
 def write_reply_job(item: dict, draft: str) -> bool:

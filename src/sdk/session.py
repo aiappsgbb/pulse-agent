@@ -170,6 +170,7 @@ async def agent_session(
     mode: str,
     tools: list[Tool] | None = None,
     on_delta: Callable[[str], None] | None = None,
+    log_file: str | None = None,
 ):
     """Async context manager for GHCP SDK sessions.
 
@@ -207,7 +208,7 @@ async def agent_session(
             log.warning(f"Session creation failed (attempt {attempt}/{MAX_SESSION_RETRIES}): {e}")
             await asyncio.sleep(2 ** attempt)
 
-    handler = EventHandler(on_delta=on_delta)
+    handler = EventHandler(on_delta=on_delta, log_file=log_file)
     unsub = session.on(handler)
 
     try:

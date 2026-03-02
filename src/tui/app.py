@@ -30,6 +30,7 @@ from tui.screens import (
     ChatPane,
     HelpModal,
     InboxPane,
+    JobsPane,
     ProjectsPane,
     QuestionModal,
 )
@@ -124,6 +125,7 @@ class PulseApp(App):
         Binding("ctrl+r", "refresh_all", "Refresh", show=False),
         Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=False),
         Binding("ctrl+e", "clear_chat", "Clear Chat", show=False),
+        Binding("ctrl+j", "view_jobs", "Jobs", show=False),
         # Item actions
         Binding("d", "item_dismiss", "Dismiss", show=False),
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
@@ -142,6 +144,8 @@ class PulseApp(App):
                 yield InboxPane(id="inbox-pane")
             with TabPane("Projects", id="tab-projects"):
                 yield ProjectsPane(id="projects-pane")
+            with TabPane("Jobs", id="tab-jobs"):
+                yield JobsPane(id="jobs-pane")
             with TabPane("Chat", id="tab-chat"):
                 yield ChatPane(id="chat-pane")
         yield StatusBar(id="status-bar")
@@ -216,6 +220,7 @@ class PulseApp(App):
             inbox = self.query_one(InboxPane)
             inbox.load_data()
             self.query_one(ProjectsPane).load_data()
+            self.query_one(JobsPane).load_data()
             self._update_tab_labels()
             new_count = len(inbox._items)
             if new_count > self._prev_item_count:
@@ -245,6 +250,16 @@ class PulseApp(App):
             tabs.get_tab("tab-projects").label = (
                 f"Projects ({proj_count})" if proj_count else "Projects"
             )
+
+            jobs_pane = self.query_one(JobsPane)
+            active_jobs = jobs_pane.get_active_count()
+            total_jobs = len(jobs_pane._jobs)
+            if active_jobs:
+                tabs.get_tab("tab-jobs").label = f"Jobs ({active_jobs} active)"
+            elif total_jobs:
+                tabs.get_tab("tab-jobs").label = f"Jobs ({total_jobs})"
+            else:
+                tabs.get_tab("tab-jobs").label = "Jobs"
         except Exception:
             pass
 
@@ -309,6 +324,11 @@ class PulseApp(App):
         tabs.active = "tab-inbox"
         self.query_one(InboxPane).load_data()
         self._update_tab_labels()
+
+    def action_view_jobs(self) -> None:
+        tabs = self.query_one(TabbedContent)
+        tabs.active = "tab-jobs"
+        self.query_one(JobsPane).load_data()
 
     def action_refresh_all(self) -> None:
         self._auto_refresh_panes()

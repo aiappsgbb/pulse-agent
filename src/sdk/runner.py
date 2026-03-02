@@ -30,6 +30,7 @@ async def run_job(
     mode: str,
     context: dict | None = None,
     on_delta=None,
+    job_log_file: str | None = None,
 ) -> str | None:
     """Unified entry point for running any SDK-based job.
 
@@ -39,6 +40,7 @@ async def run_job(
         mode: Job mode (monitor, digest, intel, research, chat)
         context: Extra context for the job (e.g. research task details, chat prompt)
         on_delta: Optional callback for streaming text deltas
+        job_log_file: Optional per-job activity log file path
     Returns:
         Response text from the agent, or None
     """
@@ -76,6 +78,7 @@ async def run_job(
         client, config, mode_key,
         tools=get_tools(),
         on_delta=on_delta,
+        log_file=job_log_file,
     ) as (session, handler):
         log.info("  Agent working...")
         await session.send({"prompt": prompt})
