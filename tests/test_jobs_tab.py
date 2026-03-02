@@ -33,10 +33,10 @@ class TestJobHistoryIPC:
 
                 events = read_job_history()
                 assert len(events) == 3
-                # Most recent first
-                assert events[0]["job_id"] == "j2"
-                assert events[1]["job_id"] == "j1"
-                assert events[1]["status"] == "completed"
+                # Chronological order (oldest first) — critical for consolidation
+                assert events[0]["job_id"] == "j1"
+                assert events[0]["status"] == "running"
+                assert events[2]["job_id"] == "j2"
 
     def test_read_empty(self, tmp_dir):
         with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
@@ -99,6 +99,21 @@ class TestJobHistoryIPC:
             from tui.ipc import cleanup_orphaned_jobs
 
             assert cleanup_orphaned_jobs() == 0
+
+    def test_rotation_trims_old_lines(self, tmp_dir):
+        """File rotation keeps last N lines."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            with patch("tui.ipc._JOB_HISTORY_MAX_LINES", 5):
+                from tui.ipc import append_job_event
+
+                for i in range(8):
+                    append_job_event(f"j{i}", "digest", "completed", f"Job {i}")
+
+                lines = (tmp_dir / ".job-history.jsonl").read_text().strip().splitlines()
+                assert len(lines) == 5
+                # Should have the last 5 jobs (j3-j7)
+                first_entry = json.loads(lines[0])
+                assert first_entry["job_id"] == "j3"
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +181,89 @@ class TestConsolidateJobs:
         ]
         jobs = _consolidate_jobs(events)
         assert jobs[0]["started_ts"] == "2026-03-02T10:00:00"
+
+
+class TestFullPipeline:
+    """Integration: read_job_history → _consolidate_jobs — the real data flow."""
+
+    def test_completed_job_shows_completed(self, tmp_dir):
+        """THE critical test: a completed job must NOT show as 'running'.
+
+        This catches the reversal bug — if read_job_history returns events
+        in wrong order, consolidation picks the wrong status.
+        """
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history
+            from tui.screens import _consolidate_jobs
+
+            append_job_event("j1", "digest", "running", "Morning digest")
+            append_job_event("j1", "digest", "completed", "Morning digest")
+
+            events = read_job_history()
+            jobs = _consolidate_jobs(events)
+
+            assert len(jobs) == 1
+            assert jobs[0]["status"] == "completed"  # NOT "running"
+
+    def test_mixed_running_and_completed(self, tmp_dir):
+        """Running jobs at top, completed jobs below — correct status for each."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history
+            from tui.screens import _consolidate_jobs
+
+            # j1: completed
+            append_job_event("j1", "digest", "running", "Digest")
+            append_job_event("j1", "digest", "completed", "Digest")
+            # j2: still running
+            append_job_event("j2", "monitor", "running", "Triage")
+
+            events = read_job_history()
+            jobs = _consolidate_jobs(events)
+
+            assert len(jobs) == 2
+            # j2 running should be first
+            assert jobs[0]["job_id"] == "j2"
+            assert jobs[0]["status"] == "running"
+            # j1 completed second
+            assert jobs[1]["job_id"] == "j1"
+            assert jobs[1]["status"] == "completed"
+
+    def test_failed_job_after_running(self, tmp_dir):
+        """A failed job must show 'failed', not 'running'."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history
+            from tui.screens import _consolidate_jobs
+
+            append_job_event("j1", "intel", "running", "Intel brief")
+            append_job_event("j1", "intel", "failed", "Timeout after 300s")
+
+            events = read_job_history()
+            jobs = _consolidate_jobs(events)
+
+            assert len(jobs) == 1
+            assert jobs[0]["status"] == "failed"
+            assert "Timeout" in jobs[0]["detail"]
+
+    def test_cleanup_then_consolidate(self, tmp_dir):
+        """Orphan cleanup + consolidation: daemon restart marks running → failed."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history, cleanup_orphaned_jobs
+            from tui.screens import _consolidate_jobs
+
+            # Simulate: daemon killed while j1 was running
+            append_job_event("j1", "digest", "running", "Digest")
+
+            # Daemon restarts → cleanup
+            cleaned = cleanup_orphaned_jobs()
+            assert cleaned == 1
+
+            # Now the full pipeline should show j1 as failed
+            events = read_job_history()
+            jobs = _consolidate_jobs(events)
+
+            assert len(jobs) == 1
+            assert jobs[0]["status"] == "failed"
+            assert "daemon restarted" in jobs[0]["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

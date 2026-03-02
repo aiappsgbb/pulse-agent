@@ -979,19 +979,6 @@ def _consolidate_jobs(events: list[dict]) -> list[dict]:
             if ev.get("status") == "running":
                 existing["started_ts"] = ev.get("ts", "")
 
-    # Safety net: mark jobs "running" for >30 min as stale/failed
-    from datetime import datetime as _dt
-    now = _dt.now()
-    for j in jobs.values():
-        if j["status"] == "running" and j.get("started_ts"):
-            try:
-                started = _dt.fromisoformat(j["started_ts"])
-                if (now - started).total_seconds() > 1800:
-                    j["status"] = "failed"
-                    j["detail"] = "Stale — exceeded 30 min (daemon likely restarted)"
-            except (ValueError, TypeError):
-                pass
-
     result = list(jobs.values())
     # Sort: running first, then most recent
     running = [j for j in result if j["status"] == "running"]
@@ -1018,14 +1005,14 @@ class JobsPane(Widget):
         self.set_interval(3, self._auto_refresh)
 
     def _auto_refresh(self) -> None:
-        """Auto-refresh while a job is running."""
+        """Auto-refresh only while a job is running — skip if idle."""
         has_running = any(j["status"] == "running" for j in self._jobs)
+        if not has_running:
+            return
         self.load_data()
-        # Re-render detail for running job
-        if has_running and self._jobs:
-            sel = self._get_selected_job()
-            if sel and sel["status"] == "running":
-                self._show_detail(sel)
+        sel = self._get_selected_job()
+        if sel and sel["status"] == "running":
+            self._show_detail(sel)
 
     def load_data(self) -> None:
         events = read_job_history(limit=200)

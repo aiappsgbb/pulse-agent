@@ -402,6 +402,9 @@ def add_note(item_id: str, note: str) -> None:
 JOB_HISTORY_FILE = PULSE_HOME / ".job-history.jsonl"
 
 
+_JOB_HISTORY_MAX_LINES = 2000  # ~500 jobs worth of events
+
+
 def append_job_event(
     job_id: str,
     job_type: str,
@@ -412,6 +415,7 @@ def append_job_event(
     """Append a job lifecycle event to .job-history.jsonl (daemon-side).
 
     Status values: queued, running, completed, failed.
+    Rotates the file when it exceeds _JOB_HISTORY_MAX_LINES.
     """
     try:
         entry = {
@@ -425,29 +429,48 @@ def append_job_event(
             entry["log_file"] = log_file
         with JOB_HISTORY_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
+
+        # Rotate: keep last N lines when file grows too large
+        _maybe_rotate_job_history()
+    except Exception:
+        pass
+
+
+def _maybe_rotate_job_history() -> None:
+    """Trim .job-history.jsonl to last _JOB_HISTORY_MAX_LINES lines."""
+    try:
+        if not JOB_HISTORY_FILE.exists():
+            return
+        lines = JOB_HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= _JOB_HISTORY_MAX_LINES:
+            return
+        # Keep the tail
+        trimmed = lines[-_JOB_HISTORY_MAX_LINES:]
+        JOB_HISTORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
     except Exception:
         pass
 
 
 def read_job_history(limit: int = 200) -> list[dict]:
-    """Read job history entries, most recent first.
+    """Read recent job history events in chronological order.
 
-    Groups events by job_id and returns the latest status per job,
-    enriched with timing info. Returns raw events list for the TUI
-    to consolidate into job cards.
+    Returns raw events for _consolidate_jobs to merge. Chronological order
+    is critical — consolidation uses last-write-wins, so newest events must
+    come last.
     """
     try:
         if not JOB_HISTORY_FILE.exists():
             return []
         lines = JOB_HISTORY_FILE.read_text(encoding="utf-8").strip().splitlines()
+        # Only parse the tail — 4 events per job typical (queued/running/completed/failed)
+        tail = lines[-(limit * 4):] if len(lines) > limit * 4 else lines
         entries = []
-        for line in lines:
+        for line in tail:
             try:
                 entries.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
-        # Return most recent first, capped
-        return list(reversed(entries[-limit * 4:]))  # 4x because multiple events per job
+        return entries  # chronological — DO NOT reverse
     except Exception:
         return []
 
