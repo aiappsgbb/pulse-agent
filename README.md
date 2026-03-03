@@ -1,12 +1,77 @@
-# Pulse Agent
+<p align="center">
+  <img src="https://img.shields.io/badge/Pulse_Agent-information_engine-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Pulse Agent" />
+</p>
 
-**An autonomous information processing engine for knowledge workers.**
+<h1 align="center">Pulse Agent</h1>
+
+<p align="center">
+  <strong>An autonomous information processing engine for knowledge workers.</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.12+" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node.js-20+-339933.svg?logo=nodedotjs&logoColor=white" alt="Node.js 20+" /></a>
+  <a href="https://github.com/features/copilot"><img src="https://img.shields.io/badge/GitHub%20Copilot%20SDK-8957e5.svg?logo=github&logoColor=white" alt="GitHub Copilot SDK" /></a>
+  <a href="https://www.microsoft.com/en-us/microsoft-365"><img src="https://img.shields.io/badge/Microsoft%20365-WorkIQ-D83B01.svg?logo=microsoft&logoColor=white" alt="WorkIQ" /></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-690-brightgreen.svg?logo=pytest&logoColor=white" alt="690 Tests" /></a>
+</p>
+
+---
 
 You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email threads you'll never read. Competitors announce changes at 2 AM. Pulse Agent runs when you don't -- it consumes everything you can't and tells you only what matters.
 
-> "I had 8 meetings yesterday. I was distracted in half of them. At 7 AM, Pulse told me the 3 things that actually need my attention -- including an escalation I completely missed."
+> *"I had 8 meetings yesterday. I was distracted in half of them. At 7 AM, Pulse told me the 3 things that actually need my attention -- including an escalation I completely missed."*
 
-[![Watch the demo](https://img.shields.io/badge/Watch%20Demo-YouTube-red?style=for-the-badge&logo=youtube)](https://youtu.be/E-IltXvRNkc)
+<p align="center">
+  <strong>&#9655; Watch the demo</strong><br/>
+  <a href="https://youtu.be/E-IltXvRNkc">
+    <img src="https://img.youtube.com/vi/E-IltXvRNkc/maxresdefault.jpg" alt="Watch the demo" width="560" />
+  </a>
+</p>
+
+---
+
+## Why Pulse Agent?
+
+**Autonomous.** Runs on a schedule you control -- morning digests, 30-minute inbox triage, overnight knowledge mining. No prompting required.
+
+**Cross-referencing.** Everything is checked against what you've already handled. Replied to that email? Gone. Attended a meeting with no open actions? Gone. A typical digest is 30 lines, not 400.
+
+**Actionable.** Triage items include drafted replies. Press `r`, review the draft, hit Enter to send. Deterministic Playwright automation -- no LLM in the send path.
+
+**Team-aware.** Multiple agents communicate via OneDrive. *"Ask Esther what context she has on the Vodafone deal"* -- her agent picks it up within 60 seconds and sends the answer back.
+
+**Project memory.** Persistent per-engagement context with commitment tracking. Overdue items and approaching deadlines surface automatically.
+
+**Intel.** RSS feeds filtered for your topics and competitors. Curated, not a firehose.
+
+---
+
+## What You Get
+
+| Time | What happens |
+|------|-------------|
+| **7:00 AM** | Morning digest -- transcripts, emails, Teams messages, filtered to what's outstanding |
+| **Every 30 min** | Inbox triage -- unread Teams + Outlook with drafted replies you can send in one tap |
+| **9:00 AM** | Intel brief -- RSS feeds filtered for your topics and competitors |
+| **Overnight** | Knowledge mining -- archives communications, enriches project memory |
+
+### The TUI
+
+Four tabs:
+
+- **Inbox** -- merged triage + digest items, sorted by priority. `d` to dismiss, `r` to reply, `n` to add a note.
+- **Projects** -- per-engagement memory with commitment tracking and deadlines.
+- **Jobs** -- live view of running, pending, and completed jobs with activity logs.
+- **Chat** -- ask anything. *"What did Fatos say about Vodafone?"* -- searches transcripts, emails, and M365 via WorkIQ.
+
+Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel), `Ctrl+X` (transcripts).
+
+<!-- TODO: Add TUI screenshot
+<p align="center">
+  <img src="assets/screenshot-tui.png" alt="Pulse Agent TUI" width="700" />
+</p>
+-->
 
 ---
 
@@ -61,68 +126,64 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 ---
 
-## What You Get
+## Architecture
 
-Pulse runs on a schedule you control. By default:
-
-| Time | What happens |
-|------|-------------|
-| **7:00 AM** | Morning digest -- transcripts, emails, Teams messages, filtered to what's outstanding |
-| **Every 30 min** | Inbox triage -- unread Teams + Outlook with drafted replies you can send in one tap |
-| **9:00 AM** | Intel brief -- RSS feeds filtered for your topics and competitors |
-| **Overnight** | Knowledge mining -- archives communications, enriches project memory |
-
-Everything cross-references against what you've already handled. Replied to that email? Gone. Attended a meeting with no open actions? Gone. A typical digest is 30 lines, not 400.
-
-### The TUI
-
-Three tabs:
-
-- **Inbox** -- merged triage + digest items, sorted by priority. `d` to snooze, `r` to reply, `n` to add a note.
-- **Projects** -- per-engagement memory with commitment tracking and deadlines.
-- **Chat** -- ask anything. "What did Fatos say about Vodafone?" -- searches transcripts, emails, and M365 via WorkIQ.
-
-Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel), `Ctrl+X` (transcripts).
-
-### Reply Flow
-
-Triage items with unread messages include drafted replies. Press `r`, review the draft, hit Enter to send. The message is delivered via Playwright (deterministic browser automation, no LLM in the send path). You always review before anything is sent.
-
----
-
-## How It Works
+<p align="center">
+  <img src="https://img.shields.io/badge/Microsoft_Teams-6264A7?style=flat-square&logo=microsoftteams&logoColor=white" alt="Teams" />
+  <img src="https://img.shields.io/badge/Outlook-0078D4?style=flat-square&logo=microsoftoutlook&logoColor=white" alt="Outlook" />
+  <img src="https://img.shields.io/badge/OneDrive-0078D4?style=flat-square&logo=microsoftonedrive&logoColor=white" alt="OneDrive" />
+  <img src="https://img.shields.io/badge/Edge-0078D4?style=flat-square&logo=microsoftedge&logoColor=white" alt="Edge" />
+  <img src="https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white" alt="Playwright" />
+  <img src="https://img.shields.io/badge/GitHub_Copilot_SDK-8957e5?style=flat-square&logo=github&logoColor=white" alt="Copilot SDK" />
+  <img src="https://img.shields.io/badge/WorkIQ_MCP-D83B01?style=flat-square&logo=microsoft&logoColor=white" alt="WorkIQ" />
+  <img src="https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+</p>
 
 ```
-  Data Collection (Playwright, no LLM)          Pulse Agent (Python daemon)
-  ─────────────────────────────────────          ──────────────────────────
-  Teams Transcripts ─── browser scraping   ──>   Scheduler (cron-like patterns)
-  Teams Inbox ───────── unread scan        ──>   Job Worker (one at a time)
-  Outlook Inbox ─────── unread scan        ──>   TUI Backend (status, chat, toasts)
-  Calendar ──────────── event scan         ──>        |
-  Local Files ───────── .docx .pdf .pptx   ──>        v
-  RSS Feeds ─────────── feedparser         ──>   GitHub Copilot SDK
-                                                      |
-                                                 ┌────┴────────────────────┐
-                                                 │ WorkIQ MCP (M365 data)  │
-                                                 │ 14 custom tools         │
-                                                 │ 4 session hooks         │
-                                                 │ 6 sub-agents            │
-                                                 │ Multi-model routing     │
-                                                 └────┬────────────────────┘
-                                                      |
-                                                      v
-                                              $PULSE_HOME (OneDrive)
-                                              digests/, intel/, projects/,
-                                              transcripts/, logs/
+                        +-------------------------------------------+
+                        |          Microsoft 365 (your account)      |
+                        |  Teams  |  Outlook  |  Calendar  |  OneDrive  |
+                        +----+--------+------------+----------+------+
+                             |        |            |          |
+                    Playwright (Edge browser automation)      |
+                             |        |            |          |
+                  +----------v--------v------------v---+      |
+                  |        Data Collection (no LLM)    |      |
+                  |  Transcripts | Inbox | Calendar    |      |
+                  |  Unread scan | Event scan          |      |
+                  +----------------+-------------------+      |
+                                   |                          |
+                  +----------------v-------------------+      |
+                  |       GitHub Copilot SDK            |      |
+                  |  +-------------------------------+  |      |
+                  |  | WorkIQ MCP (M365 data layer)  |  |      |
+                  |  +-------------------------------+  |      |
+                  |  14 custom tools | 6 sub-agents    |      |
+                  |  4 session hooks | multi-model      |      |
+                  +----------------+-------------------+      |
+                                   |                          |
+                  +----------------v--------------------------v--+
+                  |          $PULSE_HOME (OneDrive sync)          |
+                  |  digests/ | intel/ | projects/ | transcripts/ |
+                  |  jobs/ | logs/ | pulse-signals/               |
+                  +--------------------+-------------------------+
+                                       |
+                  +--------------------v-------------------------+
+                  |              Textual TUI                      |
+                  |  Inbox | Projects | Jobs | Chat               |
+                  |  + winotify (Windows toast notifications)      |
+                  +----------------------------------------------+
 ```
 
-The daemon runs three concurrent tasks:
+**Three layers, one daemon:**
 
-1. **Scheduler** -- fires jobs on cron-like patterns, syncs OneDrive job files every 60s
-2. **Worker** -- processes one job at a time via GitHub Copilot SDK sessions
-3. **TUI backend** -- status updates, chat polling, streaming deltas, Windows toast notifications
+| Layer | What | Technology |
+|-------|------|-----------|
+| **Collection** | Scrapes Teams transcripts, inboxes, calendar -- real-time state that APIs can't provide | Playwright + Edge (your authenticated session) |
+| **Intelligence** | Triages, cross-references, drafts replies, tracks commitments, mines knowledge | GitHub Copilot SDK + WorkIQ MCP + 14 custom tools |
+| **Delivery** | 4-tab TUI, streaming chat, Windows toasts, OneDrive sync across team | Textual + winotify + OneDrive for Business |
 
-All output goes to `$PULSE_HOME` (auto-detected from OneDrive for Business). Everything syncs via OneDrive -- no cloud backend, no external services.
+Everything runs as a single Python daemon with three concurrent tasks: **scheduler** (cron-like patterns + OneDrive job sync), **worker** (one SDK session at a time), and **TUI backend** (status, chat, toasts). All output to `$PULSE_HOME` on OneDrive -- no cloud backend, no external services beyond Microsoft.
 
 ---
 
@@ -210,11 +271,13 @@ python -m pytest tests/ -x --tb=short  # Stop on first failure
 python -m pytest tests/ -k "reply"  # Filter by name
 ```
 
-Key test suites:
-- **Browser selectors** (57 tests) -- real JavaScript against real DOM in headless Chromium
-- **Reply flow** (43 tests) -- full TUI -> YAML -> worker round-trip
-- **Contracts** (15 tests) -- prompt schema matches code that parses LLM output
-- **TTL & IPC** (45 tests) -- carry-forward staleness, dismiss expiry, streaming chat
+| Suite | Tests | What it validates |
+|-------|-------|-------------------|
+| Browser selectors | 57 | Real JavaScript against real DOM in headless Chromium |
+| Reply flow | 43 | Full TUI -> YAML -> worker round-trip |
+| Dedup defense | 25 | 3-layer dedup + CKEditor draft contamination |
+| Contracts | 15 | Prompt schema matches code that parses LLM output |
+| TTL & IPC | 45 | Carry-forward staleness, dismiss expiry, streaming chat |
 
 ---
 
