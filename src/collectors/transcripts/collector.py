@@ -7,7 +7,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from core.constants import PULSE_HOME, TRANSCRIPTS_DIR
+from core.constants import PULSE_HOME, TRANSCRIPTS_DIR, TRANSCRIPT_STATUS_FILE
 from core.logging import log
 from core.state import load_json_state, save_json_state
 from collectors.transcripts.navigation import (
@@ -317,6 +317,49 @@ async def run_transcript_collection(client, config: dict):
     log.info(f"Transcript collection end — collected: {collected}, skipped: {skipped}, errors: {len(errors)}")
     for err in errors:
         log.warning(f"  Transcript error: {err}")
+
+    # Write collection status for downstream consumers (digest, TUI)
+    _write_collection_status(
+        success=True, collected=collected, skipped=skipped,
+        errors=len(errors), error_message=None,
+    )
+
+
+def _write_collection_status(
+    success: bool,
+    collected: int = 0,
+    skipped: int = 0,
+    errors: int = 0,
+    error_message: str | None = None,
+):
+    """Write transcript collection status to a JSON file.
+
+    Downstream consumers (digest pre-processing) read this to surface
+    collection failures to the user instead of silently producing
+    incomplete digests.
+    """
+    import json
+    status = {
+        "timestamp": datetime.now().isoformat(),
+        "success": success,
+        "collected": collected,
+        "skipped": skipped,
+        "errors": errors,
+        "error_message": error_message,
+    }
+    try:
+        TRANSCRIPT_STATUS_FILE.write_text(
+            json.dumps(status, indent=2), encoding="utf-8",
+        )
+    except Exception:
+        pass  # Non-critical — don't break the pipeline
+
+
+def write_collection_failure(error_message: str):
+    """Write a failure status — called by the runner when collection crashes."""
+    _write_collection_status(
+        success=False, error_message=error_message,
+    )
 
 
 async def _find_cdp_port() -> int | None:

@@ -286,15 +286,21 @@ def queue_onboarding_chat() -> None:
         log.debug("Failed to queue onboarding chat", exc_info=True)
 
 
-def queue_job(job_type: str) -> None:
-    """Write a minimal job YAML to JOBS_DIR/pending/."""
+def queue_job(job_type: str, context: str = "") -> None:
+    """Write a minimal job YAML to JOBS_DIR/pending/.
+
+    The optional *context* string is included in the YAML and injected into
+    the trigger prompt as additional instructions (e.g. project-focused digest).
+    """
     try:
         pending_dir = JOBS_DIR / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%dT%H%M%S")
         uid = uuid.uuid4().hex[:8]
         file_path = pending_dir / f"{ts}-{job_type}-tui-{uid}.yaml"
-        data = {"type": job_type, "_source": "tui"}
+        data: dict = {"type": job_type, "_source": "tui"}
+        if context:
+            data["context"] = context
         file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
     except Exception:
         log.debug("Failed to queue job %s", job_type, exc_info=True)

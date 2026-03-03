@@ -1,6 +1,7 @@
 """Textual TUI panes and modals for Pulse Agent.
 
 Panes (used as tab content):
+  TodayPane     — interactive landing page (meetings + commitments)
   InboxPane     — unified actionable items (triage + digest, dismissed toggle)
   ProjectsPane  — per-engagement project YAML files with linked items
   ChatPane      — streaming chat with the agent via file IPC
@@ -9,10 +10,12 @@ Modals:
   ReplyModal    — review and send a drafted reply
   NoteModal     — add a note to an item
   QuestionModal — answer an ask_user question from the agent
+  ProjectStatusModal  — change project status
+  CommitmentModal     — mark commitments as done
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import yaml
 
@@ -135,6 +138,255 @@ def _load_projects() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Today view data loaders
+# ---------------------------------------------------------------------------
+
+_CALENDAR_SCAN_FILE = PULSE_HOME / ".calendar-scan.json"
+
+# Day-of-week abbreviations used in calendar date strings (e.g. "Monday, March 3, 2026")
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _parse_calendar_date(date_str: str) -> str | None:
+    """Parse human-readable calendar date to ISO YYYY-MM-DD.
+
+    Handles formats like:
+      "Monday, March 3, 2026"
+      "Thursday, February 20, 2026"
+      "March 3, 2026"
+    """
+    import re
+    # Try to find "Month Day, Year" anywhere in the string
+    m = re.search(r"([A-Za-z]+)\s+(\d+),?\s*(\d{4})", date_str)
+    if m:
+        month_name = m.group(1).lower()
+        day = int(m.group(2))
+        year = int(m.group(3))
+        month = _MONTHS.get(month_name)
+        if month:
+            return f"{year:04d}-{month:02d}-{day:02d}"
+    return None
+
+
+def _load_calendar_events() -> tuple[list[dict], str]:
+    """Load persisted calendar scan events.
+
+    Returns (events, scanned_at) where scanned_at is an ISO timestamp or "".
+    """
+    try:
+        if _CALENDAR_SCAN_FILE.exists():
+            data = json.loads(_CALENDAR_SCAN_FILE.read_text(encoding="utf-8"))
+            if data.get("available"):
+                return data.get("events", []), data.get("scanned_at", "")
+    except Exception:
+        pass
+    return [], ""
+
+
+def _filter_today_events(events: list[dict]) -> list[dict]:
+    """Filter calendar events to today only, sorted by start_time."""
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    today_events = []
+    for ev in events:
+        if ev.get("is_declined"):
+            continue
+        date_str = ev.get("date", "")
+        iso = _parse_calendar_date(date_str) if date_str else None
+        if iso == today_iso:
+            today_events.append(ev)
+    # Sort by start_time (e.g. "9:00 AM", "10:30 AM")
+    def _time_sort_key(ev):
+        t = ev.get("start_time", "")
+        try:
+            return datetime.strptime(t, "%I:%M %p")
+        except (ValueError, TypeError):
+            return datetime.max
+    today_events.sort(key=_time_sort_key)
+    return today_events
+
+
+def _get_due_commitments(projects: list[dict], days_ahead: int = 7) -> list[dict]:
+    """Get commitments due today or within days_ahead, from all projects.
+
+    Returns list of {what, who, to, due, status, project_name, project_id, is_today}.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    cutoff = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    result = []
+    for p in projects:
+        proj_name = p.get("project", p.get("_id", "?"))
+        proj_id = p.get("_id", "")
+        for c in p.get("commitments", []):
+            status = c.get("status", "").lower()
+            if status in ("done", "cancelled"):
+                continue
+            due_raw = c.get("due", "")
+            if not due_raw:
+                continue
+            # YAML may parse dates as datetime.date — normalize to string
+            due = str(due_raw) if not isinstance(due_raw, str) else due_raw
+            # Include overdue (past) and upcoming (within window)
+            if due <= cutoff:
+                result.append({
+                    "what": c.get("what", "?"),
+                    "who": c.get("who", ""),
+                    "to": c.get("to", ""),
+                    "due": due,
+                    "status": status,
+                    "project_name": proj_name,
+                    "project_id": proj_id,
+                    "is_today": due == today,
+                    "is_overdue": due < today and status != "overdue",
+                })
+    # Sort: overdue first, then today, then by date
+    result.sort(key=lambda c: (
+        0 if c["due"] < today else (1 if c["is_today"] else 2),
+        c["due"],
+    ))
+    return result
+
+
+def _match_meeting_to_project(event: dict, projects: list[dict]) -> dict | None:
+    """Find the project linked to a calendar event by stakeholder/title matching."""
+    title = event.get("title", "").lower()
+    organizer = (event.get("organizer") or "").lower()
+    for p in projects:
+        stakeholder_names = [s.get("name", "").lower() for s in p.get("stakeholders", [])]
+        proj_name = p.get("project", "").lower()
+        if (
+            any(sn in title for sn in stakeholder_names if sn)
+            or any(sn in organizer for sn in stakeholder_names if sn)
+            or proj_name in title
+        ):
+            return p
+    return None
+
+
+def _build_prep_hints(project: dict) -> str:
+    """Build a Rich-markup prep hint string from a project's commitments."""
+    commitments = project.get("commitments", [])
+    overdue = sum(1 for c in commitments if c.get("status", "").lower() == "overdue")
+    open_items = sum(1 for c in commitments if c.get("status", "").lower() == "open")
+    if overdue:
+        return f"[red]({overdue} overdue)[/red]"
+    if open_items:
+        return f"[yellow]({open_items} open)[/yellow]"
+    return ""
+
+
+def _load_today_items(
+    projects: list[dict] | None = None,
+) -> tuple[list[dict], int, int]:
+    """Load today's meetings and due commitments as unified item dicts.
+
+    Returns (items, meeting_count, commitment_count).
+    Items sorted: meetings first (by time), then commitments (by urgency).
+    """
+    if projects is None:
+        projects = _load_projects()
+
+    items: list[dict] = []
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+
+    # --- Meetings ---
+    events, scanned_at = _load_calendar_events()
+    today_events = _filter_today_events(events)
+    for ev in today_events:
+        linked = _match_meeting_to_project(ev, projects)
+        prep = _build_prep_hints(linked) if linked else ""
+        items.append({
+            **ev,
+            "_type": "meeting",
+            "_linked_project": linked,
+            "_linked_project_id": linked.get("_id", "") if linked else "",
+            "_prep_hints": prep,
+            "_scanned_at": scanned_at,
+        })
+
+    meeting_count = len(items)
+
+    # --- Commitments ---
+    due_items = _get_due_commitments(projects, days_ahead=7)
+    for c in due_items:
+        # Find the full project dict for this commitment
+        linked = None
+        for p in projects:
+            if p.get("_id") == c.get("project_id"):
+                linked = p
+                break
+        # Urgency tag + color
+        if c["due"] < today_iso:
+            tag, color = "OVERDUE", "red"
+        elif c["is_today"]:
+            tag, color = "DUE TODAY", "bold yellow"
+        else:
+            tag, color = f"DUE {c['due']}", "yellow"
+        items.append({
+            **c,
+            "_type": "commitment",
+            "_linked_project": linked,
+            "_urgency_tag": tag,
+            "_urgency_color": color,
+        })
+
+    commitment_count = len(items) - meeting_count
+    return items, meeting_count, commitment_count
+
+
+# ---------------------------------------------------------------------------
+# Project sort modes
+# ---------------------------------------------------------------------------
+
+_STATUS_ORDER = {"active": 0, "blocked": 1, "on-hold": 2, "completed": 3}
+_RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+PROJECT_SORT_MODES = ["urgency", "next_meeting", "status", "alphabetical"]
+PROJECT_SORT_LABELS = {
+    "urgency": "Urgency (overdue/risk)",
+    "next_meeting": "Next meeting",
+    "status": "Status",
+    "alphabetical": "A-Z",
+}
+
+
+def _overdue_count(project: dict) -> int:
+    return sum(
+        1 for c in project.get("commitments", [])
+        if c.get("status", "").lower() == "overdue"
+    )
+
+
+def _sort_projects(projects: list[dict], mode: str) -> list[dict]:
+    """Sort projects by the given mode. Returns a new list."""
+    if mode == "urgency":
+        # Overdue count desc, then risk severity, then status, then alpha
+        return sorted(projects, key=lambda p: (
+            -_overdue_count(p),
+            _RISK_ORDER.get(p.get("risk_level", "medium").lower(), 2),
+            _STATUS_ORDER.get(p.get("status", "active").lower(), 0),
+            p.get("project", p.get("_id", "")).lower(),
+        ))
+    elif mode == "next_meeting":
+        # Soonest next_meeting first, nulls last
+        def _meeting_key(p):
+            nm = p.get("next_meeting", "")
+            return (0, nm) if nm else (1, "")
+        return sorted(projects, key=_meeting_key)
+    elif mode == "status":
+        # Status priority, then alpha within group
+        return sorted(projects, key=lambda p: (
+            _STATUS_ORDER.get(p.get("status", "active").lower(), 0),
+            p.get("project", p.get("_id", "")).lower(),
+        ))
+    else:  # alphabetical
+        return sorted(projects, key=lambda p: p.get("project", p.get("_id", "")).lower())
+
+
+# ---------------------------------------------------------------------------
 # Inbox data merging
 # ---------------------------------------------------------------------------
 
@@ -230,9 +482,18 @@ class HelpModal(ModalScreen):
                 "  Ctrl+E  Clear chat            Ctrl+P  Command palette\n"
                 "  Q       Quit\n"
                 "\n"
+                "[bold cyan]Today actions[/bold cyan]\n"
+                "  C  Complete commitment       R  Queue research\n"
+                "  D  Queue focused digest      N  Add note\n"
+                "\n"
                 "[bold cyan]Inbox actions[/bold cyan]\n"
                 "  D  Snooze (1 day)            A  Archive (30 days)\n"
                 "  R  Reply / Restore           N  Add note\n"
+                "\n"
+                "[bold cyan]Projects actions[/bold cyan]\n"
+                "  S  Cycle sort mode           U  Update status\n"
+                "  C  Complete commitment       R  Queue research\n"
+                "  D  Queue focused digest      N  Add note\n"
                 "\n"
                 "[dim]Press Esc or ? to close[/dim]"
             )
@@ -412,6 +673,93 @@ class QuestionModal(ModalScreen):
         self.dismiss(None)
 
 
+class ProjectStatusModal(ModalScreen):
+    """Modal for changing a project's status."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, project: dict, **kwargs):
+        super().__init__(**kwargs)
+        self._project = project
+
+    def compose(self) -> ComposeResult:
+        name = self._project.get("project", "?")
+        current = self._project.get("status", "active")
+        with Widget(id="status-dialog"):
+            yield Label(f"Update status: {name}", id="status-title")
+            yield Label(f"Current: [bold]{current}[/bold]", id="status-current")
+            with Horizontal(id="status-buttons"):
+                for s in ("active", "blocked", "on-hold", "completed"):
+                    variant = "primary" if s == current else "default"
+                    yield Button(s.capitalize(), id=f"btn-{s}", variant=variant)
+            yield Button("Cancel (Esc)", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "btn-cancel":
+            self.dismiss(None)
+        elif bid.startswith("btn-"):
+            new_status = bid[4:]  # strip "btn-"
+            if new_status in ("active", "blocked", "on-hold", "completed"):
+                self.dismiss(new_status)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class CommitmentModal(ModalScreen):
+    """Modal for marking commitments as done."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, project: dict, **kwargs):
+        super().__init__(**kwargs)
+        self._project = project
+        # Only show open/overdue commitments
+        self._actionable = [
+            c for c in project.get("commitments", [])
+            if c.get("status", "").lower() in ("open", "overdue")
+        ]
+
+    def compose(self) -> ComposeResult:
+        name = self._project.get("project", "?")
+        with Widget(id="commitment-dialog"):
+            yield Label(f"Complete commitments: {name}", id="commitment-title")
+            if not self._actionable:
+                yield Label("[dim]No open or overdue commitments[/dim]")
+            else:
+                yield Label("[dim]Select a commitment to mark as done:[/dim]")
+                for i, c in enumerate(self._actionable):
+                    what = c.get("what", "?")
+                    due = c.get("due", "")
+                    status = c.get("status", "open").upper()
+                    color = "red" if status == "OVERDUE" else "yellow"
+                    label = f"[{color}][{status}][/{color}] {what}"
+                    if due:
+                        label += f"  (due: {due})"
+                    yield Button(label, id=f"btn-c-{i}")
+            yield Button("Cancel (Esc)", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "btn-cancel":
+            self.dismiss(None)
+        elif bid.startswith("btn-c-"):
+            try:
+                idx = int(bid[6:])
+                if 0 <= idx < len(self._actionable):
+                    self.dismiss(idx)
+            except ValueError:
+                pass
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ---------------------------------------------------------------------------
 # Base item pane (shared logic)
 # ---------------------------------------------------------------------------
@@ -551,7 +899,7 @@ class ItemPane(Widget):
 # ---------------------------------------------------------------------------
 
 class InboxPane(ItemPane):
-    """Unified inbox: triage + digest items, with dismissed toggle (Ctrl+H)."""
+    """Unified inbox: triage + digest items, dismissed toggle (Ctrl+H)."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -559,11 +907,21 @@ class InboxPane(ItemPane):
         self._dismissed_count: int = 0
         self._list_to_item: list[int] = []  # Maps ListView index -> _items index (-1 for separator)
 
+    def compose(self) -> ComposeResult:
+        yield ListView()
+        with VerticalScroll(classes="detail-container"):
+            yield Static("[dim]Select an item to view details[/dim]")
+
     def _load_items(self) -> list[dict]:
         items, self._dismissed_count = _load_inbox_items(
             include_dismissed=self._show_dismissed,
         )
         return items
+
+    def load_data(self) -> None:
+        """Reload items from disk and refresh list."""
+        self._items = self._load_items()
+        self._refresh_list()
 
     def _refresh_list(self) -> None:
         lv = self.query_one(ListView)
@@ -764,11 +1122,350 @@ class InboxPane(ItemPane):
 
 
 # ---------------------------------------------------------------------------
+# Today pane (interactive landing page — meetings + commitments)
+# ---------------------------------------------------------------------------
+
+
+class TodayPane(Widget):
+    """Today landing page: meetings timeline + due commitments.
+
+    Shows today's calendar events and commitments due today/upcoming,
+    enriched with linked project context and prep hints.
+
+    Actions:
+      C — complete a commitment (mark done in project YAML)
+      R — queue research job for linked project
+      D — queue focused digest for linked project
+      N — add note to commitment
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._items: list[dict] = []
+        self._list_to_item: list[int] = []  # ListView index -> _items index (-1 = separator)
+        self._selected_idx: int = 0
+        self._meeting_count: int = 0
+        self._commitment_count: int = 0
+        self._projects: list[dict] = []
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="today-header")
+        yield ListView()
+        with VerticalScroll(classes="detail-container"):
+            yield Static("[dim]Select a meeting or commitment to view details[/dim]")
+
+    def on_mount(self) -> None:
+        self.load_data()
+
+    def load_data(self) -> None:
+        """Reload calendar events + commitments from disk."""
+        self._projects = _load_projects()
+        self._items, self._meeting_count, self._commitment_count = _load_today_items(self._projects)
+        self._refresh_header()
+        self._refresh_list()
+
+    def _refresh_header(self) -> None:
+        try:
+            header = self.query_one("#today-header", Static)
+            now = datetime.now()
+            today_str = f"{now.strftime('%A')}, {now.strftime('%B')} {now.day}"
+            header.update(f"[bold cyan]Today -- {today_str}[/bold cyan]")
+        except Exception:
+            pass
+
+    def _title_width(self) -> int:
+        try:
+            w = self.size.width
+            return max(25, w - 30) if w > 30 else 55
+        except Exception:
+            return 55
+
+    def _refresh_list(self) -> None:
+        lv = self.query_one(ListView)
+        lv.clear()
+        self._list_to_item = []
+        tw = self._title_width()
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+
+        if not self._items:
+            lv.append(ListItem(Label("[dim]No meetings or commitments for today[/dim]")))
+            self._list_to_item.append(-1)
+            return
+
+        current_section = None
+        for i, item in enumerate(self._items):
+            # Determine section for this item
+            if item["_type"] == "meeting":
+                section = "meetings"
+            elif item.get("due", "") < today_iso:
+                section = "overdue"
+            elif item.get("is_today"):
+                section = "due_today"
+            else:
+                section = "upcoming"
+
+            # Insert section header when section changes
+            if section != current_section:
+                header = {
+                    "meetings": "[bold cyan]Meetings[/bold cyan]",
+                    "overdue": "[bold red]Overdue[/bold red]",
+                    "due_today": "[bold yellow]Due Today[/bold yellow]",
+                    "upcoming": "[dim]Upcoming (7 days)[/dim]",
+                }.get(section, "")
+                if header:
+                    lv.append(ListItem(Label(header)))
+                    self._list_to_item.append(-1)
+                current_section = section
+
+            if item["_type"] == "meeting":
+                text = self._fmt_meeting(item, tw)
+            else:
+                text = self._fmt_commitment(item, tw)
+
+            lv.append(ListItem(Label(text)))
+            self._list_to_item.append(i)
+
+    def _fmt_meeting(self, item: dict, tw: int) -> str:
+        start = item.get("start_time", "?")
+        end = item.get("end_time", "")
+        title = item.get("title", "?")[:tw]
+        time_str = f"{start}-{end}" if end else start
+        teams_tag = " [cyan][Teams][/cyan]" if item.get("is_teams") else ""
+        org = item.get("organizer", "")
+        org_tag = f"  [dim]({org})[/dim]" if org else ""
+        prep = item.get("_prep_hints", "")
+        prep_tag = f"  {prep}" if prep else ""
+        return f"[bold]{time_str}[/bold]  {title}{teams_tag}{org_tag}{prep_tag}"
+
+    def _fmt_commitment(self, item: dict, tw: int) -> str:
+        tag = item.get("_urgency_tag", "DUE")
+        color = item.get("_urgency_color", "yellow")
+        what = item.get("what", "?")[:tw]
+        proj = item.get("project_name", "")
+        proj_tag = f"  [dim]{proj}[/dim]" if proj else ""
+        return f"[{color}][{tag}][/{color}] {what}{proj_tag}"
+
+    # -- Selection / detail panel --
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item is None:
+            return
+        idx = event.list_view.index
+        if idx is not None and 0 <= idx < len(self._list_to_item):
+            item_idx = self._list_to_item[idx]
+            if 0 <= item_idx < len(self._items):
+                self._selected_idx = item_idx
+                self._show_detail(self._items[item_idx])
+
+    def get_selected_item(self) -> dict | None:
+        if 0 <= self._selected_idx < len(self._items):
+            return self._items[self._selected_idx]
+        return None
+
+    def _show_detail(self, item: dict) -> None:
+        if item["_type"] == "meeting":
+            self._show_meeting_detail(item)
+        else:
+            self._show_commitment_detail(item)
+
+    def _show_meeting_detail(self, item: dict) -> None:
+        try:
+            detail = self.query_one(".detail-container Static", Static)
+        except Exception:
+            return
+        start = item.get("start_time", "?")
+        end = item.get("end_time", "")
+        time_str = f"{start} - {end}" if end else start
+
+        lines = [
+            f"[bold]{item.get('title', '?')}[/bold]",
+            f"Time: {time_str}",
+            f"Organizer: {item.get('organizer', '?')}",
+        ]
+        if item.get("is_teams"):
+            lines.append("[cyan]Teams meeting[/cyan]")
+        if item.get("is_recurring"):
+            lines.append("[dim]Recurring[/dim]")
+
+        project = item.get("_linked_project")
+        if project:
+            proj_name = project.get("project", "?")
+            lines += ["", f"[bold cyan]Project: {proj_name}[/bold cyan]"]
+            commitments = project.get("commitments", [])
+            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
+            open_items = [c for c in commitments if c.get("status", "").lower() == "open"]
+            if overdue:
+                lines.append(f"[bold red]{len(overdue)} overdue commitments:[/bold red]")
+                for c in overdue[:4]:
+                    lines.append(f"  [red]- {c.get('what', '?')[:50]}[/red]")
+            if open_items:
+                lines.append(f"[yellow]{len(open_items)} open commitments:[/yellow]")
+                for c in open_items[:4]:
+                    due = c.get("due", "")
+                    due_tag = f"  (due: {due})" if due else ""
+                    lines.append(f"  [yellow]- {c.get('what', '?')[:45]}{due_tag}[/yellow]")
+            stakeholders = project.get("stakeholders", [])
+            if stakeholders:
+                lines += ["", "[bold]Stakeholders:[/bold]"]
+                for s in stakeholders[:5]:
+                    role = f" ({s['role']})" if s.get("role") else ""
+                    lines.append(f"  {s.get('name', '?')}{role}")
+
+        scanned_at = item.get("_scanned_at", "")
+        if scanned_at:
+            try:
+                dt = datetime.fromisoformat(scanned_at)
+                mins = int((datetime.now() - dt).total_seconds() / 60)
+                age = f"scanned {mins}m ago" if mins > 1 else "just scanned"
+                lines.append(f"\n[dim]Calendar {age}[/dim]")
+            except Exception:
+                pass
+
+        lines += ["", "[dim]R=research  D=digest[/dim]"]
+        detail.update("\n".join(lines))
+
+    def _show_commitment_detail(self, item: dict) -> None:
+        try:
+            detail = self.query_one(".detail-container Static", Static)
+        except Exception:
+            return
+        tag = item.get("_urgency_tag", "DUE")
+        color = item.get("_urgency_color", "yellow")
+
+        lines = [
+            f"[{color}][{tag}][/{color}] [bold]{item.get('what', '?')}[/bold]",
+            f"Project: [cyan]{item.get('project_name', '?')}[/cyan]",
+            f"Due: {item.get('due', '?')}",
+        ]
+        who = item.get("who", "")
+        to = item.get("to", "")
+        if who:
+            lines.append(f"Who: {who}")
+        if to:
+            lines.append(f"To: {to}")
+        source = item.get("source", "")
+        if source:
+            lines.append(f"Source: [dim]{source}[/dim]")
+
+        # Related inbox items for this project
+        project_id = item.get("project_id", "")
+        if project_id:
+            try:
+                digest_items = _load_digest_items()
+                linked = [
+                    d for d in digest_items
+                    if isinstance(d.get("project", ""), str)
+                    and d["project"].lower() == project_id.lower()
+                ][:5]
+                if linked:
+                    lines += ["", f"[bold cyan]Related inbox ({len(linked)}):[/bold cyan]"]
+                    for d in linked:
+                        p_color = PRIORITY_COLORS.get(d.get("priority", "").lower(), "white")
+                        lines.append(f"  [{p_color}]{d.get('title', '?')[:50]}[/{p_color}]")
+            except Exception:
+                pass
+
+        lines += ["", "[dim]C=done  R=research  D=digest  N=note[/dim]"]
+        detail.update("\n".join(lines))
+
+    # -- Actions --
+
+    def complete_commitment_selected(self) -> None:
+        """Mark selected commitment as done in the project YAML."""
+        item = self.get_selected_item()
+        if not item or item["_type"] != "commitment":
+            self.notify("Select a commitment to complete", severity="warning")
+            return
+        project = item.get("_linked_project")
+        project_id = item.get("project_id", "")
+        if not project or not project_id:
+            return
+        # Match by what + due
+        for c in project.get("commitments", []):
+            if c.get("what") == item.get("what") and str(c.get("due", "")) == item.get("due", ""):
+                c["status"] = "done"
+                break
+        project["updated_at"] = datetime.now().isoformat()
+        what = item.get("what", "?")[:40]
+        if _save_project_yaml(project_id, project):
+            self.notify(f"Done: {what}")
+            self.load_data()
+        else:
+            self.notify("Failed to save project", severity="error")
+
+    def research_selected(self) -> None:
+        """Queue research job for the linked project."""
+        from tui.ipc import queue_job
+        item = self.get_selected_item()
+        if not item:
+            return
+        project = item.get("_linked_project")
+        if project:
+            name = project.get("project", project.get("_id", "?"))
+            queue_job("research", context=f"Deep research on project: {name}")
+            self.notify(f"Research queued: {name}")
+        else:
+            self.notify("No linked project", severity="warning")
+
+    def digest_selected(self) -> None:
+        """Queue focused digest for the linked project."""
+        from tui.ipc import queue_job
+        item = self.get_selected_item()
+        if not item:
+            return
+        project = item.get("_linked_project")
+        if project:
+            name = project.get("project", project.get("_id", "?"))
+            queue_job("digest", context=f"Focused digest for project: {name}")
+            self.notify(f"Digest queued: {name}")
+        else:
+            self.notify("No linked project", severity="warning")
+
+    def note_selected(self) -> None:
+        """Add note to commitment via NoteModal."""
+        item = self.get_selected_item()
+        if not item:
+            return
+        if item["_type"] == "commitment":
+            what = item.get("what", "?")[:30]
+            project_id = item.get("project_id", "")
+            self.app.push_screen(
+                NoteModal(project_id, title=f"Note: {what}"),
+                self._on_note_result,
+            )
+        else:
+            title = item.get("title", "?")[:30]
+            self.app.push_screen(
+                NoteModal("", title=f"Note: {title}"),
+                self._on_note_result,
+            )
+
+    def _on_note_result(self, result) -> None:
+        if result == "saved":
+            self.notify("Note saved")
+
+
+# ---------------------------------------------------------------------------
 # Projects pane (enhanced with linked items + commitment highlights)
 # ---------------------------------------------------------------------------
 
 class ProjectsPane(Widget):
-    """Projects list from PULSE_HOME/projects/*.yaml with linked items."""
+    """Projects list with sort modes and project actions.
+
+    Sort modes (cycle with S key):
+      urgency      — overdue count desc, risk severity, status
+      next_meeting — soonest upcoming meeting first
+      status       — active > blocked > on-hold > completed
+      alphabetical — A-Z by project name
+
+    Actions:
+      S — cycle sort mode
+      U — update project status
+      C — complete a commitment
+      R — queue research job for this project
+      D — queue focused digest for this project
+      N — add note to project
+    """
 
     PROJECT_STATUS_COLORS: dict[str, str] = {
         "active": "#00CC88", "blocked": "#FF3366",
@@ -783,6 +1480,7 @@ class ProjectsPane(Widget):
         super().__init__(**kwargs)
         self._projects: list[dict] = []
         self._selected_idx: int = 0
+        self._sort_mode: str = "urgency"  # default: most actionable first
 
     def _title_width(self) -> int:
         """Max character width for project names in list items."""
@@ -793,20 +1491,31 @@ class ProjectsPane(Widget):
             return 40
 
     def compose(self) -> ComposeResult:
+        yield Static("", id="sort-indicator")
         yield ListView()
         with VerticalScroll(classes="detail-container"):
             yield Static("[dim]Select a project to view details\n\n"
                          "Projects are auto-discovered from\n"
-                         "meetings, emails, and digest cycles.[/dim]")
+                         "meetings, emails, and digest cycles.\n\n"
+                         "Actions: S=sort  U=status  C=done  R=research  D=digest  N=note[/dim]")
 
     def on_mount(self) -> None:
         self.load_data()
 
     def load_data(self) -> None:
-        self._projects = _load_projects()
+        raw = _load_projects()
+        self._projects = _sort_projects(raw, self._sort_mode)
         self._refresh_list()
 
     def _refresh_list(self) -> None:
+        # Update sort indicator
+        try:
+            indicator = self.query_one("#sort-indicator", Static)
+            label = PROJECT_SORT_LABELS.get(self._sort_mode, self._sort_mode)
+            indicator.update(f"[dim]Sort: {label}  (S to cycle)[/dim]")
+        except Exception:
+            pass
+
         lv = self.query_one(ListView)
         lv.clear()
         if not self._projects:
@@ -823,11 +1532,7 @@ class ProjectsPane(Widget):
             sc = self.PROJECT_STATUS_COLORS.get(status, "white")
             rc = self.RISK_COLORS.get(risk, "white")
 
-            # Count overdue commitments for badge
-            overdue = sum(
-                1 for c in p.get("commitments", [])
-                if c.get("status", "").lower() == "overdue"
-            )
+            overdue = _overdue_count(p)
             overdue_badge = f"  [bold red]({overdue} overdue)[/bold red]" if overdue else ""
             text = f"[{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{overdue_badge}"
             lv.append(ListItem(Label(text)))
@@ -840,14 +1545,137 @@ class ProjectsPane(Widget):
             self._selected_idx = idx
             self._show_detail(self._projects[idx])
 
+    def get_selected_project(self) -> dict | None:
+        if 0 <= self._selected_idx < len(self._projects):
+            return self._projects[self._selected_idx]
+        return None
+
+    # -- Sort cycling --
+
+    def cycle_sort(self) -> None:
+        """Cycle to the next sort mode and re-sort."""
+        idx = PROJECT_SORT_MODES.index(self._sort_mode)
+        self._sort_mode = PROJECT_SORT_MODES[(idx + 1) % len(PROJECT_SORT_MODES)]
+        self._projects = _sort_projects(self._projects, self._sort_mode)
+        self._refresh_list()
+        label = PROJECT_SORT_LABELS.get(self._sort_mode, self._sort_mode)
+        self.notify(f"Sort: {label}")
+
+    # -- Project actions --
+
+    def update_status_selected(self) -> None:
+        """Open status modal for selected project."""
+        project = self.get_selected_project()
+        if project:
+            self.app.push_screen(ProjectStatusModal(project), self._on_status_result)
+
+    def _on_status_result(self, result) -> None:
+        if result is None:
+            return
+        project = self.get_selected_project()
+        if not project:
+            return
+        project_id = project.get("_id", "")
+        if not project_id:
+            return
+        # Write updated status to YAML
+        old_status = project.get("status", "active")
+        project["status"] = result
+        project["updated_at"] = datetime.now().isoformat()
+        if _save_project_yaml(project_id, project):
+            self.notify(f"Status: {old_status} -> {result}")
+            self.load_data()
+        else:
+            self.notify("Failed to save project", severity="error")
+
+    def complete_commitment_selected(self) -> None:
+        """Open commitment completion modal for selected project."""
+        project = self.get_selected_project()
+        if project:
+            actionable = [
+                c for c in project.get("commitments", [])
+                if c.get("status", "").lower() in ("open", "overdue")
+            ]
+            if not actionable:
+                self.notify("No open or overdue commitments", severity="warning")
+                return
+            self.app.push_screen(CommitmentModal(project), self._on_commitment_result)
+
+    def _on_commitment_result(self, result) -> None:
+        if result is None:
+            return
+        project = self.get_selected_project()
+        if not project:
+            return
+        project_id = project.get("_id", "")
+        if not project_id:
+            return
+        # Find the actionable commitment by index
+        actionable = [
+            c for c in project.get("commitments", [])
+            if c.get("status", "").lower() in ("open", "overdue")
+        ]
+        if not (0 <= result < len(actionable)):
+            return
+        target = actionable[result]
+        # Update the matching commitment in the full list
+        for c in project.get("commitments", []):
+            if c is target:
+                c["status"] = "done"
+                break
+        project["updated_at"] = datetime.now().isoformat()
+        what = target.get("what", "?")[:40]
+        if _save_project_yaml(project_id, project):
+            self.notify(f"Done: {what}")
+            self.load_data()
+            self._show_detail(project)
+        else:
+            self.notify("Failed to save project", severity="error")
+
+    def research_selected(self) -> None:
+        """Queue a research job focused on the selected project."""
+        from tui.ipc import queue_job
+        project = self.get_selected_project()
+        if project:
+            name = project.get("project", project.get("_id", "?"))
+            queue_job("research", context=f"Deep research on project: {name}")
+            self.notify(f"Research queued: {name}")
+
+    def digest_selected(self) -> None:
+        """Queue a digest job focused on the selected project."""
+        from tui.ipc import queue_job
+        project = self.get_selected_project()
+        if project:
+            name = project.get("project", project.get("_id", "?"))
+            queue_job("digest", context=f"Focused digest for project: {name}")
+            self.notify(f"Digest queued: {name}")
+
+    def note_selected(self) -> None:
+        """Add a note to the selected project."""
+        project = self.get_selected_project()
+        if project:
+            name = project.get("project", "?")[:30]
+            self.app.push_screen(
+                NoteModal(project.get("_id", ""), title=f"Note: {name}"),
+                self._on_note_result,
+            )
+
+    def _on_note_result(self, result) -> None:
+        if result == "saved":
+            self.notify("Note saved to project")
+
+    # -- Detail rendering --
+
     def _show_detail(self, project: dict) -> None:
-        detail = self.query_one(Static)
+        detail = self.query_one(".detail-container Static", Static)
 
         lines = [
             f"[bold]{project.get('project', '?')}[/bold]",
             f"Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
             "",
             project.get("summary", ""),
+            "",
+            "[dim]Actions: U=status  C=done  R=research  D=digest  N=note[/dim]",
         ]
 
         # Commitments — overdue first, then open, highlighted
@@ -935,6 +1763,21 @@ class ProjectsPane(Widget):
             if isinstance(item_project, str) and item_project.lower() == project_id.lower():
                 linked.append(item)
         return linked
+
+
+def _save_project_yaml(project_id: str, project: dict) -> bool:
+    """Save project data back to YAML file. Returns True on success."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        path = PROJECTS_DIR / f"{project_id}.yaml"
+        # Remove internal fields before saving
+        data = {k: v for k, v in project.items() if not k.startswith("_")}
+        path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+        return True
+    except Exception:
+        log.debug("Failed to save project %s", project_id, exc_info=True)
+        return False
 
 
 # ---------------------------------------------------------------------------

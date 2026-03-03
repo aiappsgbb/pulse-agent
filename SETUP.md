@@ -279,6 +279,47 @@ Your data lives on OneDrive and syncs automatically. No cloud backend, no extern
 
 ---
 
+## Upgrading Existing Installations
+
+If Pulse Agent is already installed and you need to update to the latest version:
+
+### AI-Assisted Upgrade (Recommended)
+
+Open a terminal in the Pulse Agent repo folder, then paste this into GitHub Copilot Chat, Claude Code, or any AI assistant with terminal access:
+
+> "Pull the latest Pulse Agent code, update dependencies, and verify everything works. The repo is https://github.com/aiappsgbb/pulse-agent.git"
+
+### Manual Upgrade
+
+From the repo root (`pulse-agent/`):
+
+```powershell
+# 1. Pull latest code
+git pull origin main
+
+# 2. Activate the virtual environment
+.venv\Scripts\activate
+
+# 3. Update dependencies (in case new packages were added)
+python -m pip install -r requirements.txt
+
+# 4. Run tests to verify
+python -m pytest tests/ -q --tb=line
+```
+
+That's it. Your data in `PULSE_HOME` (OneDrive) is untouched — only the code updates.
+
+### What if something breaks?
+
+| Problem | Fix |
+|---------|-----|
+| Merge conflicts on `git pull` | You shouldn't have local code changes. Run `git stash` then `git pull` |
+| New dependencies fail to install | Delete `.venv/` and recreate: `python -m venv .venv` then reinstall |
+| Tests fail after upgrade | Check the error — likely a missing dependency. Re-run `pip install -r requirements.txt` |
+| Desktop shortcut stops working | Re-run Phase 5 from the setup instructions above |
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |

@@ -223,7 +223,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                 elif job_type == "knowledge":
                     # Pipeline mode — archive + per-project enrichment sessions
                     from sdk.runner import run_knowledge_pipeline
-                    await run_knowledge_pipeline(client, config)
+                    await run_knowledge_pipeline(client, config, job_log_file=job_log_file)
                     if "_file" in job:
                         mark_task_completed(job)
                     notify_desktop("Pulse — Knowledge", "Knowledge mining complete.")

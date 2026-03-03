@@ -54,6 +54,9 @@ SIGNALS_DIR = PULSE_HOME / "pulse-signals"
 JOBS_DIR = PULSE_HOME / "jobs"
 LOGS_DIR = PULSE_HOME / "logs"
 
+# State files (dotfiles under PULSE_HOME)
+TRANSCRIPT_STATUS_FILE = PULSE_HOME / ".transcript-collection-status.json"
+
 # Backward-compat alias — write_output tool writes relative to this.
 # OUTPUT_DIR = PULSE_HOME means `write_output("digests/2026-02-23.json", ...)`
 # creates `PULSE_HOME/digests/2026-02-23.json` — the right place.

@@ -1,8 +1,10 @@
 """Pulse Agent TUI — main Textual application.
 
-Provides a 3-tab interactive dashboard:
+Provides a 5-tab interactive dashboard:
+  Today     — interactive landing page (meetings + commitments)
   Inbox     — unified actionable items (triage + digest + dismissed toggle)
   Projects  — per-engagement project memory with linked items
+  Jobs      — job queue and activity logs
   Chat      — streaming chat with the agent
 
 Key bindings:
@@ -11,6 +13,7 @@ Key bindings:
   ctrl+r        — force refresh all panes
   ctrl+h        — toggle show/hide dismissed items in Inbox
   d / r / n     — dismiss / reply (or restore) / note
+  c             — complete commitment (Today / Projects)
   a             — archive (on dismissed items in Inbox)
   q             — quit
 """
@@ -61,11 +64,14 @@ PULSE_THEME = Theme(
 from tui.ipc import queue_job, read_daemon_status, read_pending_question
 from tui.screens import (
     ChatPane,
+    CommitmentModal,
     HelpModal,
     InboxPane,
     JobsPane,
     ProjectsPane,
+    ProjectStatusModal,
     QuestionModal,
+    TodayPane,
 )
 
 
@@ -157,13 +163,18 @@ class PulseApp(App):
         Binding("ctrl+l", "view_latest_inbox", "Latest", show=False),
         Binding("ctrl+r", "refresh_all", "Refresh", show=False),
         Binding("ctrl+h", "toggle_dismissed", "Dismissed", show=False),
+        Binding("ctrl+y", "view_today", "Today", show=False),
         Binding("ctrl+e", "clear_chat", "Clear Chat", show=False),
         Binding("ctrl+j", "view_jobs", "Jobs", show=False),
-        # Item actions
+        # Item actions (Inbox + Projects)
         Binding("d", "item_dismiss", "Dismiss", show=False),
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
         Binding("a", "item_archive", "Archive", show=False),
+        # Project-specific actions
+        Binding("s", "project_sort", "Sort", show=False),
+        Binding("u", "project_status", "Status", show=False),
+        Binding("c", "project_commitment", "Complete", show=False),
         # Always visible
         Binding("question_mark", "show_help", "? Help", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
@@ -173,6 +184,8 @@ class PulseApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent(id="tabs"):
+            with TabPane("Today", id="tab-today"):
+                yield TodayPane(id="today-pane")
             with TabPane("Inbox", id="tab-inbox"):
                 yield InboxPane(id="inbox-pane")
             with TabPane("Projects", id="tab-projects"):
@@ -254,6 +267,7 @@ class PulseApp(App):
         if self._is_modal_open():
             return
         try:
+            self.query_one(TodayPane).load_data()
             inbox = self.query_one(InboxPane)
             inbox.load_data()
             self.query_one(ProjectsPane).load_data()
@@ -271,6 +285,22 @@ class PulseApp(App):
         """Update tab labels with item/project counts."""
         try:
             tabs = self.query_one(TabbedContent)
+
+            # Today tab
+            today_pane = self.query_one(TodayPane)
+            mc = today_pane._meeting_count
+            cc = today_pane._commitment_count
+            if mc or cc:
+                parts = []
+                if mc:
+                    parts.append(f"{mc} meetings")
+                if cc:
+                    parts.append(f"{cc} due")
+                tabs.get_tab("tab-today").label = f"Today ({', '.join(parts)})"
+            else:
+                tabs.get_tab("tab-today").label = "Today"
+
+            # Inbox tab
             inbox = self.query_one(InboxPane)
             active_count = sum(1 for i in inbox._items if not i.get("_is_dismissed"))
             dismissed = inbox._dismissed_count
@@ -381,6 +411,11 @@ class PulseApp(App):
         self.query_one(InboxPane).toggle_dismissed()
         self._update_tab_labels()
 
+    def action_view_today(self) -> None:
+        tabs = self.query_one(TabbedContent)
+        tabs.active = "tab-today"
+        self.query_one(TodayPane).load_data()
+
     def action_show_help(self) -> None:
         """Show keybindings help modal (?)."""
         if not any(isinstance(s, HelpModal) for s in self.screen_stack):
@@ -401,16 +436,70 @@ class PulseApp(App):
         """Return True if an Input or TextArea widget currently has focus."""
         return isinstance(self.focused, (Input, TextArea))
 
-    def action_item_dismiss(self) -> None:
+    def action_item_archive(self) -> None:
         if self._input_is_focused():
             return
         pane = self._get_active_item_pane()
         if pane:
-            pane.dismiss_selected()
+            pane.archive_selected()
+
+    # -------------------------------------------------------------------------
+    # Project actions (only active on Projects tab)
+    # -------------------------------------------------------------------------
+
+    def _get_active_today_pane(self) -> TodayPane | None:
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == "tab-today":
+            return self.query_one(TodayPane)
+        return None
+
+    def _get_active_projects_pane(self) -> ProjectsPane | None:
+        tabs = self.query_one(TabbedContent)
+        if tabs.active == "tab-projects":
+            return self.query_one(ProjectsPane)
+        return None
+
+    def action_project_sort(self) -> None:
+        if self._input_is_focused():
+            return
+        pane = self._get_active_projects_pane()
+        if pane:
+            pane.cycle_sort()
+
+    def action_project_status(self) -> None:
+        if self._input_is_focused():
+            return
+        pane = self._get_active_projects_pane()
+        if pane:
+            pane.update_status_selected()
+
+    def action_project_commitment(self) -> None:
+        if self._input_is_focused():
+            return
+        today_pane = self._get_active_today_pane()
+        if today_pane:
+            today_pane.complete_commitment_selected()
+            return
+        pane = self._get_active_projects_pane()
+        if pane:
+            pane.complete_commitment_selected()
 
     def action_item_reply_or_restore(self) -> None:
-        """Reply on active items, Restore on dismissed items."""
+        """Reply on active items, Restore on dismissed items.
+
+        On Today/Projects tab, 'R' triggers research for the linked project.
+        """
         if self._input_is_focused():
+            return
+        # Today tab: R = research
+        today_pane = self._get_active_today_pane()
+        if today_pane:
+            today_pane.research_selected()
+            return
+        # Projects tab: R = research
+        proj_pane = self._get_active_projects_pane()
+        if proj_pane:
+            proj_pane.research_selected()
             return
         pane = self._get_active_item_pane()
         if pane and pane.is_dismissed_selected():
@@ -421,16 +510,37 @@ class PulseApp(App):
     def action_item_note(self) -> None:
         if self._input_is_focused():
             return
+        # Today tab: N = note
+        today_pane = self._get_active_today_pane()
+        if today_pane:
+            today_pane.note_selected()
+            return
+        # Projects tab: N = note on project
+        proj_pane = self._get_active_projects_pane()
+        if proj_pane:
+            proj_pane.note_selected()
+            return
         pane = self._get_active_item_pane()
         if pane:
             pane.note_selected()
 
-    def action_item_archive(self) -> None:
+    def action_item_dismiss(self) -> None:
+        """Dismiss on Inbox, focused digest on Today/Projects tab."""
         if self._input_is_focused():
+            return
+        # Today tab: D = focused digest
+        today_pane = self._get_active_today_pane()
+        if today_pane:
+            today_pane.digest_selected()
+            return
+        # Projects tab: D = focused digest
+        proj_pane = self._get_active_projects_pane()
+        if proj_pane:
+            proj_pane.digest_selected()
             return
         pane = self._get_active_item_pane()
         if pane:
-            pane.archive_selected()
+            pane.dismiss_selected()
 
     def _get_active_item_pane(self) -> InboxPane | None:
         """Return InboxPane if inbox tab is active."""

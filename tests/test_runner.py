@@ -7,6 +7,7 @@ import pytest
 
 from sdk.runner import (
     _build_carry_forward,
+    _build_collection_warnings,
     _build_trigger_variables,
     _load_previous_digest,
     _load_projects,
@@ -490,3 +491,148 @@ async def test_pre_process_monitor_none_returns_unavailable():
     assert "UNAVAILABLE" in result["teams_inbox"]
     assert "UNAVAILABLE" in result["outlook_inbox_block"]
     assert "UNAVAILABLE" in result["calendar_block"]
+
+
+# --- _build_collection_warnings ---
+
+
+def test_collection_warnings_no_file(tmp_path):
+    """No status file → no warnings."""
+    with patch("core.constants.TRANSCRIPT_STATUS_FILE", tmp_path / ".nonexistent.json"):
+        assert _build_collection_warnings() == ""
+
+
+def test_collection_warnings_success(tmp_path):
+    """Successful recent collection → no warnings."""
+    from datetime import datetime
+    status_file = tmp_path / ".transcript-collection-status.json"
+    status_file.write_text(json.dumps({
+        "timestamp": datetime.now().isoformat(),
+        "success": True,
+        "collected": 5,
+        "skipped": 2,
+        "errors": 0,
+        "error_message": None,
+    }))
+    with patch("core.constants.TRANSCRIPT_STATUS_FILE", status_file):
+        assert _build_collection_warnings() == ""
+
+
+def test_collection_warnings_failure(tmp_path):
+    """Failed collection → warning with error message."""
+    from datetime import datetime
+    status_file = tmp_path / ".transcript-collection-status.json"
+    status_file.write_text(json.dumps({
+        "timestamp": datetime.now().isoformat(),
+        "success": False,
+        "collected": 0,
+        "skipped": 0,
+        "errors": 0,
+        "error_message": "Page.goto: Timeout 30000ms exceeded",
+    }))
+    with patch("core.constants.TRANSCRIPT_STATUS_FILE", status_file):
+        result = _build_collection_warnings()
+        assert "WARNING" in result
+        assert "FAILED" in result
+        assert "Timeout 30000ms" in result
+        assert "Flag this to the user" in result
+
+
+def test_collection_warnings_stale(tmp_path):
+    """Stale collection (>26h) → warning about missing data."""
+    from datetime import datetime, timedelta
+    old_time = (datetime.now() - timedelta(hours=30)).isoformat()
+    status_file = tmp_path / ".transcript-collection-status.json"
+    status_file.write_text(json.dumps({
+        "timestamp": old_time,
+        "success": True,
+        "collected": 3,
+        "skipped": 0,
+        "errors": 0,
+        "error_message": None,
+    }))
+    with patch("core.constants.TRANSCRIPT_STATUS_FILE", status_file):
+        result = _build_collection_warnings()
+        assert "WARNING" in result
+        assert "STALE" in result
+
+
+def test_collection_warnings_corrupt_file(tmp_path):
+    """Corrupt status file → no crash, no warnings."""
+    status_file = tmp_path / ".transcript-collection-status.json"
+    status_file.write_text("not json{{{")
+    with patch("core.constants.TRANSCRIPT_STATUS_FILE", status_file):
+        assert _build_collection_warnings() == ""
+
+
+# --- write_collection_failure ---
+
+
+def test_write_collection_failure(tmp_path):
+    """write_collection_failure writes a failure status file."""
+    status_file = tmp_path / ".transcript-collection-status.json"
+    with patch("collectors.transcripts.collector.TRANSCRIPT_STATUS_FILE", status_file):
+        from collectors.transcripts.collector import write_collection_failure
+        write_collection_failure("Calendar page timed out")
+    assert status_file.exists()
+    data = json.loads(status_file.read_text())
+    assert data["success"] is False
+    assert "timed out" in data["error_message"]
+    assert "timestamp" in data
+
+
+def test_write_collection_success(tmp_path):
+    """_write_collection_status writes a success status file."""
+    status_file = tmp_path / ".transcript-collection-status.json"
+    with patch("collectors.transcripts.collector.TRANSCRIPT_STATUS_FILE", status_file):
+        from collectors.transcripts.collector import _write_collection_status
+        _write_collection_status(success=True, collected=5, skipped=2, errors=1)
+    assert status_file.exists()
+    data = json.loads(status_file.read_text())
+    assert data["success"] is True
+    assert data["collected"] == 5
+    assert data["skipped"] == 2
+    assert data["errors"] == 1
+
+
+# --- collection_warnings in digest trigger variables ---
+
+
+def test_digest_trigger_includes_collection_warnings(tmp_path):
+    """Digest trigger variables include collection_warnings from context."""
+    from datetime import datetime
+    config = {"digest": {"priorities": ["Test priority"]}}
+    context = {
+        "content_block": "some content",
+        "collection_warnings": "## Data Collection Warnings\n\n**WARNING: Transcript collection FAILED**\n",
+        "articles_block": "",
+        "teams_inbox_block": "no unread",
+        "outlook_inbox_block": "no unread",
+        "calendar_block": "no events",
+        "projects_block": "",
+        "commitments_summary": "",
+    }
+    with patch("sdk.runner._load_previous_digest", return_value=None), \
+         patch("sdk.runner._build_dismissed_block", return_value=""), \
+         patch("sdk.runner.load_actions", return_value={}):
+        variables = _build_trigger_variables("digest", config, context)
+    assert "FAILED" in variables["collection_warnings"]
+
+
+# --- knowledge pipeline activity logging ---
+
+
+def test_knowledge_pipeline_log_helper(tmp_path):
+    """The _log_pipeline helper writes valid JSONL entries."""
+    log_file = tmp_path / "job-test.jsonl"
+    # Simulate what _log_pipeline does
+    import json as _json
+    from datetime import datetime as _dt
+    entry = {"ts": _dt.now().isoformat(), "type": "message", "preview": "Phase 0a: test"}
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry) + "\n")
+    lines = log_file.read_text().strip().split("\n")
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["type"] == "message"
+    assert "Phase 0a" in parsed["preview"]

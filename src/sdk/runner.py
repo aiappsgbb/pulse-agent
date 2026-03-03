@@ -229,6 +229,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["projects_block"] = context.get("projects_block", "")
         variables["commitments_summary"] = context.get("commitments_summary", "")
 
+        # Collection warnings (transcript failures, stale data)
+        variables["collection_warnings"] = context.get("collection_warnings", "")
+
     elif mode == "intel":
         variables["date"] = date_str
         articles = context.get("articles", [])
@@ -551,6 +554,78 @@ def _validate_digest_json(date_str: str):
         log.info(f"  Digest validation: {date_str}.json OK ({len(items)} items)")
 
 
+def _build_collection_warnings() -> str:
+    """Check transcript collection status and build warning text for the digest.
+
+    Reads .transcript-collection-status.json — written by the collector on success
+    and by the runner on failure. If the last collection failed or is stale (>26h),
+    the digest agent gets a visible warning about incomplete data.
+    """
+    from core.constants import TRANSCRIPT_STATUS_FILE
+    import json
+
+    if not TRANSCRIPT_STATUS_FILE.exists():
+        return ""
+
+    try:
+        status = json.loads(TRANSCRIPT_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    ts = status.get("timestamp", "")
+    success = status.get("success", True)
+    error_msg = status.get("error_message", "")
+    collected = status.get("collected", 0)
+
+    # Check staleness — if last collection was >26 hours ago, warn
+    # (normal schedule: knowledge at 02:00 + digest at 08:00 = ~6h gap max)
+    stale = False
+    if ts:
+        try:
+            from datetime import datetime as _dt
+            last_run = _dt.fromisoformat(ts)
+            hours_ago = (datetime.now() - last_run).total_seconds() / 3600
+            stale = hours_ago > 26
+        except Exception:
+            pass
+
+    warnings = []
+
+    if not success:
+        warnings.append(
+            f"**WARNING: Transcript collection FAILED** at {ts[:16]}. "
+            f"Error: {error_msg}. "
+            f"Yesterday's meeting transcripts may NOT be included in the content below. "
+            f"Flag this to the user in the digest."
+        )
+    elif stale:
+        warnings.append(
+            f"**WARNING: Transcript collection is STALE** — last successful run was {ts[:16]} "
+            f"({hours_ago:.0f}h ago). Recent meeting transcripts may be missing."
+        )
+
+    if not warnings:
+        return ""
+
+    block = "\n## Data Collection Warnings\n\n" + "\n".join(warnings) + "\n"
+    log.warning(f"Collection warnings: {'; '.join(warnings)}")
+    return block
+
+
+def _persist_calendar_scan(cal_events: list[dict] | None) -> None:
+    """Persist calendar scan results to .calendar-scan.json for TUI consumption."""
+    scan_file = PULSE_HOME / ".calendar-scan.json"
+    try:
+        data = {
+            "scanned_at": datetime.now().isoformat(),
+            "events": cal_events if cal_events is not None else [],
+            "available": cal_events is not None,
+        }
+        scan_file.write_text(json.dumps(data, default=str), encoding="utf-8")
+    except Exception:
+        log.debug("Failed to persist calendar scan", exc_info=True)
+
+
 async def _pre_process_monitor(config: dict) -> dict:
     """Scan Teams inbox, Outlook inbox, and calendar before monitor agent call."""
     from collectors.teams_inbox import scan_teams_inbox, format_inbox_for_prompt
@@ -580,6 +655,7 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     log.info("Phase 0c: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
+    _persist_calendar_scan(cal_events)
     if cal_events is None:
         calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
     else:
@@ -607,6 +683,9 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     # Transcript collection + compression runs in the overnight knowledge pipeline
     # (daily 02:00). The digest just reads whatever was already collected/compressed.
     # Knowledge mining also runs overnight — projects are already enriched by morning.
+
+    # Check transcript collection status — surface failures to the digest agent
+    collection_warnings = _build_collection_warnings()
 
     log.info("Phase 1: Collecting content from input folders...")
     items = collect_content(config)
@@ -663,6 +742,7 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
 
     log.info("\nPhase 1e: Scanning calendar for upcoming events...")
     cal_events = await scan_calendar(config)
+    _persist_calendar_scan(cal_events)
     if cal_events is None:
         calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
         log.warning("  Calendar: UNAVAILABLE — browser not running")
@@ -722,6 +802,7 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
 
     return {
         "content_block": content_block,
+        "collection_warnings": collection_warnings,
         "articles_block": articles_block,
         "articles": articles,
         "teams_inbox_block": teams_inbox_block,
@@ -865,7 +946,7 @@ async def _pre_process_knowledge(config: dict) -> dict:
     }
 
 
-async def run_knowledge_pipeline(client, config: dict):
+async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None = None):
     """Run the full knowledge mining pipeline: archive once, then enrich per-project.
 
     This replaces the old monolithic knowledge session. Architecture:
@@ -875,6 +956,17 @@ async def run_knowledge_pipeline(client, config: dict):
     WorkIQ and search_local_files to determine what's worth updating.
     """
     log.info("=== Knowledge pipeline start ===")
+
+    def _log_pipeline(entry_type: str, **kwargs):
+        """Write an entry to the per-job activity log (if configured)."""
+        if not job_log_file:
+            return
+        try:
+            entry = {"ts": datetime.now().isoformat(), "type": entry_type, **kwargs}
+            with open(job_log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
 
     # Phase 0: Collect fresh transcripts + compress
     # Knowledge needs fresh data to mine — transcripts, emails, Teams messages.
@@ -886,17 +978,28 @@ async def run_knowledge_pipeline(client, config: dict):
     browser_mgr = get_browser_manager()
     if browser_mgr and browser_mgr.context:
         log.info("  Phase 0a: Collecting fresh transcripts from Teams...")
+        _log_pipeline("message", preview="Phase 0a: Collecting fresh transcripts from Teams...")
         try:
             await asyncio.wait_for(
                 run_transcript_collection(client, config),
                 timeout=1800,  # 30 min cap
             )
+            _log_pipeline("message", preview="Transcript collection complete")
         except asyncio.TimeoutError:
             log.warning("    Transcript collection timed out (non-fatal)")
+            _log_pipeline("error", preview="Transcript collection timed out after 30 minutes")
+            from collectors.transcripts.collector import write_collection_failure
+            write_collection_failure("Transcript collection timed out after 30 minutes")
         except Exception as e:
             log.warning(f"    Transcript collection failed (non-fatal): {e}")
+            _log_pipeline("error", preview=f"Transcript collection failed: {str(e)[:200]}")
+            from collectors.transcripts.collector import write_collection_failure
+            write_collection_failure(str(e))
     else:
         log.info("  Phase 0a: Skipping transcript collection (no browser)")
+        _log_pipeline("message", preview="Phase 0a: Skipped — no browser available")
+        from collectors.transcripts.collector import write_collection_failure
+        write_collection_failure("No browser available for transcript collection")
 
     if client:
         transcripts_dir = TRANSCRIPTS_DIR
@@ -904,21 +1007,27 @@ async def run_knowledge_pipeline(client, config: dict):
             tc_models = config.get("models", {})
             compress_model = tc_models.get("transcripts", tc_models.get("default", "claude-sonnet"))
             log.info("  Phase 0b: Compressing raw transcripts via GHCP SDK...")
+            _log_pipeline("message", preview="Phase 0b: Compressing raw transcripts...")
             compressed_count = await compress_existing_transcripts(client, transcripts_dir, model=compress_model)
             log.info(f"    Compressed {compressed_count} transcripts")
+            _log_pipeline("message", preview=f"Compressed {compressed_count} transcripts")
 
     # Phase 1: Run archive session (global — emails, Teams messages, new project discovery)
     log.info("  Phase 1: Archiving emails/Teams messages + discovering new projects...")
+    _log_pipeline("message", preview="Phase 1: Archiving emails/Teams messages + discovering new projects...")
     try:
         await asyncio.wait_for(
-            run_job(client, config, "knowledge-archive"),
+            run_job(client, config, "knowledge-archive", job_log_file=job_log_file),
             timeout=600,  # 10 min cap for archival
         )
         log.info("  Phase 1 complete.")
+        _log_pipeline("message", preview="Phase 1 complete — archive session done")
     except asyncio.TimeoutError:
         log.warning("  Archive phase timed out after 5 minutes (continuing to enrichment)")
+        _log_pipeline("error", preview="Archive phase timed out after 5 minutes")
     except Exception as e:
         log.warning(f"  Archive phase failed: {e} (continuing to enrichment)")
+        _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}")
 
     # Phase 2: Per-project enrichment — reload projects (archive may have created new ones)
     projects = _load_projects()
@@ -940,6 +1049,7 @@ async def run_knowledge_pipeline(client, config: dict):
     lookback_window = f"since {last_run}" if last_run else "48 hours"
 
     log.info(f"  Phase 2: Enriching {len(active)} active projects:")
+    _log_pipeline("message", preview=f"Phase 2: Enriching {len(active)} active projects...")
     for p in active:
         pid = p.get("_file", "").replace(".yaml", "")
         log.info(f"    - {p.get('project', pid)}")
@@ -962,14 +1072,17 @@ async def run_knowledge_pipeline(client, config: dict):
 
         try:
             await asyncio.wait_for(
-                run_job(client, config, "knowledge-project", context=project_context),
+                run_job(client, config, "knowledge-project", context=project_context, job_log_file=job_log_file),
                 timeout=600,  # 10 min per project
             )
             enriched += 1
             log.info(f"    Done: {pname}")
         except asyncio.TimeoutError:
             log.warning(f"    Timeout enriching {pname} (10 min cap)")
+            _log_pipeline("error", preview=f"Timeout enriching {pname}")
         except Exception as e:
             log.warning(f"    Failed enriching {pname}: {e}")
+            _log_pipeline("error", preview=f"Failed enriching {pname}: {str(e)[:200]}")
 
     log.info(f"=== Knowledge pipeline done — enriched {enriched}/{len(active)} projects ===")
+    _log_pipeline("message", preview=f"Knowledge pipeline done — enriched {enriched}/{len(active)} projects")

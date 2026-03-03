@@ -8,6 +8,7 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 {{notes_block}}
 {{carry_forward}}
 
+{{collection_warnings}}
 ## Part A — Local Content (already collected)
 {{content_sections}}
 {{articles_block}}

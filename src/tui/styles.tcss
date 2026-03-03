@@ -22,6 +22,34 @@ TabbedContent {
     height: 1fr;
 }
 
+/* ─── Today pane ──────────────────────────────────────── */
+
+TodayPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+#today-header {
+    height: 1;
+    color: $primary;
+    padding: 0 1;
+}
+
+TodayPane ListView {
+    height: 1fr;
+    border: round $panel;
+    border-title-color: $primary;
+    padding: 0 1;
+}
+
+TodayPane .detail-container {
+    height: 45%;
+    border: round $panel;
+    border-title-color: $text-muted;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
 /* ─── Inbox pane ───────────────────────────────────────── */
 
 InboxPane {
@@ -30,7 +58,7 @@ InboxPane {
 }
 
 InboxPane ListView {
-    height: 55%;
+    height: 1fr;
     border: round $panel;
     border-title-color: $primary;
     padding: 0 1;
@@ -51,8 +79,14 @@ ProjectsPane {
     height: 1fr;
 }
 
+#sort-indicator {
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+}
+
 ProjectsPane ListView {
-    height: 45%;
+    height: 44%;
     border: round $panel;
     padding: 0 1;
 }
@@ -114,7 +148,7 @@ ChatPane {
 
 /* ─── Modals ───────────────────────────────────────────── */
 
-ReplyModal, NoteModal, QuestionModal, HelpModal {
+ReplyModal, NoteModal, QuestionModal, HelpModal, ProjectStatusModal, CommitmentModal {
     align: center middle;
 }
 
@@ -125,6 +159,32 @@ ReplyModal, NoteModal, QuestionModal, HelpModal {
     width: 60;
     height: auto;
     max-height: 70%;
+}
+
+#status-dialog, #commitment-dialog {
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+    max-height: 70%;
+}
+
+#status-title, #commitment-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#status-current {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#status-buttons {
+    layout: horizontal;
+    height: 3;
+    margin-bottom: 1;
 }
 
 #reply-dialog, #note-dialog, #question-dialog {
