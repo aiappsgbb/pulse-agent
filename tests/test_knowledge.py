@@ -282,18 +282,19 @@ def test_modes_yaml_has_knowledge_modes():
     assert "knowledge" in modes
     assert modes["knowledge"].get("standalone") is True
 
+    # Default MCP servers inherited by all modes
+    assert "workiq" in modes.get("default_mcp_servers", [])
+
     # Archive sub-mode
     assert "knowledge-archive" in modes
     ka = modes["knowledge-archive"]
     assert ka["pre_process"] == "collect_knowledge_context"
     assert "knowledge-miner" in ka["agents"]
-    assert "workiq" in ka["mcp_servers"]
 
     # Per-project sub-mode
     assert "knowledge-project" in modes
     kp = modes["knowledge-project"]
     assert "knowledge-miner" in kp["agents"]
-    assert "workiq" in kp["mcp_servers"]
 
 
 # --- Knowledge-miner agent definition loads ---

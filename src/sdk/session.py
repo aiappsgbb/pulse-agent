@@ -116,10 +116,14 @@ def build_session_config(
     wd = mode_cfg.get("working_dir", "root")
     working_dir = str(PULSE_HOME) if wd == "output" else str(PROJECT_ROOT)
 
-    # MCP servers
+    # MCP servers — inherit from default_mcp_servers unless mode overrides
+    default_servers = modes.get("default_mcp_servers", [])
+    mcp_names = mode_cfg.get("mcp_servers", default_servers)
     mcp_servers = {}
-    for name in mode_cfg.get("mcp_servers", []):
-        mcp_servers[name] = _mcp_config(name, config, cdp_endpoint)
+    for name in mcp_names:
+        cfg = _mcp_config(name, config, cdp_endpoint)
+        if cfg is not None:
+            mcp_servers[name] = cfg
 
     # Custom agents
     agent_names = mode_cfg.get("agents", [])

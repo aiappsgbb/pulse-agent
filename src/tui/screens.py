@@ -489,6 +489,7 @@ class HelpModal(ModalScreen):
                 "[bold cyan]Inbox actions[/bold cyan]\n"
                 "  D  Snooze (1 day)            A  Archive (30 days)\n"
                 "  R  Reply / Restore           N  Add note\n"
+                "  M  Mark as read         Ctrl+M  Sweep all low-priority\n"
                 "\n"
                 "[bold cyan]Projects actions[/bold cyan]\n"
                 "  S  Cycle sort mode           U  Update status\n"
@@ -1104,6 +1105,32 @@ class InboxPane(ItemPane):
                 NoteModal(item_id, allow_empty=True, title="Add note (optional)"),
                 self._on_dismiss_note_result,
             )
+
+    def mark_read_selected(self) -> None:
+        """Mark the selected item as read in its source app (Teams/Outlook)."""
+        item = self.get_selected_item()
+        if not item or item.get("_is_dismissed"):
+            return
+        source = item.get("source", "")
+        if not source:
+            self.notify("Cannot determine source for this item", severity="warning")
+            return
+        from tui.ipc import queue_mark_read_job
+        if queue_mark_read_job(item):
+            # Also archive it in the TUI
+            item_id = item.get("id", "")
+            archive_item(
+                item_id,
+                title=item.get("title", ""),
+                source=source,
+            )
+            self._items.pop(self._selected_idx)
+            self._selected_idx = max(0, self._selected_idx - 1)
+            self._refresh_list()
+            title = item.get("title", source)[:40]
+            self.notify(f"Marking as read: {title}")
+        else:
+            self.notify("Only Teams and Email items can be marked as read", severity="warning")
 
     def restore_selected(self) -> None:
         """Restore a dismissed item (only works on dismissed items)."""

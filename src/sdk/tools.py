@@ -91,6 +91,10 @@ class UpdateProjectParams(BaseModel):
     yaml_content: str  # full YAML content for the project file
 
 
+class SweepInboxParams(BaseModel):
+    full_sweep: bool = False  # True = mark ALL unread as read; False = smart (FYI/low only)
+
+
 class SaveConfigParams(BaseModel):
     config: dict  # full standing-instructions config object
 
@@ -652,6 +656,34 @@ def save_config_tool(params: SaveConfigParams, invocation: ToolInvocation) -> st
     return f"Configuration saved to {dest}. Pulse Agent is now configured and ready."
 
 
+# --- Inbox sweep tool ---
+
+@define_tool(
+    name="sweep_inbox",
+    description=(
+        "Mark unimportant unread messages as read in Teams and Outlook. "
+        "Use when the user says 'clear my messages', 'sweep inbox', 'mark everything as read', "
+        "or similar. Queues a sweep job that marks items as read via browser automation. "
+        "Set full_sweep=true to mark ALL unread items as read. "
+        "Set full_sweep=false (default) for smart sweep — only marks FYI/low-priority items."
+    ),
+)
+def sweep_inbox(params: SweepInboxParams, invocation: ToolInvocation) -> str:
+    pending_dir = JOBS_DIR / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    uid = uuid.uuid4().hex[:8]
+    file_path = pending_dir / f"{ts}-inbox-sweep-{uid}.yaml"
+    data = {
+        "type": "inbox_sweep",
+        "full_sweep": params.full_sweep,
+        "_source": "chat",
+    }
+    file_path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+    mode = "full" if params.full_sweep else "smart"
+    return f"Inbox sweep ({mode}) queued. Will mark unread items as read shortly."
+
+
 # --- Tool set builder ---
 
 def get_tools() -> list[Tool]:
@@ -662,4 +694,5 @@ def get_tools() -> list[Tool]:
         search_local_files, update_project,
         send_teams_message, send_email_reply,
         send_task_to_agent, save_config_tool,
+        sweep_inbox,
     ]

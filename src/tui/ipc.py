@@ -552,6 +552,54 @@ def read_job_log(log_file: str) -> list[dict]:
         return []
 
 
+def queue_mark_read_job(item: dict) -> bool:
+    """Queue a mark-as-read job for a single inbox item.
+
+    Parses the source field to determine Teams vs Outlook, then writes
+    a job YAML to JOBS_DIR/pending/. Returns True on success.
+    """
+    source = item.get("source", "")
+    source_lower = source.lower()
+
+    if source_lower.startswith("teams"):
+        # Extract name after "Teams: " or "Teams:" prefix
+        name = source.split(":", 1)[1].strip() if ":" in source else source
+        job: dict = {
+            "type": "mark_read_teams",
+            "chat_name": name,
+            "_source": "tui",
+        }
+    elif source_lower.startswith("email"):
+        # Extract sender from "Email: Name" or "Email from Name"
+        if ":" in source:
+            name = source.split(":", 1)[1].strip()
+        elif "from" in source_lower:
+            name = source.split("from", 1)[1].strip()
+        else:
+            name = source
+        job = {
+            "type": "mark_read_outlook",
+            "sender": name,
+            "subject": item.get("title", ""),
+            "conv_id": item.get("conv_id", ""),
+            "_source": "tui",
+        }
+    else:
+        return False
+
+    try:
+        pending_dir = JOBS_DIR / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+        uid = uuid.uuid4().hex[:8]
+        file_path = pending_dir / f"{ts}-markread-tui-{uid}.yaml"
+        file_path.write_text(yaml.dump(job, default_flow_style=False), encoding="utf-8")
+        return True
+    except Exception:
+        log.exception("queue_mark_read_job failed")
+        return False
+
+
 def write_reply_job(item: dict, draft: str) -> bool:
     """Queue a reply job (teams_send or email_reply) to JOBS_DIR/pending/.
 

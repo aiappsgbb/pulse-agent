@@ -68,6 +68,14 @@ monitoring:
     auto_send: false
     auto_send_low_risk: true
     max_nudges: 2
+  # Inbox sweep: mark unimportant items as read in Teams/Outlook
+  # so Pulse Agent becomes your single source of truth.
+  # Manual sweep (chat: "clear my messages" / TUI: Ctrl+M) always works.
+  sweep:
+    enabled: false              # Auto-sweep after each triage cycle (opt-in)
+    sweep_types: ["fyi"]        # Item types to auto-mark as read
+    max_priority: "low"         # Only sweep at or below this priority
+    never_sweep: ["reply_needed", "escalation"]  # Never auto-sweep these
 
 # ---------------------------------------------------------------------------
 # Digest — what content folders to scan.
@@ -89,6 +97,16 @@ digest:
     - "Unreplied messages where someone is waiting for MY response"
     - "Commitments I made in meetings that I haven't delivered on yet"
     - "Key decisions made in meetings I missed"
+
+# ---------------------------------------------------------------------------
+# MCP Servers — instance-specific settings for external data sources.
+# Server names must match entries in modes.yaml default_mcp_servers.
+# Servers referenced by modes/agents but missing here are skipped gracefully.
+# ---------------------------------------------------------------------------
+mcp_servers:
+  # Dataverse (Dynamics 365 / CRM) — uncomment and set your org's URL to enable.
+  # dataverse:
+  #   url: "https://your-org.crm.dynamics.com/api/mcp"
 
 # ---------------------------------------------------------------------------
 # Transcripts — browser-based collection from Teams.

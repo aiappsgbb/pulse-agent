@@ -1,12 +1,17 @@
 """Load agent definitions from config/prompts/agents/*.md files."""
 
+import logging
 from pathlib import Path
 
 import yaml
 
-from copilot import CustomAgentConfig, MCPLocalServerConfig
+from copilot import CustomAgentConfig, MCPLocalServerConfig, MCPRemoteServerConfig, MCPServerConfig
 
 from core.constants import CONFIG_DIR, PROJECT_ROOT
+
+log = logging.getLogger(__name__)
+
+
 def parse_front_matter(path: Path) -> tuple[dict, str]:
     """Split a markdown file into YAML front matter and body.
 
@@ -30,7 +35,7 @@ def parse_front_matter(path: Path) -> tuple[dict, str]:
     return metadata, body
 
 
-def workiq_mcp_config() -> MCPLocalServerConfig:
+def workiq_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig:
     """Standard WorkIQ MCP config — reused across agents."""
     return MCPLocalServerConfig(
         type="local",
@@ -76,17 +81,38 @@ def playwright_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPL
     )
 
 
-_MCP_BUILDERS = {
-    "workiq": lambda config, cdp: workiq_mcp_config(),
+def dataverse_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPRemoteServerConfig | None:
+    """Dataverse MCP config — remote HTTP server for Dynamics 365 / CRM data.
+
+    URL must be configured in standing-instructions.yaml under mcp_servers.dataverse.url.
+    No hardcoded default — each org has its own Dataverse instance.
+    Returns None if not configured (graceful skip).
+    """
+    dv_cfg = config.get("mcp_servers", {}).get("dataverse", {})
+    url = dv_cfg.get("url", "")
+    if not url or url.startswith("TODO"):
+        return None
+    return MCPRemoteServerConfig(
+        type="http",
+        url=url,
+        tools=["*"],
+        timeout=60000,
+    )
+
+
+_MCP_BUILDERS: dict[str, callable] = {
+    "workiq": workiq_mcp_config,
     "playwright": playwright_mcp_config,
+    "dataverse": dataverse_mcp_config,
 }
 
 
-def _mcp_config(name: str, config: dict, cdp_endpoint: str | None = None) -> MCPLocalServerConfig:
-    """Build MCP config by name."""
+def _mcp_config(name: str, config: dict, cdp_endpoint: str | None = None) -> MCPServerConfig | None:
+    """Build MCP config by name. Returns None if server is unknown or unconfigured."""
     builder = _MCP_BUILDERS.get(name)
     if not builder:
-        raise ValueError(f"Unknown MCP server: {name}")
+        log.warning("Unknown MCP server '%s' — skipping", name)
+        return None
     return builder(config, cdp_endpoint)
 
 
@@ -103,12 +129,16 @@ def load_agent(name: str, config: dict) -> CustomAgentConfig:
         "infer": front_matter.get("infer", True),
     }
 
-    # Add MCP servers if specified
+    # Add MCP servers if specified (filter unconfigured ones)
     mcp_names = front_matter.get("mcp_servers", [])
     if mcp_names:
-        agent_cfg["mcp_servers"] = {
-            s: _mcp_config(s, config) for s in mcp_names
-        }
+        mcp_cfgs = {}
+        for s in mcp_names:
+            cfg = _mcp_config(s, config)
+            if cfg is not None:
+                mcp_cfgs[s] = cfg
+        if mcp_cfgs:
+            agent_cfg["mcp_servers"] = mcp_cfgs
 
     return agent_cfg
 

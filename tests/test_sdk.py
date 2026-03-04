@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from sdk.prompts import load_prompt, load_instruction
-from sdk.agents import parse_front_matter
+from sdk.agents import parse_front_matter, dataverse_mcp_config, _mcp_config
 
 
 # --- load_prompt ---
@@ -177,3 +177,66 @@ def test_build_session_config_has_all_skills():
     assert "teams-sender" in skill_names
     assert "meeting-scheduler" in skill_names
     assert "email-reply" in skill_names
+
+
+# --- DRY MCP server config ---
+
+def test_dataverse_returns_none_when_not_configured():
+    """Dataverse MCP is skipped when URL not in config."""
+    assert dataverse_mcp_config({}) is None
+    assert dataverse_mcp_config({"mcp_servers": {}}) is None
+    assert dataverse_mcp_config({"mcp_servers": {"dataverse": {}}}) is None
+
+
+def test_dataverse_returns_none_for_todo_placeholder():
+    """Dataverse MCP is skipped when URL is a TODO placeholder."""
+    cfg = {"mcp_servers": {"dataverse": {"url": "TODO: https://example.crm.dynamics.com/api/mcp"}}}
+    assert dataverse_mcp_config(cfg) is None
+
+
+def test_dataverse_returns_config_when_url_set():
+    """Dataverse MCP returns valid config when URL is configured."""
+    cfg = {"mcp_servers": {"dataverse": {"url": "https://myorg.crm.dynamics.com/api/mcp"}}}
+    result = dataverse_mcp_config(cfg)
+    assert result is not None
+    assert result["url"] == "https://myorg.crm.dynamics.com/api/mcp"
+    assert result["type"] == "http"
+
+
+def test_mcp_config_unknown_server_returns_none():
+    """Unknown MCP server names return None instead of raising."""
+    result = _mcp_config("nonexistent", {})
+    assert result is None
+
+
+def test_default_mcp_servers_inherited():
+    """Modes without mcp_servers inherit default_mcp_servers."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    sc = build_session_config(config, "monitor")
+    # workiq comes from default_mcp_servers, not from mode entry
+    assert "workiq" in sc.get("mcp_servers", {})
+
+
+def test_dataverse_skipped_when_unconfigured():
+    """Dataverse is in default_mcp_servers but skipped when URL not in config."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    # Template config has no dataverse URL → should be skipped
+    sc = build_session_config(config, "monitor")
+    assert "dataverse" not in sc.get("mcp_servers", {})
+
+
+def test_dataverse_included_when_configured():
+    """Dataverse is included in session when URL is configured."""
+    from core.config import load_config
+    from sdk.session import build_session_config
+    config = load_config()
+    config.setdefault("mcp_servers", {})["dataverse"] = {
+        "url": "https://test.crm.dynamics.com/api/mcp"
+    }
+    sc = build_session_config(config, "monitor")
+    assert "dataverse" in sc.get("mcp_servers", {})
+    assert sc["mcp_servers"]["dataverse"]["url"] == "https://test.crm.dynamics.com/api/mcp"

@@ -171,6 +171,8 @@ class PulseApp(App):
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
         Binding("a", "item_archive", "Archive", show=False),
+        Binding("m", "item_mark_read", "Mark Read", show=False),
+        Binding("ctrl+m", "inbox_sweep", "Sweep Read", show=False),
         # Project-specific actions
         Binding("s", "project_sort", "Sort", show=False),
         Binding("u", "project_status", "Status", show=False),
@@ -442,6 +444,20 @@ class PulseApp(App):
         pane = self._get_active_item_pane()
         if pane:
             pane.archive_selected()
+
+    def action_item_mark_read(self) -> None:
+        if self._input_is_focused():
+            return
+        pane = self._get_active_item_pane()
+        if pane and hasattr(pane, "mark_read_selected"):
+            pane.mark_read_selected()
+
+    def action_inbox_sweep(self) -> None:
+        if self._input_is_focused():
+            return
+        from tui.ipc import queue_job
+        queue_job("inbox_sweep")
+        self.notify("Inbox sweep queued — marking low-priority items as read")
 
     # -------------------------------------------------------------------------
     # Project actions (only active on Projects tab)

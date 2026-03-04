@@ -238,6 +238,20 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     notify_desktop(toast_title, toast_body, urgency=urgency)
                     write_job_notification(job_type, toast_body)
 
+                    # Post-triage auto-sweep: mark FYI/low items as read
+                    if job_type == "monitor":
+                        sweep_cfg = config.get("monitoring", {}).get("sweep", {})
+                        if sweep_cfg.get("enabled", False):
+                            try:
+                                sweep_result = await asyncio.wait_for(
+                                    _execute_inbox_sweep(config, full_sweep=False),
+                                    timeout=_BROWSER_JOB_TIMEOUT,
+                                )
+                                summary = sweep_result.get("summary", "Sweep done")
+                                log.info(f"  Auto-sweep: {summary}")
+                            except Exception as e:
+                                log.warning(f"  Auto-sweep failed: {e}")
+
                 elif job_type == "agent_request":
                     result_text = await _handle_agent_request(client, config, job)
                     if "_file" in job:
@@ -295,6 +309,68 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     summary = f"Email reply {status.lower()}: {query}" + (f" — {detail}" if not ok else "")
                     notify_desktop("Pulse — Email Reply", summary)
                     write_job_notification("email_reply", summary)
+
+                elif job_type == "inbox_sweep":
+                    full = job.get("full_sweep", False)
+                    _write_job_log(job_log_file, "tool_start", tool="inbox_sweep", full_sweep=full)
+                    try:
+                        result = await asyncio.wait_for(
+                            _execute_inbox_sweep(config, full_sweep=full),
+                            timeout=_BROWSER_JOB_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "summary": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
+                    summary = result.get("summary", "Sweep complete")
+                    _write_job_log(job_log_file, "tool_result", tool="inbox_sweep", summary=summary)
+                    log.info(f"  {summary}")
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    notify_desktop("Pulse — Inbox Sweep", summary)
+                    write_job_notification("inbox_sweep", summary)
+
+                elif job_type == "mark_read_teams":
+                    chat_name = job.get("chat_name", "")
+                    _write_job_log(job_log_file, "tool_start", tool="mark_read_teams", target=chat_name)
+                    try:
+                        from collectors.teams_marker import mark_teams_chats_read
+                        result = await asyncio.wait_for(
+                            mark_teams_chats_read([chat_name]),
+                            timeout=_BROWSER_JOB_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "marked": 0, "details": ["Timed out"]}
+                    ok = result.get("marked", 0) > 0
+                    status = "Done" if ok else "Failed"
+                    _write_job_log(job_log_file, "tool_result", tool="mark_read_teams", status=status)
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    summary = f"Teams mark-read {status.lower()}: {chat_name}"
+                    notify_desktop("Pulse — Mark Read", summary)
+                    write_job_notification("mark_read_teams", summary)
+
+                elif job_type == "mark_read_outlook":
+                    sender = job.get("sender", "")
+                    _write_job_log(job_log_file, "tool_start", tool="mark_read_outlook", target=sender)
+                    try:
+                        from collectors.outlook_marker import mark_outlook_emails_read
+                        result = await asyncio.wait_for(
+                            mark_outlook_emails_read([{
+                                "conv_id": job.get("conv_id", ""),
+                                "sender": sender,
+                                "subject": job.get("subject", ""),
+                            }]),
+                            timeout=_BROWSER_JOB_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "marked": 0, "details": ["Timed out"]}
+                    ok = result.get("marked", 0) > 0
+                    status = "Done" if ok else "Failed"
+                    _write_job_log(job_log_file, "tool_result", tool="mark_read_outlook", status=status)
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    summary = f"Outlook mark-read {status.lower()}: {sender}"
+                    notify_desktop("Pulse — Mark Read", summary)
+                    write_job_notification("mark_read_outlook", summary)
 
                 else:
                     log.warning(f"  Unknown job type: {job_type}")
@@ -433,6 +509,12 @@ async def process_pending_actions():
                 action_file.unlink()
             except Exception:
                 pass
+
+
+async def _execute_inbox_sweep(config: dict, full_sweep: bool = False) -> dict:
+    """Execute an inbox sweep — marks items as read in Teams and Outlook."""
+    from collectors.sweep import execute_sweep
+    return await execute_sweep(config, full_sweep=full_sweep)
 
 
 async def _handle_agent_request(client, config: dict, job: dict) -> str:

@@ -136,6 +136,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
   <img src="https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white" alt="Playwright" />
   <img src="https://img.shields.io/badge/GitHub_Copilot_SDK-8957e5?style=flat-square&logo=github&logoColor=white" alt="Copilot SDK" />
   <img src="https://img.shields.io/badge/WorkIQ_MCP-D83B01?style=flat-square&logo=microsoft&logoColor=white" alt="WorkIQ" />
+  <img src="https://img.shields.io/badge/Dataverse_MCP-742774?style=flat-square&logo=dynamics365&logoColor=white" alt="Dataverse" />
   <img src="https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -157,6 +158,9 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
                   |       GitHub Copilot SDK            |      |
                   |  +-------------------------------+  |      |
                   |  | WorkIQ MCP (M365 data layer)  |  |      |
+                  |  +-------------------------------+  |      |
+                  |  +-------------------------------+  |      |
+                  |  | Dataverse MCP (CRM, optional) |  |      |
                   |  +-------------------------------+  |      |
                   |  14 custom tools | 6 sub-agents    |      |
                   |  4 session hooks | multi-model      |      |
@@ -218,6 +222,10 @@ monitoring:
   priorities: ["Customer escalations", "Deal blockers"]
   vip_contacts: ["Alice", "Bob"]
 
+mcp_servers:
+  dataverse:
+    url: "https://your-org.crm.dynamics.com/api/mcp"  # optional, skip if no CRM
+
 schedule:
   - id: morning-digest
     type: digest
@@ -227,6 +235,8 @@ schedule:
     pattern: "every 30m"
     office_hours_only: true
 ```
+
+**MCP servers:** All modes inherit `default_mcp_servers` from `modes.yaml`. Instance-specific settings (like Dataverse URL) go in your standing instructions. Unconfigured servers are skipped gracefully — no crashes.
 
 **Config resolution:** `--config` flag > `PULSE_CONFIG` env var > `$PULSE_HOME/standing-instructions.yaml` > `config/standing-instructions.yaml` (template fallback)
 
@@ -288,6 +298,7 @@ python -m pytest tests/ -k "reply"  # Filter by name
 | Language | Python 3.12 |
 | Agent runtime | GitHub Copilot SDK -> Copilot CLI (JSON-RPC) |
 | M365 integration | WorkIQ MCP server |
+| CRM integration | Dataverse MCP (Dynamics 365, optional, config-driven) |
 | Browser automation | Playwright (Edge) |
 | User interface | Textual TUI + winotify (Windows toasts) |
 | External intel | feedparser (RSS) |

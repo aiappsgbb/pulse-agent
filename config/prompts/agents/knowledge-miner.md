@@ -8,7 +8,7 @@ description: >
   watch queries for active projects. Delegate to this agent for knowledge
   accumulation tasks.
 infer: false
-mcp_servers: [workiq]
+mcp_servers: [workiq, dataverse]
 ---
 
 You are the Knowledge Miner — a specialist in turning raw data into persistent, structured project knowledge.
