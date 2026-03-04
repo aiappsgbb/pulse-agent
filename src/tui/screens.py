@@ -26,7 +26,9 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Input, Label, ListItem, ListView, RichLog, Static, TextArea
 
-from core.constants import DIGESTS_DIR, PROJECTS_DIR, PULSE_HOME
+import re
+
+from core.constants import DIGESTS_DIR, INTEL_DIR, PROJECTS_DIR, PULSE_HOME, TRANSCRIPT_STATUS_FILE
 from tui.ipc import (
     add_note,
     archive_item,
@@ -57,6 +59,7 @@ PRIORITY_COLORS: dict[str, str] = {
 ORIGIN_COLORS: dict[str, str] = {
     "triage": "#FF44CC",
     "digest": "#00D4FF",
+    "intel": "#AACC00",
 }
 
 STATUS_LABELS: dict[str, str] = {
@@ -119,6 +122,95 @@ def _load_digest_items() -> list[dict]:
         return data.get("items", [])
     except Exception:
         return []
+
+
+def _load_intel_items() -> list[dict]:
+    """Load intel brief sections as inbox-compatible items.
+
+    Parses the latest intel markdown and creates one inbox item per section
+    (e.g., Moves & Announcements, Trends, Watch List). Each item contains
+    the section's bullet points in its summary.
+    """
+    if not INTEL_DIR.exists():
+        return []
+    files = sorted(INTEL_DIR.glob("*.md"), reverse=True)
+    if not files:
+        return []
+    try:
+        text = files[0].read_text(encoding="utf-8")
+        date = files[0].stem  # YYYY-MM-DD
+        lines = text.strip().split("\n")
+        sections: list[dict] = []
+        current: dict | None = None
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                current = {"title": stripped.lstrip("# ").strip(), "items": []}
+                sections.append(current)
+            elif current and (stripped.startswith("- ") or stripped.startswith("* ")):
+                # Remove leading "- " or "* " prefix only (not all - and * chars)
+                bullet_text = stripped[2:].strip() if len(stripped) > 2 else ""
+                current["items"].append(bullet_text)
+
+        result: list[dict] = []
+        for section in sections:
+            if not section["items"]:
+                continue
+            # Build readable summary from bullets
+            summary_lines = []
+            for bullet in section["items"]:
+                # Convert **Name** to plain bold for display
+                clean = re.sub(r"\*\*(.+?)\*\*", r"\1", bullet)
+                summary_lines.append(f"- {clean}")
+            result.append({
+                "id": f"intel-{date}-{section['title'].lower().replace(' ', '-')}",
+                "type": "intel",
+                "priority": "low",
+                "source": f"Intel Brief ({date})",
+                "title": f"Intel: {section['title']}",
+                "summary": "\n".join(summary_lines),
+                "date": date,
+                "status": "outstanding",
+                "_origin": "intel",
+            })
+        return result
+    except Exception:
+        return []
+
+
+def _load_digest_summary() -> dict | None:
+    """Load latest digest summary for the Today briefing line."""
+    if not DIGESTS_DIR.exists():
+        return None
+    files = sorted(DIGESTS_DIR.glob("*.json"), reverse=True)
+    if not files:
+        return None
+    try:
+        data = json.loads(files[0].read_text(encoding="utf-8"))
+        items = data.get("items", [])
+        outstanding = len([i for i in items if i.get("status") == "outstanding"])
+        new = len([i for i in items if i.get("_origin") == "new" or i.get("is_new")])
+        resolved = len([i for i in items if i.get("status") == "resolved"])
+        return {
+            "date": files[0].stem,
+            "outstanding": outstanding,
+            "new": new,
+            "resolved": resolved,
+            "total": len(items),
+        }
+    except Exception:
+        return None
+
+
+def _load_transcript_status() -> dict | None:
+    """Load transcript collection status."""
+    try:
+        if TRANSCRIPT_STATUS_FILE.exists():
+            data = json.loads(TRANSCRIPT_STATUS_FILE.read_text(encoding="utf-8"))
+            return data
+    except Exception:
+        pass
+    return None
 
 
 def _load_projects() -> list[dict]:
@@ -394,23 +486,25 @@ _PRIORITY_ORDER = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
 
 
 def _inbox_sort_key(item: dict) -> tuple:
-    """Sort: urgent first, then high, then triage before digest."""
+    """Sort: urgent first, then high; triage before digest before intel."""
     priority = item.get("priority", "medium").lower()
     origin = item.get("_origin", "digest")
+    origin_order = {"triage": 0, "digest": 1, "intel": 2}.get(origin, 1)
     return (
         _PRIORITY_ORDER.get(priority, 2),
-        0 if origin == "triage" else 1,
+        origin_order,
         item.get("title", ""),
     )
 
 
 def _load_inbox_items(include_dismissed: bool = False) -> tuple[list[dict], int]:
-    """Merge triage + digest items, dedup by ID, optionally include dismissed.
+    """Merge triage + digest + intel items, dedup by ID, optionally include dismissed.
 
     Returns (items, dismissed_count).
     """
     triage_items = _load_triage_items()
     digest_items = _load_digest_items()
+    intel_items = _load_intel_items()
     dismissed = load_dismissed_items()
     dismissed_ids = {d.get("item") for d in dismissed}
 
@@ -419,8 +513,9 @@ def _load_inbox_items(include_dismissed: bool = False) -> tuple[list[dict], int]
         item["_origin"] = "triage"
     for item in digest_items:
         item["_origin"] = "digest"
+    # intel_items already tagged with _origin = "intel" by _load_intel_items
 
-    # Merge: triage first (more recent), then digest. Dedup by ID.
+    # Merge: triage first (more recent), then digest, then intel. Dedup by ID.
     seen_ids: set[str] = set()
     active: list[dict] = []
     for item in triage_items:
@@ -431,6 +526,13 @@ def _load_inbox_items(include_dismissed: bool = False) -> tuple[list[dict], int]
             seen_ids.add(item_id)
         active.append(item)
     for item in digest_items:
+        item_id = item.get("id", "")
+        if item_id and (item_id in seen_ids or item_id in dismissed_ids):
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        active.append(item)
+    for item in intel_items:
         item_id = item.get("id", "")
         if item_id and (item_id in seen_ids or item_id in dismissed_ids):
             continue
@@ -1174,6 +1276,8 @@ class TodayPane(Widget):
         self._meeting_count: int = 0
         self._commitment_count: int = 0
         self._projects: list[dict] = []
+        self._digest_summary: dict | None = None
+        self._transcript_status: dict | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="today-header")
@@ -1185,9 +1289,11 @@ class TodayPane(Widget):
         self.load_data()
 
     def load_data(self) -> None:
-        """Reload calendar events + commitments from disk."""
+        """Reload calendar events + commitments + briefing from disk."""
         self._projects = _load_projects()
         self._items, self._meeting_count, self._commitment_count = _load_today_items(self._projects)
+        self._digest_summary = _load_digest_summary()
+        self._transcript_status = _load_transcript_status()
         self._refresh_header()
         self._refresh_list()
 
@@ -1213,6 +1319,9 @@ class TodayPane(Widget):
         self._list_to_item = []
         tw = self._title_width()
         today_iso = datetime.now().strftime("%Y-%m-%d")
+
+        # Compact briefing: digest summary + transcript status (1-2 lines)
+        self._render_briefing(lv)
 
         if not self._items:
             lv.append(ListItem(Label("[dim]No meetings or commitments for today[/dim]")))
@@ -1251,6 +1360,42 @@ class TodayPane(Widget):
 
             lv.append(ListItem(Label(text)))
             self._list_to_item.append(i)
+
+    def _render_briefing(self, lv: ListView) -> None:
+        """Render compact digest + transcript status at top of Today."""
+        parts: list[str] = []
+        ds = self._digest_summary
+        if ds:
+            date = ds.get("date", "?")
+            outstanding = ds.get("outstanding", 0)
+            new = ds.get("new", 0)
+            resolved = ds.get("resolved", 0)
+            parts.append(
+                f"[cyan]Digest[/cyan] ({date}) {outstanding} outstanding"
+                + (f", {new} new" if new else "")
+                + (f", [green]{resolved} resolved[/green]" if resolved else "")
+            )
+        ts = self._transcript_status
+        if ts:
+            collected = ts.get("collected", 0)
+            success = ts.get("success", False)
+            try:
+                dt = datetime.fromisoformat(ts.get("timestamp", ""))
+                hours_ago = int((datetime.now() - dt).total_seconds() / 3600)
+                age = f"{hours_ago}h ago" if hours_ago > 0 else "just now"
+            except Exception:
+                age = "?"
+            if success:
+                color = "#00CC88" if collected > 0 else "dim"
+                parts.append(f"[{color}]Transcripts[/{color}]: {collected} ({age})")
+            else:
+                parts.append(f"[red]Transcripts: failed ({age})[/red]")
+        if parts:
+            lv.append(ListItem(Label("[bold cyan]Briefing[/bold cyan]")))
+            self._list_to_item.append(-1)
+            for part in parts:
+                lv.append(ListItem(Label(f"  {part}")))
+                self._list_to_item.append(-1)
 
     def _fmt_meeting(self, item: dict, tw: int) -> str:
         start = item.get("start_time", "?")

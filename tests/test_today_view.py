@@ -579,3 +579,107 @@ class TestPersistCalendarScan:
             from sdk.runner import _persist_calendar_scan
             # Should not raise
             _persist_calendar_scan([{"title": "Test"}])
+
+
+# ---------------------------------------------------------------------------
+# Intel items for Inbox
+# ---------------------------------------------------------------------------
+
+
+class TestIntelItems:
+    def test_loads_intel_items_as_inbox_items(self, tmp_dir):
+        intel_dir = tmp_dir / "intel"
+        intel_dir.mkdir()
+        md = (
+            "# Intel Brief\n3 articles scanned\n\n"
+            "## Moves & Announcements\n- **CompA** released pricing\n- **CompB** hired CEO\n\n"
+            "## Trends\n- AI growing fast\n"
+        )
+        (intel_dir / "2026-03-04.md").write_text(md, encoding="utf-8")
+        with patch("tui.screens.INTEL_DIR", intel_dir):
+            from tui.screens import _load_intel_items
+            items = _load_intel_items()
+            assert len(items) == 2  # 2 sections with items
+            assert items[0]["type"] == "intel"
+            assert items[0]["_origin"] == "intel"
+            assert items[0]["priority"] == "low"
+            assert "Intel: Moves & Announcements" == items[0]["title"]
+            assert "CompA released pricing" in items[0]["summary"]
+            assert items[1]["title"] == "Intel: Trends"
+
+    def test_returns_empty_when_no_intel(self, tmp_dir):
+        intel_dir = tmp_dir / "intel"
+        intel_dir.mkdir()
+        with patch("tui.screens.INTEL_DIR", intel_dir):
+            from tui.screens import _load_intel_items
+            assert _load_intel_items() == []
+
+    def test_skips_empty_sections(self, tmp_dir):
+        intel_dir = tmp_dir / "intel"
+        intel_dir.mkdir()
+        md = "# Intel Brief\n\n## Empty Section\n\n## Has Items\n- one item\n"
+        (intel_dir / "2026-03-04.md").write_text(md, encoding="utf-8")
+        with patch("tui.screens.INTEL_DIR", intel_dir):
+            from tui.screens import _load_intel_items
+            items = _load_intel_items()
+            assert len(items) == 1
+            assert items[0]["title"] == "Intel: Has Items"
+
+    def test_intel_item_ids_are_stable(self, tmp_dir):
+        intel_dir = tmp_dir / "intel"
+        intel_dir.mkdir()
+        md = "# Intel Brief\n\n## Moves\n- item one\n"
+        (intel_dir / "2026-03-04.md").write_text(md, encoding="utf-8")
+        with patch("tui.screens.INTEL_DIR", intel_dir):
+            from tui.screens import _load_intel_items
+            items = _load_intel_items()
+            assert items[0]["id"] == "intel-2026-03-04-moves"
+
+
+# ---------------------------------------------------------------------------
+# Digest summary + transcript status for Today briefing
+# ---------------------------------------------------------------------------
+
+
+class TestDigestSummary:
+    def test_loads_digest_summary(self, tmp_dir):
+        digests_dir = tmp_dir / "digests"
+        digests_dir.mkdir()
+        data = {"items": [
+            {"status": "outstanding", "priority": "high"},
+            {"status": "outstanding", "priority": "low"},
+            {"status": "resolved"},
+        ]}
+        (digests_dir / "2026-03-04.json").write_text(json.dumps(data), encoding="utf-8")
+        with patch("tui.screens.DIGESTS_DIR", digests_dir):
+            from tui.screens import _load_digest_summary
+            result = _load_digest_summary()
+            assert result is not None
+            assert result["date"] == "2026-03-04"
+            assert result["outstanding"] == 2
+            assert result["total"] == 3
+
+    def test_returns_none_when_no_digests(self, tmp_dir):
+        digests_dir = tmp_dir / "digests"
+        digests_dir.mkdir()
+        with patch("tui.screens.DIGESTS_DIR", digests_dir):
+            from tui.screens import _load_digest_summary
+            assert _load_digest_summary() is None
+
+
+class TestTranscriptStatus:
+    def test_loads_transcript_status(self, tmp_dir):
+        status_file = tmp_dir / ".transcript-collection-status.json"
+        data = {"success": True, "collected": 5, "errors": 0, "timestamp": "2026-03-04T08:00:00"}
+        status_file.write_text(json.dumps(data), encoding="utf-8")
+        with patch("tui.screens.TRANSCRIPT_STATUS_FILE", status_file):
+            from tui.screens import _load_transcript_status
+            result = _load_transcript_status()
+            assert result is not None
+            assert result["collected"] == 5
+
+    def test_returns_none_when_no_status(self, tmp_dir):
+        status_file = tmp_dir / ".nonexistent-status.json"
+        with patch("tui.screens.TRANSCRIPT_STATUS_FILE", status_file):
+            from tui.screens import _load_transcript_status
+            assert _load_transcript_status() is None
