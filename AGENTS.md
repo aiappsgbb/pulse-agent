@@ -2,7 +2,7 @@
 
 This file defines agent behavior for the GitHub Copilot SDK Enterprise Challenge submission.
 
-See [CLAUDE.md](CLAUDE.md) for full architecture and design decisions.
+See the project README for architecture and design decisions.
 
 ## Agent Identity
 
@@ -95,7 +95,7 @@ Defined in `config/prompts/agents/` as markdown files with YAML front-matter:
 
 ## Tools
 
-Agent can use built-in GHCP SDK tools (file system, browser, shell) plus 13 custom tools:
+Agent can use built-in GHCP SDK tools (file system, browser, shell) plus 15 custom tools:
 - `write_output` -- write files to $PULSE_HOME (path traversal blocked)
 - `queue_task` -- add a job to jobs/pending/ (digest, research, transcripts, intel)
 - `dismiss_item` -- mark a digest item as handled (won't appear in future digests)
@@ -109,6 +109,8 @@ Agent can use built-in GHCP SDK tools (file system, browser, shell) plus 13 cust
 - `send_teams_message` -- queue a Teams message for deterministic delivery via shared browser
 - `send_email_reply` -- queue an email reply for deterministic delivery via shared browser
 - `send_task_to_agent` -- send a task/question to another team member's Pulse Agent via OneDrive
+- `save_config` -- save standing instructions config from onboarding conversation
+- `sweep_inbox` -- mark Teams chats and Outlook emails as read via browser automation
 
 All tool usage is automatically logged to the JSONL audit trail via `on_post_tool_use` session hook -- no manual logging tool needed.
 

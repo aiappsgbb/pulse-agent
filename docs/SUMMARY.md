@@ -1,7 +1,9 @@
 # Pulse Agent — 150-Word Summary
 
-Knowledge workers are drowning in information: 8 meetings a day with 20% retention, 50 unread email threads, competitor moves at 2 AM. Copilot helps when you ask — **Pulse Agent works when you don't.**
+Knowledge workers drown in information: 8 meetings a day with 20% retention, 50 unread email threads, competitor moves at 2 AM. Copilot helps when you ask — **Pulse Agent works when you don't.**
 
-Built on the GitHub Copilot SDK, Pulse Agent is a local-first autonomous daemon that processes everything you can't: meeting transcripts (extracted via Playwright from Teams), inbox messages, emails, documents, and industry news. It runs 24/7, cross-references what needs attention against what you've already handled via WorkIQ, and delivers a concise digest when you need it — typically 30 lines, not 400.
+Built on the GitHub Copilot SDK, Pulse Agent is an autonomous daemon that runs 24/7 — collecting Teams transcripts via Playwright, scanning inboxes, processing documents, and fetching industry news. WorkIQ cross-references what's outstanding, delivering a 30-line digest instead of 400 unread items.
 
-The system features real-time triage with one-tap action buttons, persistent project memory with commitment tracking, inter-agent team communication via OneDrive, and a Textual TUI dashboard. Four session hooks provide automatic audit trails, path guardrails, error recovery, and metrics. 590 tests validate browser selectors against real DOM, prompt-to-code contracts, and full reply round-trips.
+Triage runs every 30 minutes with one-tap reply buttons: review an AI-drafted response and send it without leaving the TUI. Persistent project memory tracks commitments and deadlines across engagements. Twenty-plus team agents collaborate via OneDrive — "ask Esther about Vodafone" gets an answer in 60 seconds. Inbox sweep clears the noise so Pulse becomes your single source of truth.
+
+Seven modes. Fifteen custom tools. 854 tests. Zero prompting required.

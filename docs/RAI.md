@@ -20,7 +20,7 @@ Pulse Agent processes content through multiple paths. It is important to underst
 - **WorkIQ** only accesses data within the user's own M365 permission scope — meetings they attended, emails they received, Teams channels they're in
 - **Playwright browser automation** uses the user's own authenticated Edge session — no service accounts, no elevated privileges
 - **Local file scanning** only processes folders explicitly configured in `standing-instructions.yaml`
-- **Inter-agent communication** uses explicit OneDrive file exchange — no hidden data sharing
+- **Inter-agent communication** uses explicit OneDrive file exchange — no hidden data sharing. Only configured team members can receive tasks, and all inter-agent requests/responses are logged to the audit trail
 
 ## Human-in-the-Loop Controls
 
@@ -68,8 +68,11 @@ The agent has no tools to delete user files, cancel meetings, or remove content.
 - `write_output` creates new files
 - `update_project` creates or updates (never deletes) project memory
 - `dismiss_item` marks items as handled (soft state, auto-expires after 30 days)
+- `sweep_inbox` marks messages as read (does not delete or archive them)
 
-**Exception:** Transcript compression deletes the original raw `.txt` file after successfully producing a compressed `.md` version. This is the only destructive file operation.
+**Exceptions:**
+- Transcript compression deletes the original raw `.txt` file after successfully producing a compressed `.md` version.
+- Inbox sweep marks items as read (changes unread state in Teams/Outlook), but never deletes messages.
 
 ### Minimum Interval Guards
 Recurring schedules enforce a minimum 5-minute interval to prevent runaway loops.

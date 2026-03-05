@@ -13,7 +13,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node.js-20+-339933.svg?logo=nodedotjs&logoColor=white" alt="Node.js 20+" /></a>
   <a href="https://github.com/features/copilot"><img src="https://img.shields.io/badge/GitHub%20Copilot%20SDK-8957e5.svg?logo=github&logoColor=white" alt="GitHub Copilot SDK" /></a>
   <a href="https://www.microsoft.com/en-us/microsoft-365"><img src="https://img.shields.io/badge/Microsoft%20365-WorkIQ-D83B01.svg?logo=microsoft&logoColor=white" alt="WorkIQ" /></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-690-brightgreen.svg?logo=pytest&logoColor=white" alt="690 Tests" /></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-854-brightgreen.svg?logo=pytest&logoColor=white" alt="854 Tests" /></a>
 </p>
 
 ---
@@ -35,15 +35,15 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 **Autonomous.** Runs on a schedule you control -- morning digests, 30-minute inbox triage, overnight knowledge mining. No prompting required.
 
-**Cross-referencing.** Everything is checked against what you've already handled. Replied to that email? Gone. Attended a meeting with no open actions? Gone. A typical digest is 30 lines, not 400.
+**Cross-referencing.** Everything is checked against what you've already handled via WorkIQ. Replied to that email? Gone. Meeting with no open actions? Gone. A typical digest is 30 lines, not 400.
 
-**Actionable.** Triage items include drafted replies. Press `r`, review the draft, hit Enter to send. Deterministic Playwright automation -- no LLM in the send path.
+**Actionable.** Triage items include AI-drafted replies. Press `r`, review the draft, hit Enter to send. Deterministic Playwright automation -- no LLM in the send path. Then sweep your inbox clean with one command.
 
-**Team-aware.** Multiple agents communicate via OneDrive. *"Ask Esther what context she has on the Vodafone deal"* -- her agent picks it up within 60 seconds and sends the answer back.
+**Multi-agent collaboration.** 20+ team agents communicate autonomously via OneDrive. *"Ask Esther what context she has on the Vodafone deal"* -- her agent searches her transcripts and projects, and sends the answer back within 60 seconds. No infrastructure, no APIs -- just file-based messaging across OneDrive.
 
-**Project memory.** Persistent per-engagement context with commitment tracking. Overdue items and approaching deadlines surface automatically.
+**Project memory.** Auto-discovered per-engagement context with commitment tracking. Stakeholders, deadlines, risk levels. Overdue items surface automatically in your Today view.
 
-**Intel.** RSS feeds filtered for your topics and competitors. Curated, not a firehose.
+**Intel.** RSS feeds filtered for your topics and competitors. Product launches, pricing changes, regulatory moves -- curated, not a firehose.
 
 ---
 
@@ -51,27 +51,25 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 | Time | What happens |
 |------|-------------|
-| **7:00 AM** | Morning digest -- transcripts, emails, Teams messages, filtered to what's outstanding |
-| **Every 30 min** | Inbox triage -- unread Teams + Outlook with drafted replies you can send in one tap |
+| **7:00 AM** | Morning digest -- transcripts, emails, Teams, docs, RSS, filtered to what's outstanding |
+| **Every 30 min** | Inbox triage -- unread Teams + Outlook with AI-drafted replies you can send in one tap |
 | **9:00 AM** | Intel brief -- RSS feeds filtered for your topics and competitors |
-| **Overnight** | Knowledge mining -- archives communications, enriches project memory |
+| **2:00 AM** | Knowledge mining -- archives communications, enriches project memory with commitments |
+| **On demand** | Inbox sweep -- clears FYI/low-priority items so Pulse becomes your single source of truth |
+| **Anytime** | Chat -- *"What did Fatos say about Vodafone?"* -- searches your transcripts, emails, and M365 |
 
 ### The TUI
 
-Four tabs:
+Five-tab dashboard:
 
-- **Inbox** -- merged triage + digest items, sorted by priority. `d` to dismiss, `r` to reply, `n` to add a note.
-- **Projects** -- per-engagement memory with commitment tracking and deadlines.
-- **Jobs** -- live view of running, pending, and completed jobs with activity logs.
-- **Chat** -- ask anything. *"What did Fatos say about Vodafone?"* -- searches transcripts, emails, and M365 via WorkIQ.
+- **Today** -- your meetings, your commitments (only yours, not other people's tasks), digest/intel briefing summary. Completed items shown with strikethrough.
+- **Inbox** -- merged triage + digest items, sorted by priority. `d` to dismiss, `r` to reply with AI-drafted response, `n` to add a note.
+- **Projects** -- auto-discovered per-engagement memory with stakeholders, commitments, risk levels, and deadlines. Sortable, filterable.
+- **Jobs** -- live view of running, pending, and completed jobs with per-job activity logs.
+- **Chat** -- natural language queries with streaming replies. Access to WorkIQ, local file search, and browser actions.
 
-Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel), `Ctrl+X` (transcripts).
+Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel), `Ctrl+X` (transcripts), `Ctrl+M` (inbox sweep).
 
-<!-- TODO: Add TUI screenshot
-<p align="center">
-  <img src="assets/screenshot-tui.png" alt="Pulse Agent TUI" width="700" />
-</p>
--->
 
 ---
 
@@ -79,7 +77,7 @@ Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel)
 
 ### Option A: AI-assisted setup (recommended)
 
-Open **GitHub Copilot Chat**, **Claude Code**, or any AI coding assistant and paste this:
+Open **GitHub Copilot Chat** or any AI coding assistant and paste this:
 
 > Follow the instructions at https://github.com/aiappsgbb/pulse-agent/blob/main/SETUP.md to set up Pulse Agent on my machine.
 
@@ -150,8 +148,8 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
                              |        |            |          |
                   +----------v--------v------------v---+      |
                   |        Data Collection (no LLM)    |      |
-                  |  Transcripts | Inbox | Calendar    |      |
-                  |  Unread scan | Event scan          |      |
+                  |  Transcripts | Inbox scan          |      |
+                  |  Calendar | Sweep | Send/Reply     |      |
                   +----------------+-------------------+      |
                                    |                          |
                   +----------------v-------------------+      |
@@ -162,7 +160,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
                   |  +-------------------------------+  |      |
                   |  | Dataverse MCP (CRM, optional) |  |      |
                   |  +-------------------------------+  |      |
-                  |  14 custom tools | 6 sub-agents    |      |
+                  |  15 custom tools | 6 sub-agents    |      |
                   |  4 session hooks | multi-model      |      |
                   +----------------+-------------------+      |
                                    |                          |
@@ -174,8 +172,8 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
                                        |
                   +--------------------v-------------------------+
                   |              Textual TUI                      |
-                  |  Inbox | Projects | Jobs | Chat               |
-                  |  + winotify (Windows toast notifications)      |
+                  |  Today | Inbox | Projects | Jobs | Chat       |
+                  |  + winotify toast alerts + inter-agent comms   |
                   +----------------------------------------------+
 ```
 
@@ -183,9 +181,9 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 | Layer | What | Technology |
 |-------|------|-----------|
-| **Collection** | Scrapes Teams transcripts, inboxes, calendar -- real-time state that APIs can't provide | Playwright + Edge (your authenticated session) |
-| **Intelligence** | Triages, cross-references, drafts replies, tracks commitments, mines knowledge | GitHub Copilot SDK + WorkIQ MCP + 14 custom tools |
-| **Delivery** | 4-tab TUI, streaming chat, Windows toasts, OneDrive sync across team | Textual + winotify + OneDrive for Business |
+| **Collection** | Scrapes Teams transcripts, scans inboxes + calendar, sends replies, sweeps read items -- real-time state that APIs can't provide | Playwright + Edge (your authenticated session) |
+| **Intelligence** | Triages, cross-references via WorkIQ, drafts replies, tracks commitments, mines knowledge, discovers projects | GitHub Copilot SDK + WorkIQ MCP + Dataverse MCP + 15 custom tools |
+| **Delivery** | 5-tab TUI (Today/Inbox/Projects/Jobs/Chat), streaming chat, Windows toasts, inter-agent collaboration | Textual + winotify + OneDrive for Business |
 
 Everything runs as a single Python daemon with three concurrent tasks: **scheduler** (cron-like patterns + OneDrive job sync), **worker** (one SDK session at a time), and **TUI backend** (status, chat, toasts). All output to `$PULSE_HOME` on OneDrive -- no cloud backend, no external services beyond Microsoft.
 
@@ -195,13 +193,13 @@ Everything runs as a single Python daemon with three concurrent tasks: **schedul
 
 | Mode | Command | What It Does |
 |------|---------|-------------|
-| Transcript Collection | `--mode transcripts` | Scrapes Teams Calendar for recorded meetings, compresses transcripts to structured notes |
-| Digest | `--mode digest` | Scans all sources, generates a filtered digest with action buttons |
-| Triage | `--mode monitor` | Inbox triage with one-tap reply/dismiss/note actions |
-| Research | `--mode research` | Autonomous deep research (60 min timeout) |
-| Intel | `--mode intel` | RSS feeds filtered for relevance, concise brief |
-| Chat | TUI chat tab | Natural language queries with streaming replies |
-| Knowledge Mining | `--mode knowledge` | Overnight: archive communications, enrich project memory |
+| Transcript Collection | `--mode transcripts` | Scrapes Teams Calendar for recorded meetings, compresses 20K-char transcripts to 2K structured notes |
+| Digest | `--mode digest` | Scans transcripts, emails, Teams, docs, RSS -- generates filtered digest with 1-tap action buttons |
+| Triage | `--mode monitor` | 30-min inbox triage: scans Teams + Outlook, drafts replies, produces actionable JSON |
+| Research | `--mode research` | Autonomous deep research with full local + M365 access (60 min timeout) |
+| Intel | `--mode intel` | RSS feeds filtered for relevance, generates concise competitive intelligence brief |
+| Chat | TUI chat tab | Natural language queries with streaming replies, local search + WorkIQ |
+| Knowledge Mining | `--mode knowledge` | Overnight pipeline: archive emails/Teams, discover projects, enrich per-engagement memory |
 
 Run any mode standalone: `python src/pulse.py --mode digest --once`
 
@@ -242,9 +240,9 @@ schedule:
 
 ---
 
-## Inter-Agent Communication
+## Multi-Agent Team Collaboration
 
-Multiple team members can run Pulse Agent and send tasks to each other via OneDrive. No infrastructure needed -- just file-based messaging.
+Multiple team members run their own Pulse Agent daemons. Agents communicate autonomously via OneDrive -- no servers, no APIs, no infrastructure. Just file-based async messaging with ~60 second latency.
 
 ```yaml
 # In standing-instructions.yaml
@@ -255,7 +253,11 @@ team:
     alias: "fatos"
 ```
 
-From chat: *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder, her agent picks it up within 60 seconds, processes it, and sends the response back.
+**From chat:** *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder. Her agent picks it up, searches her transcripts and project memory, and sends the answer back. You get a toast notification with the result.
+
+**Supported task types:** questions (instant chat query), research (deep 60-min investigation), intel (competitive brief), review (document/proposal feedback).
+
+**Graceful degradation:** If a teammate's laptop is off, the task YAML sits in their OneDrive folder until they come back online. No timeouts, no connection errors.
 
 ---
 
@@ -273,7 +275,7 @@ See [docs/RAI.md](docs/RAI.md) for full details and honest limitations.
 
 ## Testing
 
-690 tests covering real browser selectors, prompt-to-code contracts, TTL/staleness, streaming IPC, and full reply round-trips.
+854 tests covering real browser selectors, prompt-to-code contracts, TTL/staleness, streaming IPC, and full reply round-trips.
 
 ```bash
 python -m pytest tests/ -q          # Run all
@@ -283,11 +285,22 @@ python -m pytest tests/ -k "reply"  # Filter by name
 
 | Suite | Tests | What it validates |
 |-------|-------|-------------------|
+| Today view | 59 | Commitment filtering, done visibility, briefing loaders |
 | Browser selectors | 57 | Real JavaScript against real DOM in headless Chromium |
+| Tools | 62 | All 15 tool handlers + path traversal security + inter-agent |
+| Runner | 49 | Trigger variables, carry-forward, pre-process, project loading |
+| Transcript collection | 46 | Polling, tri-state extraction, slug pruning, date parsing |
+| Mark-as-read / Sweep | 45 | Teams + Outlook mark-read + inbox sweep orchestration |
+| TTL & IPC | 30 | Carry-forward staleness, dismiss expiry, streaming chat |
 | Reply flow | 43 | Full TUI -> YAML -> worker round-trip |
+| Hooks | 40 | Audit trail, guardrails, error recovery, session metrics |
+| Scheduler | 39 | Config-driven patterns, office hours, CRUD operations |
+| Projects pane | 35 | TUI project display, sorting, filtering, status changes |
+| Jobs tab | 35 | Job history, activity logs, completion notifications |
+| Hardening | 32 | Atomic writes, auth detection, crash recovery |
 | Dedup defense | 25 | 3-layer dedup + CKEditor draft contamination |
+| Onboarding | 25 | First-run detection, chat flow, config save |
 | Contracts | 15 | Prompt schema matches code that parses LLM output |
-| TTL & IPC | 45 | Carry-forward staleness, dismiss expiry, streaming chat |
 
 ---
 
@@ -322,7 +335,8 @@ python -m pytest tests/ -k "reply"  # Filter by name
 
 ## Further Reading
 
-- [CLAUDE.md](CLAUDE.md) -- full architecture, technical deep-dives, design decisions
+- [3-minute demo video](https://youtu.be/E-IltXvRNkc)
 - [AGENTS.md](AGENTS.md) -- agent behavior instructions
 - [docs/RAI.md](docs/RAI.md) -- responsible AI notes
 - [docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md) -- GitHub Copilot SDK product feedback
+- [docs/SUMMARY.md](docs/SUMMARY.md) -- 150-word project summary

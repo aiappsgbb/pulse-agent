@@ -37,3 +37,8 @@ input/
 output/
 tasks/completed/
 .mcp*
+presentations/
+
+# Build scripts (internal tooling, not shipped)
+scripts/
+docs/*.docx

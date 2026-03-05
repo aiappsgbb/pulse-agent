@@ -21,7 +21,7 @@ from core.logging import safe_encode
 
 def test_project_root_exists():
     assert PROJECT_ROOT.exists()
-    assert (PROJECT_ROOT / "CLAUDE.md").exists()
+    assert (PROJECT_ROOT / "README.md").exists()
 
 
 def test_path_relationships():

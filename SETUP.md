@@ -285,7 +285,7 @@ If Pulse Agent is already installed and you need to update to the latest version
 
 ### AI-Assisted Upgrade (Recommended)
 
-Open a terminal in the Pulse Agent repo folder, then paste this into GitHub Copilot Chat, Claude Code, or any AI assistant with terminal access:
+Open a terminal in the Pulse Agent repo folder, then paste this into GitHub Copilot Chat or any AI assistant with terminal access:
 
 > "Pull the latest Pulse Agent code, update dependencies, and verify everything works. The repo is https://github.com/aiappsgbb/pulse-agent.git"
 
