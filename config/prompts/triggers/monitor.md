@@ -1,0 +1,104 @@
+Run a 30-minute triage cycle NOW. Focus on the LAST 60 MINUTES only — not the whole day.
+
+## Teams Inbox Scan (from Playwright — real-time)
+
+{{teams_inbox}}
+
+## Outlook Inbox Scan (from Playwright — real-time)
+
+{{outlook_inbox_block}}
+
+## This Week's Calendar (from Playwright — real-time)
+
+{{calendar_block}}
+
+{{dismissed_block}}
+
+## Your Task
+
+Priority order: Teams messages first (from scan above + WorkIQ), then emails (cross-reference with Outlook scan above), then upcoming meetings (cross-reference with Calendar scan above).
+
+**CRITICAL: Dismissed items filter.** If any item matches one of the Previously Dismissed Items above (by ID or by title/subject), do NOT include it in the output. The user already handled or dismissed these — re-surfacing them is a bug.
+
+### Step 0: Search Local Context
+Before triaging, use `search_local_files` to look up any names or topics from the Teams inbox scan in your local transcripts. This gives you meeting context about what was recently discussed with each person.
+
+### Step 1: Process Teams Inbox Results
+For EACH unread Teams message from the scan above:
+1. Search local files for the sender's name and any keywords from the message preview
+2. Query WorkIQ for additional context about the sender (who are they, recent interactions, related threads)
+3. Query WorkIQ for the full message content if the preview is truncated
+4. Determine: is this person waiting for MY reply?
+5. If yes: draft a specific suggested reply based on the context you found
+
+### Step 2: Check Emails
+Start with the Outlook Inbox Scan above — this shows what's ACTUALLY unread right now.
+Then ask WorkIQ: "Show me emails in the last 60 minutes where I am in the TO field (not CC) and someone is asking ME to do something or reply."
+Cross-reference: if the Outlook scan shows an unread email, it's real. If WorkIQ mentions an email not in the scan, verify before including.
+
+For each result, query for sender context and suggest an action.
+
+### Step 3: Upcoming Meetings
+Start with the Calendar scan above — this shows today's actual schedule.
+Then ask WorkIQ: "What meetings do I have in the next 2 hours? Any prep needed?"
+Use both sources — the calendar scan has times and organizers, WorkIQ may have agenda details.
+
+Make at least 5 separate WorkIQ queries. Write the report to monitoring-YYYY-MM-DDTHH-MM.md.
+
+If nothing new happened in the last hour AND no unread Teams messages, write "All quiet — no new items" and finish quickly.
+
+## Output Format
+
+After writing the monitoring report, you MUST also write a structured JSON file using `write_output` to `monitoring-YYYY-MM-DDTHH-MM.json` with this exact schema:
+
+```json
+{
+  "timestamp": "YYYY-MM-DDTHH:MM",
+  "items": [
+    {
+      "id": "<type>-<slug>",
+      "type": "reply_needed|action_needed|meeting_prep|fyi",
+      "priority": "urgent|high|medium|low",
+      "source": "Teams: <person/channel> | Email: <sender> | Calendar: <meeting>",
+      "summary": "<1-2 sentences: what they need FROM ME>",
+      "context": "<brief context from transcripts/WorkIQ — what I should know before acting>",
+      "suggested_actions": [
+        {
+          "label": "<short button label, max 30 chars>",
+          "action_type": "draft_teams_reply|send_email_reply|schedule_meeting|dismiss|schedule_followup",
+          "draft": "<the actual draft message text if this is a reply action, or empty string>",
+          "target": "<person name or channel>",
+          "metadata": "<optional: for schedule_meeting, include attendees + duration + subject>"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "teams_unread": 0,
+    "emails_actioned": 0,
+    "meetings_upcoming": 0
+  }
+}
+```
+
+Rules for item IDs:
+- Format: lowercase, hyphens only, derived from type + key entity. E.g. `reply-sender-subject-slug`, `email-sender-topic-slug`.
+- **ID STABILITY IS CRITICAL.** The user dismisses items by ID. If you generate a different ID for the same item, it reappears after dismiss — this is a bug.
+- Check the Previously Dismissed Items list above. If an item you're about to output matches a dismissed item (same person + same topic), do NOT output it — it's already handled.
+- If you must output an item that was previously seen (e.g. re-escalation), reuse the same ID format.
+
+Rules for the JSON:
+- Every `reply_needed` item MUST have at least one `suggested_actions` entry with a drafted reply
+- The `draft` field should be a complete, ready-to-send message (not a placeholder)
+- Use context from local files and WorkIQ to make drafts specific and informed
+- Keep drafts concise and professional — match the sender's tone
+- Write the JSON AFTER the markdown report
+
+**PREFER Teams over email for all internal/Microsoft contacts.** Use `draft_teams_reply` as the default — even if the original message came via email. Only use `send_email_reply` for external contacts who are NOT on Teams.
+
+Action types:
+- `draft_teams_reply` — reply via Teams (DEFAULT for internal contacts, even if original was email)
+- `send_email_reply` — reply via Outlook email (ONLY for external contacts not on Teams)
+- `schedule_meeting` — schedule a meeting via M365 Copilot (uses meeting-scheduler skill). Put attendees, duration, and subject in `metadata`.
+- `dismiss` — mark item as handled (no further action)
+- `schedule_followup` — remind later (no immediate action)

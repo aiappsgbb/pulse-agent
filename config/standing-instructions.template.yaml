@@ -1,0 +1,174 @@
+# ============================================================================
+# Pulse Agent — Standing Instructions (template)
+# ============================================================================
+# This template is copied to $PULSE_HOME/standing-instructions.yaml on first
+# run. Edit the copy — not this file. Search for "TODO" to find fields that
+# need your input.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# TODO: Fill in your identity — the agent uses this to personalize digests,
+#       sign inter-agent messages, and filter what matters to you.
+# ---------------------------------------------------------------------------
+user:
+  name: "TODO: Your Full Name"
+  email: "TODO: you@example.com"
+  role: "TODO: Your job title / role"
+  org: "TODO: Your organization"
+  focus: |
+    TODO: A short paragraph about what you do — helps the agent understand
+    which topics, customers, and technologies are relevant to you.
+  what_matters:
+    - "TODO: What kind of information should surface in your digest?"
+    - "Customer deals and escalations"
+    - "Unreplied messages where someone is waiting for my response"
+  what_is_noise:
+    - "TODO: What should the agent filter out?"
+    - "Org-wide FYI announcements I'm CC'd on"
+    - "Automated notifications from systems unless about my active work"
+
+# ---------------------------------------------------------------------------
+# Schedule — when the agent runs each mode automatically.
+# Patterns: "daily HH:MM", "weekdays HH:MM", "every Nh", "every Nm"
+# ---------------------------------------------------------------------------
+schedule:
+  - id: morning-digest
+    type: digest
+    pattern: "daily 07:00"
+    description: "Morning digest — project-oriented summary of overnight activity"
+  - id: triage
+    type: monitor
+    pattern: "every 30m"
+    description: "Inbox triage every 30 minutes"
+    office_hours_only: true
+  - id: daily-intel
+    type: intel
+    pattern: "daily 09:00"
+    description: "Morning intel brief"
+  - id: nightly-knowledge
+    type: knowledge
+    pattern: "daily 02:00"
+    description: "Overnight knowledge mining — archive emails/Teams, enrich projects"
+
+# ---------------------------------------------------------------------------
+# Monitoring — triage behavior and office hours.
+# ---------------------------------------------------------------------------
+monitoring:
+  office_hours:
+    start: "08:00"
+    end: "18:00"
+    days: [1, 2, 3, 4, 5]  # Mon-Fri (1=Mon, 7=Sun)
+  priorities:
+    - "Flag urgent emails"
+    - "Draft responses to emails that need a reply"
+    - "Prep briefs for meetings in the next 24 hours"
+    - "Track action items — nudge after 3 days"
+    - "Surface conflicts and things I'm probably missing"
+  autonomy:
+    auto_send: false
+    auto_send_low_risk: true
+    max_nudges: 2
+  # Inbox sweep: mark unimportant items as read in Teams/Outlook
+  # so Pulse Agent becomes your single source of truth.
+  # Manual sweep (chat: "clear my messages" / TUI: Ctrl+M) always works.
+  sweep:
+    enabled: false              # Auto-sweep after each triage cycle (opt-in)
+    sweep_types: ["fyi"]        # Item types to auto-mark as read
+    max_priority: "low"         # Only sweep at or below this priority
+    never_sweep: ["reply_needed", "escalation"]  # Never auto-sweep these
+
+# ---------------------------------------------------------------------------
+# Digest — what content folders to scan.
+# Paths are relative to $PULSE_HOME.
+# ---------------------------------------------------------------------------
+digest:
+  input_paths:
+    - path: "transcripts"
+      type: "transcripts"
+    - path: "documents"
+      type: "documents"
+    - path: "emails"
+      type: "emails"
+  supported_extensions: [".vtt", ".txt", ".md", ".docx", ".pptx", ".pdf", ".xlsx", ".csv", ".eml"]
+  incremental: true
+  state_file: ".digest-state.json"
+  priorities:
+    - "Revenue deals and customer escalations"
+    - "Unreplied messages where someone is waiting for MY response"
+    - "Commitments I made in meetings that I haven't delivered on yet"
+    - "Key decisions made in meetings I missed"
+
+# ---------------------------------------------------------------------------
+# MCP Servers — instance-specific settings for external data sources.
+# Server names must match entries in modes.yaml default_mcp_servers.
+# Servers referenced by modes/agents but missing here are skipped gracefully.
+# ---------------------------------------------------------------------------
+mcp_servers:
+  # Dataverse (Dynamics 365 / CRM) — uncomment and set your org's URL to enable.
+  # dataverse:
+  #   url: "https://your-org.crm.dynamics.com/api/mcp"
+
+# ---------------------------------------------------------------------------
+# Transcripts — browser-based collection from Teams.
+# ---------------------------------------------------------------------------
+transcripts:
+  lookback_days: 7
+  lookback_weeks: 2
+  max_per_run: 20
+  output_dir: "transcripts"
+  playwright:
+    user_data_dir: "$LOCALAPPDATA/ms-playwright/mcp-msedge-profile"
+
+# ---------------------------------------------------------------------------
+# Intelligence — RSS feeds and competitor tracking.
+# ---------------------------------------------------------------------------
+intelligence:
+  lookback_hours: 48
+  max_articles: 200
+  state_file: ".intel-state.json"
+  topics:
+    - "TODO: Add topics relevant to your work"
+    - "AI Agents"
+    - "LLM"
+  competitors:
+    - company: "TODO: Competitor 1"
+      watch: ["pricing", "new services", "enterprise wins"]
+  feeds:
+    # Google News (broad coverage)
+    - url: "https://news.google.com/rss/search?q=artificial+intelligence+LLM+agents&when:2d&hl=en-US&gl=US&ceid=US:en"
+      name: "Google News — AI/LLM/Agents"
+    # Curated tech feeds
+    - url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+      name: "TechCrunch AI"
+    - url: "https://arstechnica.com/ai/feed/"
+      name: "Ars Technica AI"
+    # Vendor blogs
+    - url: "https://openai.com/blog/rss.xml"
+      name: "OpenAI Blog"
+    # TODO: Add feeds relevant to your industry / customers
+
+# ---------------------------------------------------------------------------
+# TODO: Team directory — needed for inter-agent communication.
+#       Each entry needs just: name and alias. Paths are convention-based —
+#       everyone's data lives at $OneDriveCommercial/Documents/Pulse-Team/{alias}/
+#       Leave empty if you're running solo.
+# ---------------------------------------------------------------------------
+team: []
+  # Example:
+  # - name: "Jane Doe"
+  #   alias: "jane"
+  # - name: "Bob Smith"
+  #   alias: "bob"
+
+# ---------------------------------------------------------------------------
+# Models — which model to use for each mode.
+# Values: gpt-4.1, claude-sonnet, claude-opus, etc.
+# ---------------------------------------------------------------------------
+models:
+  triage: "claude-sonnet"
+  digest: "claude-sonnet"
+  intel: "claude-sonnet"
+  research: "claude-opus"
+  transcripts: "claude-sonnet"
+  chat: "claude-opus"
+  default: "claude-sonnet"

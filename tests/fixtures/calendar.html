@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head><title>Outlook Calendar</title></head>
+<body>
+<div role="main" aria-label="Calendar">
+  <!-- Regular Teams meeting -->
+  <div aria-label="Apex AI Deep Dive workshop, 12:00 PM to 1:00 PM, Tuesday, March 3, 2026, Microsoft Teams Meeting, By Sarah Chen, Busy">
+    Apex AI Deep Dive workshop
+    12:00 PM - 1:00 PM
+  </div>
+
+  <!-- Recurring meeting -->
+  <div aria-label="Weekly Standup, 9:00 AM to 9:30 AM, Monday, March 3, 2026, Microsoft Teams Meeting, By Artur Zielinski, Busy, Recurring event">
+    Weekly Standup
+    9:00 AM - 9:30 AM
+  </div>
+
+  <!-- Declined meeting -->
+  <div aria-label="Declined: Optional Training Session, 2:00 PM to 3:00 PM, Wednesday, March 5, 2026, Microsoft Teams Meeting, By HR Team, Free">
+    Declined: Optional Training Session
+    2:00 PM - 3:00 PM
+  </div>
+
+  <!-- Non-Teams meeting (no Teams flag) -->
+  <div aria-label="Lunch with Client, 12:30 PM to 1:30 PM, Thursday, March 6, 2026, By External Partner, Tentative">
+    Lunch with Client
+    12:30 PM - 1:30 PM
+  </div>
+
+  <!-- Meeting with event keyword -->
+  <div aria-label="Bet365 KYC solution design meeting, 10:30 AM to 11:30 AM, Tuesday, March 3, 2026, Microsoft Teams Meeting, By Fatos Ismali, Busy">
+    Bet365 KYC solution design meeting
+    10:30 AM - 11:30 AM
+  </div>
+
+  <!-- "+N more events" button -->
+  <button aria-label="+2 more events">+2 more events</button>
+
+  <!-- Hidden events that appear after clicking +N -->
+  <div aria-label="FCG Tech Validation, 11:00 AM to 12:00 PM, Wednesday, March 5, 2026, Microsoft Teams Meeting, By Customer Team, Busy" style="display:none" id="hidden-event-1">
+    FCG Tech Validation
+    11:00 AM - 12:00 PM
+  </div>
+
+  <!-- New event placeholder (should be skipped) -->
+  <div aria-label="New event">New event</div>
+</div>
+</body>
+</html>

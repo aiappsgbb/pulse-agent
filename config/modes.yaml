@@ -1,0 +1,100 @@
+# Each mode defines how to build an SDK session.
+# Python code loads this and assembles SessionConfig — no business logic in Python.
+#
+# default_mcp_servers: inherited by all non-standalone modes unless overridden.
+# Unconfigured servers (e.g. dataverse without a URL) are skipped gracefully.
+
+default_mcp_servers: [workiq, dataverse]
+
+monitor:
+  model_key: triage
+  working_dir: output
+  agents: []
+  system_prompt: config/prompts/system/monitor.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/monitor.md
+  pre_process: scan_teams_inbox
+
+digest:
+  model_key: digest
+  working_dir: root
+  agents: [m365-query, project-researcher, digest-writer, signal-drafter]
+  system_prompt: config/prompts/system/digest.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/digest.md
+  pre_process: collect_content_and_feeds
+
+intel:
+  model_key: intel
+  working_dir: root
+  agents: []
+  system_prompt: config/prompts/system/intel.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/intel.md
+  pre_process: collect_feeds
+
+research:
+  model_key: research
+  working_dir: root
+  agents: []
+  system_prompt: config/prompts/system/research.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/research.md
+  pre_process: null
+
+chat:
+  model_key: chat
+  working_dir: root
+  agents: [pulse-reader, m365-query]
+  system_prompt: config/prompts/system/chat.md
+  system_prompt_mode: replace
+  trigger_prompt: null
+  excluded_tools:
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
+  user_input_handler: telegram
+
+knowledge:
+  standalone: true
+  description: "Pipeline mode — runs archive + per-project enrichment (see runner.py)"
+
+knowledge-archive:
+  model_key: digest
+  working_dir: root
+  agents: [knowledge-miner]
+  system_prompt: config/prompts/system/knowledge.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/knowledge-archive.md
+  pre_process: collect_knowledge_context
+  excluded_tools:
+    - task
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
+
+knowledge-project:
+  model_key: digest
+  working_dir: root
+  agents: [knowledge-miner]
+  system_prompt: config/prompts/system/knowledge.md
+  system_prompt_mode: append
+  trigger_prompt: config/prompts/triggers/knowledge-project.md
+  excluded_tools:
+    - task
+    - fetch_copilot_cli_documentation
+    - create
+    - powershell
+    - read_powershell
+    - write_powershell
+    - stop_powershell
+
+transcripts:
+  standalone: true
+  handler: collectors.transcripts
