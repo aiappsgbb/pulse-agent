@@ -2101,9 +2101,21 @@ class JobsPane(Widget):
         if log_file:
             log_entries = read_job_log(log_file)
             if log_entries:
-                lines.append("")
-                lines.append("[bold cyan]Activity log:[/bold cyan]")
-                for entry in log_entries:
+                # For long logs, show only the tail to keep the panel responsive
+                max_display = 40
+                total = len(log_entries)
+                if total > max_display:
+                    display_entries = log_entries[-max_display:]
+                    lines.append("")
+                    lines.append(
+                        f"[bold cyan]Activity log[/bold cyan] "
+                        f"[dim](showing last {max_display} of {total} entries)[/dim]"
+                    )
+                else:
+                    display_entries = log_entries
+                    lines.append("")
+                    lines.append("[bold cyan]Activity log:[/bold cyan]")
+                for entry in display_entries:
                     ts = entry.get("ts", "")
                     # Format timestamp as HH:MM:SS
                     try:
@@ -2141,6 +2153,14 @@ class JobsPane(Widget):
             lines.append("[dim]No activity log for this job type[/dim]")
 
         detail_widget.update("\n".join(lines))
+
+        # Auto-scroll to bottom for running jobs so latest activity is visible
+        if status == "running":
+            try:
+                scroller = self.query_one(".detail-container", VerticalScroll)
+                scroller.scroll_end(animate=False)
+            except Exception:
+                pass
 
     def get_running_count(self) -> int:
         return sum(1 for j in self._jobs if j["status"] == "running")
