@@ -187,7 +187,7 @@ from collectors.teams_marker import mark_teams_chats_read, CLICK_UNREAD_CHAT_JS
 class TestTeamsMarker:
     @pytest.mark.asyncio
     async def test_no_browser_returns_error(self):
-        with patch("core.browser.get_browser_manager", return_value=None):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
             result = await mark_teams_chats_read(["Test"])
             assert result["success"] is False
             assert "No shared browser" in result["details"][0]
@@ -204,7 +204,7 @@ class TestTeamsMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_teams_chats_read(["Chat"])
             assert result["success"] is False
             assert "expired" in result["details"][0].lower()
@@ -227,7 +227,7 @@ class TestTeamsMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_teams_chats_read()
             assert result["success"] is True
             assert result["marked"] == 0
@@ -250,7 +250,7 @@ class TestTeamsMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_teams_chats_read(["Alice"])
             assert result["marked"] == 1
             assert result["failed"] == 0
@@ -273,7 +273,7 @@ class TestTeamsMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_teams_chats_read(["NonExistent"])
             assert result["failed"] == 1
             assert result["marked"] == 0
@@ -289,7 +289,7 @@ from collectors.outlook_marker import mark_outlook_emails_read
 class TestOutlookMarker:
     @pytest.mark.asyncio
     async def test_no_browser_returns_error(self):
-        with patch("core.browser.get_browser_manager", return_value=None):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
             result = await mark_outlook_emails_read([{"conv_id": "123"}])
             assert result["success"] is False
 
@@ -305,7 +305,7 @@ class TestOutlookMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_outlook_emails_read([{"conv_id": "123"}])
             assert result["success"] is False
 
@@ -324,7 +324,7 @@ class TestOutlookMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_outlook_emails_read()
             assert result["success"] is True
             assert result["marked"] == 0
@@ -351,7 +351,7 @@ class TestOutlookMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_outlook_emails_read([{
                 "conv_id": "abc123", "sender": "Alice"
             }])
@@ -372,7 +372,7 @@ class TestOutlookMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_outlook_emails_read([{
                 "conv_id": "", "sender": "NoId"
             }])
@@ -395,7 +395,7 @@ class TestOutlookMarker:
         mgr.is_alive = True
         mgr.new_page = AsyncMock(return_value=page)
 
-        with patch("core.browser.get_browser_manager", return_value=mgr):
+        with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
             result = await mark_outlook_emails_read([{
                 "conv_id": "abc", "sender": "Bob"
             }])

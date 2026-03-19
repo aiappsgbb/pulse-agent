@@ -106,10 +106,10 @@ async def mark_teams_chats_read(
     Returns:
         {success: bool, marked: int, failed: int, total_unread: int, details: list[str]}
     """
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    browser_mgr = get_browser_manager()
-    if not browser_mgr or not browser_mgr.context or not browser_mgr.is_alive:
+    browser_mgr = await ensure_browser()
+    if not browser_mgr:
         return {
             "success": False, "marked": 0, "failed": 0,
             "total_unread": 0, "details": ["No shared browser available"],

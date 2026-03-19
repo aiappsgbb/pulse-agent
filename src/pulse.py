@@ -164,14 +164,7 @@ async def _cli_main(args):
 
     log.info(f"Connected. State: {client.get_state()}")
 
-    # Start shared browser
-    from core.browser import BrowserManager
-    browser = BrowserManager()
-    try:
-        await browser.start()
-    except Exception as e:
-        log.warning(f"Browser failed: {e} — scans unavailable")
-        browser = None
+    # Browser is now lazy — starts on first use, auto-stops after idle.
 
     # --once --mode X: run a single stage
     if args.once and args.mode:
@@ -230,7 +223,9 @@ async def _cli_main(args):
             await run_job(client, config, args.mode)
         sync_to_onedrive(config)
 
-    # Cleanup
+    # Cleanup — stop lazy browser if it was started
+    from core.browser import get_browser_manager
+    browser = get_browser_manager()
     if browser:
         await browser.stop()
     try:
@@ -282,13 +277,8 @@ async def _daemon_main_headless():
     except Exception as e:
         log.warning(f"Auth check failed (non-fatal): {e}")
 
-    from core.browser import BrowserManager
-    browser = BrowserManager()
-    try:
-        await browser.start()
-    except Exception as e:
-        log.warning(f"Browser failed: {e} — scans unavailable")
-        browser = None
+    # Browser is now lazy — starts on first use, auto-stops after idle.
+    # No eager start here. See core/browser.py ensure_browser().
 
     shutdown_event = asyncio.Event()
 
@@ -331,8 +321,12 @@ async def _daemon_main_headless():
     from daemon.worker import destroy_chat_session
     await destroy_chat_session()
 
+    # Stop lazy browser if it's running
+    from core.browser import get_browser_manager
+    browser = get_browser_manager()
     if browser:
         await browser.stop()
+
     try:
         await asyncio.wait_for(client.stop(), timeout=10)
     except asyncio.TimeoutError:
@@ -411,14 +405,8 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     except Exception as e:
         log.warning(f"Auth check failed (non-fatal): {e}")
 
-    # Start shared browser
-    from core.browser import BrowserManager
-    browser = BrowserManager()
-    try:
-        await browser.start()
-    except Exception as e:
-        log.warning(f"Browser failed: {e} — scans unavailable")
-        browser = None
+    # Browser is now lazy — starts on first use, auto-stops after idle.
+    # No eager start here. See core/browser.py ensure_browser().
 
     # Bridge threading.Event → asyncio.Event
     aio_shutdown = asyncio.Event()
@@ -465,6 +453,9 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     from daemon.worker import destroy_chat_session
     await destroy_chat_session()
 
+    # Stop lazy browser if it's running
+    from core.browser import get_browser_manager
+    browser = get_browser_manager()
     if browser:
         await browser.stop()
 

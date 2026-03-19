@@ -49,6 +49,10 @@ schedule:
     type: knowledge
     pattern: "daily 02:00"
     description: "Overnight knowledge mining — archive emails/Teams, enrich projects"
+  - id: daily-housekeeping
+    type: housekeeping
+    pattern: "daily 03:00"
+    description: "Clean up old monitoring reports, logs, and completed jobs"
 
 # ---------------------------------------------------------------------------
 # Monitoring — triage behavior and office hours.

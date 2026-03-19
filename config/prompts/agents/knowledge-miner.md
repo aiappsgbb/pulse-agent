@@ -141,6 +141,7 @@ After mining, review ALL projects for stale or unverified information.
 - Commitment with `status: open` and `due` date in the past → mark `overdue`
 - Commitment with `status: open` and no mention in any artifact from the last 7 days → add note: `"[STALE] No recent activity — verify status"`
 - Commitment with `status: overdue` — search WorkIQ and local files for resolution evidence. If found, mark `done`. If not, keep `overdue`.
+- NOTE: Commitments overdue by >5 days are automatically cancelled by the system before each digest run. Focus your effort on commitments within the 0-5 day overdue window.
 
 **Project staleness:**
 - Project with `status: active` but `last_verified` older than 7 days → search WorkIQ: "What's the latest on {project name}?" If no activity found, add timeline entry: `"[STALE] No activity detected in 7+ days — status unverified"`

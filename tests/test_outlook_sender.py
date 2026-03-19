@@ -11,16 +11,14 @@ from collectors.outlook_sender import reply_to_email
 
 
 async def test_reply_to_email_no_browser():
-    with patch("core.browser.get_browser_manager", return_value=None):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "No shared browser" in result["detail"]
 
 
-async def test_reply_to_email_no_context():
-    mgr = MagicMock()
-    mgr.context = None
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+async def test_reply_to_email_no_browser():
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "No shared browser" in result["detail"]
@@ -41,7 +39,7 @@ async def test_reply_to_email_login_detected():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "login" in result["detail"].lower() or "expired" in result["detail"].lower()
@@ -59,7 +57,7 @@ async def test_reply_to_email_exception_handling():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "Network error" in result["detail"]
@@ -75,7 +73,7 @@ async def test_reply_to_email_page_always_closed():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
         await reply_to_email("Alice", "Thanks!")
 
     page.close.assert_called_once()
@@ -97,7 +95,7 @@ async def test_reply_to_email_no_search_box():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "search box" in result["detail"]
@@ -125,7 +123,7 @@ async def test_reply_to_email_no_results():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch("core.browser.get_browser_manager", return_value=mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mgr):
         result = await reply_to_email("Alice", "Thanks!")
     assert result["success"] is False
     assert "No emails found" in result["detail"]

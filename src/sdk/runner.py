@@ -328,6 +328,62 @@ def _load_projects() -> list[dict]:
     return projects
 
 
+_STALE_OVERDUE_DAYS = 5  # Auto-cancel commitments overdue by more than this
+
+
+def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) -> int:
+    """Auto-cancel commitments overdue by more than max_overdue_days.
+
+    Scans all project YAML files, finds open/overdue commitments with due dates
+    far enough in the past, marks them cancelled, and saves back.
+    Returns the number of commitments cancelled.
+    """
+    if not PROJECTS_DIR.exists():
+        return 0
+
+    today = datetime.now().date()
+    total_cancelled = 0
+
+    for path in sorted(PROJECTS_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+        except Exception:
+            continue
+
+        commitments = data.get("commitments")
+        if not commitments or not isinstance(commitments, list):
+            continue
+
+        changed = False
+        for c in commitments:
+            status = (c.get("status") or "").lower()
+            if status in ("done", "cancelled"):
+                continue
+            due_raw = c.get("due")
+            if not due_raw:
+                continue
+            try:
+                due_date = datetime.strptime(str(due_raw), "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            days_overdue = (today - due_date).days
+            if days_overdue > max_overdue_days:
+                c["status"] = "cancelled"
+                c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
+                changed = True
+                total_cancelled += 1
+                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue)")
+
+        if changed:
+            data["updated_at"] = datetime.now().isoformat()
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return total_cancelled
+
+
 def _build_projects_block(projects: list[dict]) -> str:
     """Format project data for injection into the digest trigger prompt."""
     if not projects:
@@ -752,6 +808,9 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         log.info(f"  Calendar: {active_count} active events")
 
     log.info("\nPhase 1f: Loading active project files...")
+    cancelled = _auto_cancel_stale_commitments()
+    if cancelled:
+        log.info(f"  Auto-cancelled {cancelled} stale overdue commitment(s)")
     projects = _load_projects()
     projects_block = _build_projects_block(projects)
     commitments_summary = _extract_commitments_summary(projects)
@@ -973,10 +1032,10 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
     # Transcript collection runs here (not in digest) so overnight runs have fresh content.
     from collectors.transcripts.compressor import compress_existing_transcripts
     from collectors.transcripts import run_transcript_collection
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    browser_mgr = get_browser_manager()
-    if browser_mgr and browser_mgr.context:
+    browser_mgr = await ensure_browser()
+    if browser_mgr:
         log.info("  Phase 0a: Collecting fresh transcripts from Teams...")
         _log_pipeline("message", preview="Phase 0a: Collecting fresh transcripts from Teams...")
         try:

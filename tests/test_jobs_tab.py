@@ -127,10 +127,11 @@ class TestConsolidateJobs:
     def test_basic_consolidation(self):
         from tui.screens import _consolidate_jobs
 
+        now = datetime.now().isoformat()
         events = [
             {"job_id": "j1", "job_type": "digest", "status": "running", "ts": "2026-03-02T10:00:00", "detail": "Morning", "log_file": "/logs/j1.jsonl"},
             {"job_id": "j1", "job_type": "digest", "status": "completed", "ts": "2026-03-02T10:05:00", "detail": "Morning", "log_file": "/logs/j1.jsonl"},
-            {"job_id": "j2", "job_type": "monitor", "status": "running", "ts": "2026-03-02T10:06:00", "detail": "Triage", "log_file": ""},
+            {"job_id": "j2", "job_type": "monitor", "status": "running", "ts": now, "detail": "Triage", "log_file": ""},
         ]
         jobs = _consolidate_jobs(events)
         assert len(jobs) == 2
@@ -162,9 +163,10 @@ class TestConsolidateJobs:
         """Multiple running jobs should all appear at the top."""
         from tui.screens import _consolidate_jobs
 
+        now = datetime.now().isoformat()
         events = [
-            {"job_id": "j1", "job_type": "digest", "status": "running", "ts": "2026-03-02T10:00:00", "detail": "", "log_file": ""},
-            {"job_id": "j2", "job_type": "monitor", "status": "running", "ts": "2026-03-02T10:01:00", "detail": "", "log_file": ""},
+            {"job_id": "j1", "job_type": "digest", "status": "running", "ts": now, "detail": "", "log_file": ""},
+            {"job_id": "j2", "job_type": "monitor", "status": "running", "ts": now, "detail": "", "log_file": ""},
             {"job_id": "j3", "job_type": "intel", "status": "completed", "ts": "2026-03-02T09:00:00", "detail": "", "log_file": ""},
         ]
         jobs = _consolidate_jobs(events)
@@ -181,6 +183,58 @@ class TestConsolidateJobs:
         ]
         jobs = _consolidate_jobs(events)
         assert jobs[0]["started_ts"] == "2026-03-02T10:00:00"
+
+    def test_stale_running_job_marked_stale(self):
+        """A job running for >4 hours should be marked as 'stale' in display."""
+        from tui.screens import _consolidate_jobs
+
+        # Started 7 days ago — clearly stale
+        events = [
+            {"job_id": "j1", "job_type": "knowledge", "status": "running", "ts": "2026-03-12T09:15:00", "detail": "Knowledge mining", "log_file": ""},
+        ]
+        jobs = _consolidate_jobs(events)
+        assert len(jobs) == 1
+        assert jobs[0]["status"] == "stale"
+
+    def test_recently_started_running_not_stale(self):
+        """A job started seconds ago should remain 'running', not 'stale'."""
+        from tui.screens import _consolidate_jobs
+
+        recent = datetime.now().isoformat()
+        events = [
+            {"job_id": "j1", "job_type": "digest", "status": "running", "ts": recent, "detail": "Morning", "log_file": ""},
+        ]
+        jobs = _consolidate_jobs(events)
+        assert len(jobs) == 1
+        assert jobs[0]["status"] == "running"
+
+    def test_stale_sorted_after_running_before_completed(self):
+        """Sort order: running > stale > completed/failed."""
+        from tui.screens import _consolidate_jobs
+
+        recent = datetime.now().isoformat()
+        events = [
+            {"job_id": "j-stale", "job_type": "knowledge", "status": "running", "ts": "2026-03-12T09:00:00", "detail": "", "log_file": ""},
+            {"job_id": "j-running", "job_type": "monitor", "status": "running", "ts": recent, "detail": "", "log_file": ""},
+            {"job_id": "j-done", "job_type": "digest", "status": "completed", "ts": "2026-03-19T06:00:00", "detail": "", "log_file": ""},
+        ]
+        jobs = _consolidate_jobs(events)
+        assert jobs[0]["status"] == "running"
+        assert jobs[0]["job_id"] == "j-running"
+        assert jobs[1]["status"] == "stale"
+        assert jobs[1]["job_id"] == "j-stale"
+        assert jobs[2]["status"] == "completed"
+
+    def test_completed_job_not_marked_stale(self):
+        """A job that completed normally should not be marked stale even if started long ago."""
+        from tui.screens import _consolidate_jobs
+
+        events = [
+            {"job_id": "j1", "job_type": "knowledge", "status": "running", "ts": "2026-03-12T09:00:00", "detail": "", "log_file": ""},
+            {"job_id": "j1", "job_type": "knowledge", "status": "completed", "ts": "2026-03-12T09:30:00", "detail": "", "log_file": ""},
+        ]
+        jobs = _consolidate_jobs(events)
+        assert jobs[0]["status"] == "completed"
 
 
 class TestFullPipeline:

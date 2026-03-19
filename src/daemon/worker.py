@@ -372,6 +372,16 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     notify_desktop("Pulse — Mark Read", summary)
                     write_job_notification("mark_read_outlook", summary)
 
+                elif job_type == "housekeeping":
+                    from core.housekeeping import run_housekeeping
+                    result = run_housekeeping(config)
+                    total = sum(result.values())
+                    if "_file" in job:
+                        mark_task_completed(job)
+                    summary = f"Housekeeping: cleaned {total} items"
+                    log.info(f"  {summary}")
+                    write_job_notification("housekeeping", summary)
+
                 else:
                     log.warning(f"  Unknown job type: {job_type}")
 

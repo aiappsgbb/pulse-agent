@@ -13,7 +13,7 @@ from collectors.teams_sender import (
 )
 
 # Patch target: lazy import inside function bodies reads from core.browser
-_BROWSER_PATCH = "core.browser.get_browser_manager"
+_BROWSER_PATCH = "core.browser.ensure_browser"
 
 
 def _make_page(url="https://teams.cloud.microsoft/"):
@@ -34,23 +34,21 @@ def _make_page(url="https://teams.cloud.microsoft/"):
 
 
 async def test_send_teams_message_no_browser():
-    with patch(_BROWSER_PATCH, return_value=None):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=None):
         result = await send_teams_message("Alice", "Hello")
     assert result["success"] is False
     assert "No shared browser" in result["detail"]
 
 
-async def test_send_teams_message_no_context():
-    mgr = MagicMock()
-    mgr.context = None
-    with patch(_BROWSER_PATCH, return_value=mgr):
+async def test_send_teams_message_no_browser():
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=None):
         result = await send_teams_message("Alice", "Hello")
     assert result["success"] is False
     assert "No shared browser" in result["detail"]
 
 
 async def test_reply_to_chat_no_browser():
-    with patch(_BROWSER_PATCH, return_value=None):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=None):
         result = await reply_to_chat("Team Chat", "Hello")
     assert result["success"] is False
     assert "No shared browser" in result["detail"]
@@ -353,7 +351,7 @@ async def test_send_teams_message_login_page():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch(_BROWSER_PATCH, return_value=mgr):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=mgr):
         result = await send_teams_message("Alice", "Hello")
     assert result["success"] is False
     assert "login" in result["detail"].lower() or "expired" in result["detail"].lower()
@@ -368,7 +366,7 @@ async def test_send_teams_message_exception_handling():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch(_BROWSER_PATCH, return_value=mgr):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=mgr):
         result = await send_teams_message("Alice", "Hello")
     assert result["success"] is False
     assert "Connection refused" in result["detail"]
@@ -383,7 +381,7 @@ async def test_send_teams_message_page_always_closed():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch(_BROWSER_PATCH, return_value=mgr):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=mgr):
         await send_teams_message("Alice", "Hello")
 
     page.close.assert_called_once()
@@ -397,7 +395,7 @@ async def test_reply_to_chat_login_page():
     mgr.context = MagicMock()
     mgr.new_page = AsyncMock(return_value=page)
 
-    with patch(_BROWSER_PATCH, return_value=mgr):
+    with patch(_BROWSER_PATCH, new_callable=AsyncMock, return_value=mgr):
         result = await reply_to_chat("Team Chat", "Hello")
     assert result["success"] is False
 

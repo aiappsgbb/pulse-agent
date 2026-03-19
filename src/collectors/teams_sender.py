@@ -156,10 +156,10 @@ async def send_teams_message(recipient: str, message: str) -> dict:
 
     Returns: {success: bool, detail: str}
     """
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    browser_mgr = get_browser_manager()
-    if not browser_mgr or not browser_mgr.context:
+    browser_mgr = await ensure_browser()
+    if not browser_mgr:
         return {"success": False, "detail": "No shared browser available"}
 
     page = None
@@ -184,10 +184,10 @@ async def reply_to_chat(chat_name: str, message: str) -> dict:
 
     Returns: {success: bool, detail: str}
     """
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    browser_mgr = get_browser_manager()
-    if not browser_mgr or not browser_mgr.context:
+    browser_mgr = await ensure_browser()
+    if not browser_mgr:
         return {"success": False, "detail": "No shared browser available"}
 
     page = None

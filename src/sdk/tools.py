@@ -105,6 +105,8 @@ class SearchLocalFilesParams(BaseModel):
     max_results: int = 5
 
 
+
+
 # --- Tool handlers ---
 
 @define_tool(
@@ -458,6 +460,7 @@ def search_local_files(params: SearchLocalFilesParams, invocation: ToolInvocatio
         )
 
     return f"Found {len(results)} file(s) matching '{params.query}':\n\n" + "\n\n".join(results)
+
 
 
 # --- Project memory ---

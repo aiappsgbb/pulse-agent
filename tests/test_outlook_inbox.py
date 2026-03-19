@@ -170,15 +170,13 @@ def test_format_missing_optional_fields():
 
 
 async def test_scan_no_browser_returns_none():
-    with patch("core.browser.get_browser_manager", return_value=None):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
         result = await scan_outlook_inbox({})
     assert result is None
 
 
-async def test_scan_browser_no_context_returns_none():
-    mock_mgr = MagicMock()
-    mock_mgr.context = None
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+async def test_scan_browser_unavailable_returns_none():
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=None):
         result = await scan_outlook_inbox({})
     assert result is None
 
@@ -188,6 +186,6 @@ async def test_scan_exception_returns_none():
     mock_mgr = MagicMock()
     mock_mgr.context = MagicMock()
     mock_mgr.new_page = AsyncMock(side_effect=Exception("browser crashed"))
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mock_mgr):
         result = await scan_outlook_inbox({})
     assert result is None

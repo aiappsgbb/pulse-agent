@@ -124,10 +124,10 @@ async def scan_calendar(config: dict) -> list[dict] | None:
     [{title, start_time, end_time, date, organizer, status, is_teams, is_recurring, is_declined}, ...]
     Returns None if the browser is unavailable (distinct from [] = scanned, nothing found).
     """
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    browser_mgr = get_browser_manager()
-    if not browser_mgr or not browser_mgr.context or not browser_mgr.is_alive:
+    browser_mgr = await ensure_browser()
+    if not browser_mgr:
         log.warning("Calendar scan skipped — no shared browser available")
         return None
 

@@ -930,9 +930,11 @@ class ItemPane(Widget):
         priority = item.get("priority", "?").upper()
         color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
 
+        evidence = item.get("evidence", "")
+        evidence_str = f"  |  Evidence: {evidence}" if evidence else ""
         lines = [
             f"[{color}][{priority}][/{color}] [bold]{item.get('title', '')}[/bold]",
-            f"Source: {item.get('source', '?')}  |  Date: {item.get('date', '?')}",
+            f"Source: {item.get('source', '?')}  |  Date: {item.get('date', '?')}{evidence_str}",
             "",
             item.get("summary", ""),
         ]
@@ -1961,7 +1963,11 @@ JOB_STATUS_COLORS: dict[str, str] = {
     "completed": "#00CC88",
     "failed": "bold #FF3366",
     "queued": "#FFB020",
+    "stale": "bold #FF8800",
 }
+
+# Jobs running longer than this are considered stale (crashed without terminal event)
+_MAX_RUNNING_SECONDS = 4 * 3600  # 4 hours
 
 
 def _consolidate_jobs(events: list[dict]) -> list[dict]:
@@ -1994,12 +2000,24 @@ def _consolidate_jobs(events: list[dict]) -> list[dict]:
             if ev.get("status") == "running":
                 existing["started_ts"] = ev.get("ts", "")
 
+    # Mark stale running jobs — started >4h ago with no terminal event
+    now = datetime.now()
+    for j in jobs.values():
+        if j["status"] == "running" and j.get("started_ts"):
+            try:
+                started = datetime.fromisoformat(j["started_ts"])
+                if (now - started).total_seconds() > _MAX_RUNNING_SECONDS:
+                    j["status"] = "stale"
+            except Exception:
+                pass
+
     result = list(jobs.values())
-    # Sort: running first, then most recent
+    # Sort: running first, stale next, then most recent
     running = [j for j in result if j["status"] == "running"]
-    others = [j for j in result if j["status"] != "running"]
+    stale = [j for j in result if j["status"] == "stale"]
+    others = [j for j in result if j["status"] not in ("running", "stale")]
     others.sort(key=lambda j: j.get("ts", ""), reverse=True)
-    return running + others
+    return running + stale + others
 
 
 class JobsPane(Widget):
@@ -2016,6 +2034,12 @@ class JobsPane(Widget):
             yield Static("[dim]Select a job to view its activity log[/dim]", id="job-detail")
 
     def on_mount(self) -> None:
+        # Clean up orphaned "running" jobs from previous daemon crashes
+        try:
+            from tui.ipc import cleanup_orphaned_jobs
+            cleanup_orphaned_jobs()
+        except Exception:
+            pass
         self.load_data()
         self.set_interval(3, self._auto_refresh)
 
@@ -2060,6 +2084,9 @@ class JobsPane(Widget):
                     duration = f" ({m}m{s:02d}s)" if m else f" ({s}s)"
                 except Exception:
                     pass
+            elif status == "stale":
+                age = _age_str(job.get("started_ts", ""))
+                duration = f" (crashed {age} ago)"
             elif status in ("completed", "failed"):
                 age = _age_str(job.get("ts", ""))
                 duration = f" ({age} ago)"

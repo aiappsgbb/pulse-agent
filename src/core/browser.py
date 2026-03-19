@@ -1,5 +1,9 @@
 """Shared browser manager — single Edge instance for all Playwright consumers.
 
+Lazy lifecycle: the browser starts on first use and auto-stops after an idle
+timeout (default 2 minutes). This saves 200-800 MB of RAM when no scans are
+running — which is ~95% of the daemon's lifetime.
+
 Resilient startup: tries CDP connect first (reuse surviving browser from a
 previous crash), then fresh launch with a dedicated daemon profile.
 
@@ -10,6 +14,7 @@ previous crash), then fresh launch with a dedicated daemon profile.
 import asyncio
 import logging
 import subprocess
+import time
 from pathlib import Path
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -22,10 +27,35 @@ _manager: "BrowserManager | None" = None
 CDP_PORT = 9222
 DAEMON_PROFILE = "pulse-daemon-profile"
 
+# Idle timeout: browser shuts down after this many seconds without a new_page() call
+BROWSER_IDLE_TIMEOUT = 120  # 2 minutes
+
 
 def get_browser_manager() -> "BrowserManager | None":
     """Get the shared browser manager, or None if not started."""
     return _manager
+
+
+async def ensure_browser() -> "BrowserManager | None":
+    """Get the shared browser, starting it lazily if needed.
+
+    Returns the BrowserManager if available, None if startup fails.
+    All callers that need the browser should use this instead of
+    get_browser_manager() to benefit from lazy start.
+    """
+    global _manager
+    if _manager and _manager.is_alive:
+        _manager.touch()
+        return _manager
+
+    # Start fresh
+    mgr = BrowserManager()
+    try:
+        await mgr.start()
+        return mgr
+    except Exception as e:
+        log.warning(f"Lazy browser start failed: {e}")
+        return None
 
 
 def _default_profile_dir() -> str:
@@ -85,6 +115,17 @@ class BrowserManager:
         self._context: BrowserContext | None = None
         self._browser: Browser | None = None
         self._connected_via_cdp = False
+        self._last_used: float = time.monotonic()
+        self._idle_task: asyncio.Task | None = None
+
+    def touch(self):
+        """Update last-used timestamp — resets the idle shutdown timer."""
+        self._last_used = time.monotonic()
+
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since the browser was last used (new_page or touch)."""
+        return time.monotonic() - self._last_used
 
     @property
     def cdp_endpoint(self) -> str:
@@ -99,6 +140,7 @@ class BrowserManager:
         """Start the shared browser — connect to existing or launch new."""
         global _manager
 
+        self._last_used = time.monotonic()
         self._playwright = await async_playwright().__aenter__()
 
         # Strategy 1: Reuse a surviving browser from a previous daemon run
@@ -113,6 +155,7 @@ class BrowserManager:
                 )
                 self._connected_via_cdp = True
                 _manager = self
+                self._start_idle_watcher()
                 log.info(f"Connected to existing browser via CDP :{CDP_PORT}")
                 return
             except Exception as e:
@@ -122,6 +165,7 @@ class BrowserManager:
         # Strategy 2: Launch fresh Edge with dedicated daemon profile
         await self._launch_fresh()
         _manager = self
+        self._start_idle_watcher()
 
     async def _launch_fresh(self, retry: bool = True):
         """Launch Edge with persistent profile. On lock failure, kill orphans and retry once."""
@@ -170,11 +214,45 @@ class BrowserManager:
         """Create a new page in the shared browser context."""
         if not self._context:
             raise RuntimeError("Browser not started")
+        self.touch()
         return await self._context.new_page()
+
+    def _start_idle_watcher(self):
+        """Start background task that auto-stops the browser after idle timeout."""
+        if self._idle_task and not self._idle_task.done():
+            return  # already watching
+        try:
+            loop = asyncio.get_running_loop()
+            self._idle_task = loop.create_task(self._idle_watcher())
+        except RuntimeError:
+            pass  # no event loop — tests or CLI mode
+
+    async def _idle_watcher(self):
+        """Background task: check every 30s if browser has been idle too long."""
+        try:
+            while True:
+                await asyncio.sleep(30)
+                if not self.is_alive:
+                    log.debug("Idle watcher: browser already dead, exiting")
+                    return
+                idle = self.idle_seconds
+                if idle >= BROWSER_IDLE_TIMEOUT:
+                    log.info(f"Browser idle for {idle:.0f}s — auto-stopping to free memory")
+                    await self.stop()
+                    return
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.debug(f"Idle watcher error (non-fatal): {e}")
 
     async def stop(self):
         """Close the browser cleanly."""
         global _manager
+
+        # Cancel idle watcher first
+        if self._idle_task and not self._idle_task.done():
+            self._idle_task.cancel()
+            self._idle_task = None
 
         if self._connected_via_cdp and self._browser:
             # Don't close the browser itself — just disconnect

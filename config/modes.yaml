@@ -44,7 +44,7 @@ research:
 
 chat:
   model_key: chat
-  working_dir: root
+  working_dir: output
   agents: [pulse-reader, m365-query]
   system_prompt: config/prompts/system/chat.md
   system_prompt_mode: replace

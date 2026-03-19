@@ -30,7 +30,7 @@ async def test_teams_inbox_exception_returns_none():
     mock_mgr.context = MagicMock()
     mock_mgr.is_alive = True
     mock_mgr.new_page = AsyncMock(side_effect=Exception("crash"))
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mock_mgr):
         result = await scan_teams_inbox({})
     assert result is None
 
@@ -44,7 +44,7 @@ async def test_outlook_inbox_exception_returns_none():
     mock_mgr.context = MagicMock()
     mock_mgr.is_alive = True
     mock_mgr.new_page = AsyncMock(side_effect=Exception("crash"))
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mock_mgr):
         result = await scan_outlook_inbox({})
     assert result is None
 
@@ -58,7 +58,7 @@ async def test_calendar_exception_returns_none():
     mock_mgr.context = MagicMock()
     mock_mgr.is_alive = True
     mock_mgr.new_page = AsyncMock(side_effect=Exception("crash"))
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mock_mgr):
         result = await scan_calendar({})
     assert result is None
 
@@ -433,7 +433,7 @@ async def test_scanner_skips_dead_browser():
     mock_mgr = MagicMock()
     mock_mgr.context = MagicMock()
     mock_mgr.is_alive = False  # browser crashed
-    with patch("core.browser.get_browser_manager", return_value=mock_mgr):
+    with patch("core.browser.ensure_browser", new_callable=AsyncMock, return_value=mock_mgr):
         result = await scan_teams_inbox({})
     assert result is None
 

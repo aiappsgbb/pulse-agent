@@ -119,6 +119,18 @@ If WorkIQ fails AND any inbox/calendar scan says "SCAN UNAVAILABLE", you MUST:
   - Skip FYI emails, newsletters, no-reply senders, and things clearly already handled
 - The final digest = verified carry-forward items + genuinely new items = accurate snapshot
 
+## CRITICAL: No Hallucinated Items
+
+**Every digest item MUST trace back to a concrete source.** You may ONLY add items that come from:
+1. **WorkIQ query results** — emails or Teams messages returned by WorkIQ in THIS session
+2. **Inbox scans above** (Part B) — Teams, Outlook, or Calendar entries listed in the scan data
+3. **Carry-forward items** from the previous digest (Part A) that pass the merge/verification rules
+4. **Local content** (Part A) — transcripts, documents, or emails with explicit action items
+
+If a person is familiar from project context, transcripts, or prior digests but does NOT appear in any of the 4 sources above for THIS run, **DO NOT create a new item for them.** Knowing someone exists is not the same as having an unread message from them.
+
+**Test before adding:** For every new item, ask: "Which specific WorkIQ result, inbox scan line, or local file contains this?" If you cannot point to a concrete source, DROP the item.
+
 ## CRITICAL FILTER: Is this actually MY responsibility?
 
 Before adding ANY item to the digest, ask yourself:
@@ -187,8 +199,9 @@ You MUST produce TWO outputs using `write_output`:
       "project": "<project-id or null if not linked to a project>",
       "date": "<YYYY-MM-DD when this originated>",
       "age": "<human-readable age, e.g. '2 days', '18 hours', 'today'>",
-      "verified": true,
+      "verified": "<true ONLY if confirmed via WorkIQ result or inbox scan in THIS session; false otherwise>",
       "status": "outstanding",
+      "evidence": "<which source: 'WorkIQ email query', 'Outlook inbox scan', 'Teams inbox scan', 'carry-forward', 'transcript: filename.md', etc. — REQUIRED>",
       "suggested_actions": [
         {
           "label": "<short button label, max 30 chars>",

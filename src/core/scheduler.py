@@ -301,13 +301,27 @@ async def scheduler_loop(
     Also pulls new job files from OneDrive each tick (inter-agent requests, etc.).
     """
     from daemon.sync import sync_jobs_from_onedrive
+    from tui.ipc import cleanup_orphaned_jobs
 
     log.info(f"Scheduler started (checking every {check_interval}s)")
+    _cleanup_counter = 0
+    _CLEANUP_EVERY_N_TICKS = 5  # every 5 ticks (~5 min at 60s interval)
 
     while not shutdown_event.is_set():
         try:
             # Pull new job files from OneDrive (inter-agent requests, etc.)
             sync_jobs_from_onedrive(config, job_queue)
+
+            # Periodically clean up stale "running" jobs
+            _cleanup_counter += 1
+            if _cleanup_counter >= _CLEANUP_EVERY_N_TICKS:
+                _cleanup_counter = 0
+                try:
+                    cleaned = cleanup_orphaned_jobs()
+                    if cleaned:
+                        log.info(f"Scheduler: cleaned {cleaned} stale running job(s)")
+                except Exception:
+                    pass
 
             schedules = _load_schedules()
             now = datetime.now()

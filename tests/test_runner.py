@@ -6,6 +6,7 @@ from unittest.mock import patch, AsyncMock
 import pytest
 
 from sdk.runner import (
+    _auto_cancel_stale_commitments,
     _build_carry_forward,
     _build_collection_warnings,
     _build_trigger_variables,
@@ -421,6 +422,147 @@ def test_commitments_summary_skips_done():
     }]
     result = _extract_commitments_summary(projects)
     assert result == ""  # no open commitments at all
+
+
+# ---------------------------------------------------------------------------
+# Auto-cancel stale overdue commitments
+# ---------------------------------------------------------------------------
+
+import yaml
+from datetime import datetime, timedelta
+
+
+def _write_project_yaml(path, data):
+    """Helper: write a project YAML file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def test_auto_cancel_overdue_beyond_threshold(tmp_dir):
+    """Commitments overdue by >5 days get auto-cancelled."""
+    proj_dir = tmp_dir / "projects"
+    old_due = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+    _write_project_yaml(proj_dir / "acme.yaml", {
+        "project": "Acme",
+        "commitments": [
+            {"what": "Send proposal", "to": "Client", "due": old_due, "status": "open"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 1
+    data = yaml.safe_load((proj_dir / "acme.yaml").read_text(encoding="utf-8"))
+    assert data["commitments"][0]["status"] == "cancelled"
+    assert "Auto-cancelled" in data["commitments"][0]["cancelled_reason"]
+    assert "updated_at" in data
+
+
+def test_auto_cancel_skips_recent_overdue(tmp_dir):
+    """Commitments overdue by <5 days are NOT cancelled — still actionable."""
+    proj_dir = tmp_dir / "projects"
+    recent_due = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    _write_project_yaml(proj_dir / "beta.yaml", {
+        "project": "Beta",
+        "commitments": [
+            {"what": "Review doc", "to": "Team", "due": recent_due, "status": "open"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 0
+    data = yaml.safe_load((proj_dir / "beta.yaml").read_text(encoding="utf-8"))
+    assert data["commitments"][0]["status"] == "open"
+
+
+def test_auto_cancel_skips_done_and_cancelled(tmp_dir):
+    """Already-done and already-cancelled commitments are not touched."""
+    proj_dir = tmp_dir / "projects"
+    old_due = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    _write_project_yaml(proj_dir / "gamma.yaml", {
+        "project": "Gamma",
+        "commitments": [
+            {"what": "Task A", "to": "X", "due": old_due, "status": "done"},
+            {"what": "Task B", "to": "Y", "due": old_due, "status": "cancelled"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 0
+
+
+def test_auto_cancel_handles_overdue_status(tmp_dir):
+    """Commitments already marked 'overdue' also get cancelled after threshold."""
+    proj_dir = tmp_dir / "projects"
+    old_due = (datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d")
+    _write_project_yaml(proj_dir / "delta.yaml", {
+        "project": "Delta",
+        "commitments": [
+            {"what": "Follow up", "to": "Client", "due": old_due, "status": "overdue"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 1
+    data = yaml.safe_load((proj_dir / "delta.yaml").read_text(encoding="utf-8"))
+    assert data["commitments"][0]["status"] == "cancelled"
+
+
+def test_auto_cancel_multiple_projects(tmp_dir):
+    """Cancels across multiple project files, only stale ones."""
+    proj_dir = tmp_dir / "projects"
+    old = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+    recent = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    future = (datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")
+
+    _write_project_yaml(proj_dir / "proj-a.yaml", {
+        "project": "A",
+        "commitments": [
+            {"what": "Stale task", "to": "X", "due": old, "status": "open"},
+            {"what": "Recent task", "to": "Y", "due": recent, "status": "open"},
+        ],
+    })
+    _write_project_yaml(proj_dir / "proj-b.yaml", {
+        "project": "B",
+        "commitments": [
+            {"what": "Future task", "to": "Z", "due": future, "status": "open"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 1  # only the 15-day-old one
+    data_a = yaml.safe_load((proj_dir / "proj-a.yaml").read_text(encoding="utf-8"))
+    assert data_a["commitments"][0]["status"] == "cancelled"
+    assert data_a["commitments"][1]["status"] == "open"  # 2 days — kept
+
+    data_b = yaml.safe_load((proj_dir / "proj-b.yaml").read_text(encoding="utf-8"))
+    assert data_b["commitments"][0]["status"] == "open"  # future — kept
+
+
+def test_auto_cancel_no_projects_dir(tmp_dir):
+    """Returns 0 if projects dir doesn't exist."""
+    with patch("sdk.runner.PROJECTS_DIR", tmp_dir / "nonexistent"):
+        assert _auto_cancel_stale_commitments() == 0
+
+
+def test_auto_cancel_no_due_date(tmp_dir):
+    """Commitments without a due date are skipped (not cancelled)."""
+    proj_dir = tmp_dir / "projects"
+    _write_project_yaml(proj_dir / "epsilon.yaml", {
+        "project": "Epsilon",
+        "commitments": [
+            {"what": "Vague task", "to": "Someone", "status": "open"},
+        ],
+    })
+    with patch("sdk.runner.PROJECTS_DIR", proj_dir):
+        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+
+    assert cancelled == 0
 
 
 def test_trigger_variables_digest_includes_projects(sample_config, tmp_dir):
