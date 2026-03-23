@@ -65,11 +65,13 @@ ORIGIN_COLORS: dict[str, str] = {
 STATUS_LABELS: dict[str, str] = {
     "dismissed": "SNOOZED",
     "archived": "ARCHIVED",
+    "resolved": "RESOLVED",
 }
 
 STATUS_COLORS: dict[str, str] = {
     "dismissed": "yellow",
     "archived": "dim",
+    "resolved": "green",
 }
 
 
@@ -589,9 +591,10 @@ class HelpModal(ModalScreen):
                 "  D  Queue focused digest      N  Add note\n"
                 "\n"
                 "[bold cyan]Inbox actions[/bold cyan]\n"
-                "  D  Snooze (1 day)            A  Archive (30 days)\n"
-                "  R  Reply / Restore           N  Add note\n"
-                "  M  Mark as read         Ctrl+M  Sweep all low-priority\n"
+                "  D  Dismiss (archive 30d)     S  Snooze (1 day)\n"
+                "  R  Reply / Restore           N  Add note (auto-resolves 'done')\n"
+                "  A  Archive (same as D)       M  Mark as read\n"
+                "  Ctrl+M  Sweep all low-priority\n"
                 "\n"
                 "[bold cyan]Projects actions[/bold cyan]\n"
                 "  S  Cycle sort mode           U  Update status\n"
@@ -1139,6 +1142,11 @@ class InboxPane(ItemPane):
                 "",
                 "[yellow]Snoozed for today — comes back tomorrow if still relevant.[/yellow]",
             ]
+        elif status == "resolved":
+            lines += [
+                "",
+                "[green]Resolved — permanently done. Will never reappear.[/green]",
+            ]
         else:
             lines += [
                 "",
@@ -1157,6 +1165,7 @@ class InboxPane(ItemPane):
             self.notify(f"Hiding {hidden} dismissed items" if hidden else "No dismissed items")
 
     def dismiss_selected(self) -> None:
+        """Dismiss = archive (30-day TTL). Default action for 'D' key."""
         item = self.get_selected_item()
         if not item or item.get("_is_dismissed"):
             return
@@ -1170,13 +1179,31 @@ class InboxPane(ItemPane):
         self._items.pop(self._selected_idx)
         self._selected_idx = max(0, self._selected_idx - 1)
         self._refresh_list()
-        self.notify("Item snoozed — add a note? (Enter to skip)")
+        self.notify("Item archived — add a note? (Enter to skip)")
         # Chain NoteModal for optional note
         if item_id:
             self.app.push_screen(
                 NoteModal(item_id, allow_empty=True, title="Add note (optional)"),
                 self._on_dismiss_note_result,
             )
+
+    def snooze_selected(self) -> None:
+        """Snooze = 1-day suppress. Deliberate 'remind me tomorrow' via 'S' key."""
+        item = self.get_selected_item()
+        if not item or item.get("_is_dismissed"):
+            return
+        item_id = item.get("id", "")
+        from tui.ipc import snooze_item
+        snooze_item(
+            item_id,
+            reason="",
+            title=item.get("title", ""),
+            source=item.get("source", ""),
+        )
+        self._items.pop(self._selected_idx)
+        self._selected_idx = max(0, self._selected_idx - 1)
+        self._refresh_list()
+        self.notify("Item snoozed for today — comes back tomorrow")
 
     def _on_dismiss_note_result(self, result) -> None:
         if result == "saved":

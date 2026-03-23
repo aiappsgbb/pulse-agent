@@ -252,7 +252,7 @@ Run the test suite to confirm everything works:
 python -m pytest tests/ -q --tb=line
 ```
 
-All tests should pass (690+). If any fail, investigate the errors.
+All tests should pass (880+). If any fail, investigate the errors.
 
 Then start Pulse to verify it launches:
 

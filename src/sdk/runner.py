@@ -104,11 +104,21 @@ async def run_job(
 
 
 def _build_dismissed_block() -> str:
-    """Build dismissed items text block with dual TTL: snoozed=1 day, archived=30 days."""
+    """Build dismissed items text block with tri-state TTL.
+
+    Statuses:
+      - snoozed (1-day TTL): temporarily hidden, re-surfaces tomorrow
+      - archived (30-day TTL): suppressed for a month
+      - resolved (no expiry): permanently done, never re-surface
+
+    Notes are included inline so the agent knows WHY something was dismissed.
+    """
     actions = load_actions()
     dismissed_raw = actions.get("dismissed", [])
+    notes = actions.get("notes", {})
     snoozed = []
     archived = []
+    resolved = []
     for d in dismissed_raw:
         try:
             dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
@@ -116,7 +126,9 @@ def _build_dismissed_block() -> str:
         except (ValueError, TypeError):
             age_days = 0
         status = d.get("status", "archived")  # legacy entries = archived
-        if status == "dismissed":
+        if status == "resolved":
+            resolved.append(d)  # no expiry
+        elif status == "dismissed":
             if age_days > 1:
                 continue  # expired snooze — agent can re-surface
             snoozed.append(d)
@@ -125,29 +137,34 @@ def _build_dismissed_block() -> str:
                 continue  # expired archive
             archived.append(d)
 
+    def _format_item(d: dict) -> str:
+        item_id = d.get("item", "?")
+        title = d.get("title", "")
+        reason = d.get("reason", "")
+        note_entry = notes.get(item_id, {})
+        note = note_entry.get("note", "") if isinstance(note_entry, dict) else ""
+        line = f"- {item_id}"
+        if title:
+            line += f" ({title})"
+        if note:
+            line += f" — *User note: \"{note}\"*"
+        elif reason:
+            line += f" — *Reason: {reason}*"
+        return line
+
     dismissed_lines = []
     if snoozed:
-        dismissed_lines.append("### Snoozed today (do NOT include)")
+        dismissed_lines.append("### Snoozed today (do NOT include — will re-surface tomorrow)")
         for d in snoozed:
-            reason = d.get("reason", "")
-            title = d.get("title", "")
-            line = f"- {d['item']}"
-            if title:
-                line += f" ({title})"
-            if reason:
-                line += f" — *Reason: {reason}*"
-            dismissed_lines.append(line)
+            dismissed_lines.append(_format_item(d))
     if archived:
-        dismissed_lines.append("### Archived (do NOT include — learn from the pattern)")
+        dismissed_lines.append("### Archived (do NOT include — user dealt with these)")
         for d in archived:
-            reason = d.get("reason", "")
-            title = d.get("title", "")
-            line = f"- {d['item']}"
-            if title:
-                line += f" ({title})"
-            if reason:
-                line += f" — *Reason: {reason}*"
-            dismissed_lines.append(line)
+            dismissed_lines.append(_format_item(d))
+    if resolved:
+        dismissed_lines.append("### Resolved (PERMANENTLY done — NEVER re-create these items or similar items about the same topic)")
+        for d in resolved:
+            dismissed_lines.append(_format_item(d))
     if dismissed_lines:
         return (
             "\n## Previously Dismissed Items\n"
@@ -192,14 +209,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         priorities = digest_cfg.get("priorities", [])
         variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
 
-        # Dismissed items + notes
+        # Dismissed items (notes are included inline in the dismissed block)
         variables["dismissed_block"] = _build_dismissed_block()
-        notes = load_actions().get("notes", {})
-        if notes:
-            note_items = "\n".join(f"- **{k}**: {v['note']}" for k, v in notes.items())
-            variables["notes_block"] = f"\n## User Notes (context for your analysis)\n{note_items}\n"
-        else:
-            variables["notes_block"] = ""
+        variables["notes_block"] = ""  # notes now inline in dismissed_block
 
         # Carry-forward from previous digest
         variables["carry_forward"] = _build_carry_forward(prev)
@@ -503,11 +515,33 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
 MAX_CARRY_FORWARD_DAYS = 5
 
 
+def _build_verification_query(item: dict) -> str:
+    """Generate a specific WorkIQ verification query for a carry-forward item.
+
+    Uses the item's own structured fields (source, title, type) directly —
+    no regex parsing needed since the digest JSON already contains this data.
+    """
+    item_type = item.get("type", "")
+    title = item.get("title", "")
+    source = item.get("source", "")
+
+    if item_type in ("reply_needed", "input_needed"):
+        return f'Ask WorkIQ: "Did I reply to or interact with {source} recently?"'
+    elif item_type in ("action_item", "action_needed", "review_needed"):
+        return f'Ask WorkIQ: "Have I completed or acted on: {title[:80]}?"'
+    elif source:
+        return f'Ask WorkIQ: "Any recent activity related to {source}?"'
+    return ""
+
+
 def _build_carry_forward(prev: dict | None) -> str:
     """Build carry-forward block from previous digest items.
 
     Items older than MAX_CARRY_FORWARD_DAYS are auto-dropped — if they
     haven't been verified or dismissed in that time, they're stale.
+
+    Each item includes a specific WorkIQ verification query so the agent
+    checks whether the item has actually been dealt with.
     """
     if not prev or not prev.get("items"):
         return ""
@@ -539,9 +573,11 @@ def _build_carry_forward(prev: dict | None) -> str:
 
     lines = [
         "## Known Outstanding Items (from previous digest)\n",
-        "These items were flagged previously. For each one:",
-        "- **KEEP** if still unresolved (no reply sent, no action taken)",
-        "- **DROP** if WorkIQ or Teams inbox scan confirms it's been handled",
+        "**MANDATORY**: For EACH item below, you MUST run the verification query BEFORE deciding to keep it.",
+        "Do NOT blindly carry forward — verify EACH one individually via WorkIQ or inbox scans.\n",
+        "Decision rules:",
+        "- **DROP** if WorkIQ confirms you replied/acted, OR person is NOT unread in inbox scans",
+        "- **KEEP** only if verification confirms it's genuinely still outstanding",
         "- **UPDATE** if there's new activity on the same thread\n",
     ]
 
@@ -560,6 +596,12 @@ def _build_carry_forward(prev: dict | None) -> str:
             f"- [{priority.upper()}] **{title}** "
             f"(id: {item_id}, source: {source}, date: {date}{age_label})"
         )
+        # Add per-item verification query
+        vq = _build_verification_query(item)
+        if vq:
+            lines.append(f"  - **Verify**: {vq}")
+        else:
+            lines.append("  - **Verify**: Check inbox scans — is this person/topic still unread or unresolved?")
     return "\n".join(lines)
 
 

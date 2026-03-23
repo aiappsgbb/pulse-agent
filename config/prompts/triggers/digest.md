@@ -5,7 +5,6 @@ WorkIQ query window: **{{workiq_window}}** (only query for NEW activity in this 
 ## Your Priorities
 {{priorities}}
 {{dismissed_block}}
-{{notes_block}}
 {{carry_forward}}
 
 {{collection_warnings}}
@@ -88,8 +87,10 @@ Ask WorkIQ: "Show me emails {{workiq_window}} where I am in the TO field (not ju
 ### Step 3: Get Teams messages addressed TO ME
 Ask WorkIQ: "What Teams channel messages {{workiq_window}} directly @mention me or ask me a specific question by name? Include channel name and the exact question."
 
-### Step 4: Check what I've already handled
-Ask WorkIQ: "Which of my recent emails and Teams messages have I already replied to or acted on?"
+### Step 4: Verify EACH carry-forward item individually
+For EACH item in "Known Outstanding Items" above, run the **Verify** query listed with it.
+Do NOT use a single generic query — verify each item INDIVIDUALLY.
+If WorkIQ confirms you replied or acted on an item, DROP it immediately.
 
 ### IF WORKIQ FAILS:
 If ANY WorkIQ query returns an error (e.g. "Failed to create conversation"), you MUST:

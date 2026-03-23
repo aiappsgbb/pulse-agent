@@ -12,9 +12,10 @@ Key bindings:
   ctrl+l        — jump to Inbox tab and reload
   ctrl+r        — force refresh all panes
   ctrl+h        — toggle show/hide dismissed items in Inbox
-  d / r / n     — dismiss / reply (or restore) / note
+  d / a         — dismiss/archive (30-day TTL)
+  s             — snooze (1-day, remind me tomorrow)
+  r / n         — reply (or restore) / note (auto-resolves on "done")
   c             — complete commitment (Today / Projects)
-  a             — archive (on dismissed items in Inbox)
   q             — quit
 """
 
@@ -171,10 +172,11 @@ class PulseApp(App):
         Binding("r", "item_reply_or_restore", "Reply/Restore", show=False),
         Binding("n", "item_note", "Note", show=False),
         Binding("a", "item_archive", "Archive", show=False),
+        Binding("s", "item_snooze", "Snooze", show=False, priority=True),
         Binding("m", "item_mark_read", "Mark Read", show=False),
         Binding("ctrl+m", "inbox_sweep", "Sweep Read", show=False),
         # Project-specific actions
-        Binding("s", "project_sort", "Sort", show=False),
+        # s = snooze on Inbox, sort on Projects (handled in action_item_snooze)
         Binding("u", "project_status", "Status", show=False),
         Binding("c", "project_commitment", "Complete", show=False),
         # Always visible
@@ -445,6 +447,20 @@ class PulseApp(App):
         if pane:
             pane.archive_selected()
 
+    def action_item_snooze(self) -> None:
+        """Snooze on Inbox tab, Sort on Projects tab."""
+        if self._input_is_focused():
+            return
+        # Projects tab: S = sort
+        proj_pane = self._get_active_projects_pane()
+        if proj_pane:
+            proj_pane.cycle_sort()
+            return
+        # Inbox tab: S = snooze (1-day)
+        pane = self._get_active_item_pane()
+        if pane and hasattr(pane, "snooze_selected"):
+            pane.snooze_selected()
+
     def action_item_mark_read(self) -> None:
         if self._input_is_focused():
             return
@@ -476,6 +492,7 @@ class PulseApp(App):
         return None
 
     def action_project_sort(self) -> None:
+        """Sort on Projects tab. Also reachable via action_item_snooze."""
         if self._input_is_focused():
             return
         pane = self._get_active_projects_pane()

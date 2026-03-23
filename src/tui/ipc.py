@@ -340,6 +340,31 @@ def dismiss_item(
     title: str = "",
     source: str = "",
 ) -> None:
+    """Archive an item (30-day suppress). Default action for 'D' key.
+
+    Previously this was a 1-day snooze. Now defaults to archive because
+    when you dismiss something, you've dealt with it.
+    """
+    actions = _load_digest_actions()
+    existing_ids = {d.get("item") for d in actions.get("dismissed", [])}
+    if item_id not in existing_ids:
+        actions.setdefault("dismissed", []).append({
+            "item": item_id,
+            "title": title,
+            "source": source,
+            "dismissed_at": datetime.now().isoformat(),
+            "reason": reason,
+            "status": "archived",
+        })
+        _save_digest_actions(actions)
+
+
+def snooze_item(
+    item_id: str,
+    reason: str = "",
+    title: str = "",
+    source: str = "",
+) -> None:
     """Snooze an item (1-day suppress). Comes back tomorrow if still relevant."""
     actions = _load_digest_actions()
     existing_ids = {d.get("item") for d in actions.get("dismissed", [])}
@@ -400,13 +425,49 @@ def load_dismissed_items() -> list[dict]:
     return actions.get("dismissed", [])
 
 
+# Keywords that signal the user considers an item permanently done.
+# Used by add_note() to auto-upgrade dismissed/archived -> resolved.
+_FINALITY_KEYWORDS = (
+    "done", "dealt with", "handled", "already", "not needed",
+    "no longer", "completed", "finished", "sorted", "sent",
+    "old", "obsolete", "not applicable", "n/a", "resolved",
+    "nothing to do", "not relevant", "never bring back",
+    "dont remind", "don't remind", "doje",  # common typo for "done"
+)
+
+
+def _is_finality_note(note: str) -> bool:
+    """Return True if the note signals the item is permanently dealt with."""
+    lower = note.lower().strip()
+    return any(kw in lower for kw in _FINALITY_KEYWORDS)
+
+
 def add_note(item_id: str, note: str) -> None:
-    """Add a note to an item in .digest-actions.json."""
+    """Add a note to an item in .digest-actions.json.
+
+    If the note signals finality (e.g. "done", "dealt with"), auto-upgrades
+    the item to 'resolved' status (permanent, no expiry).
+    """
     actions = _load_digest_actions()
     actions.setdefault("notes", {})[item_id] = {
         "note": note,
         "added_at": datetime.now().isoformat(),
     }
+    # Auto-upgrade to resolved if note signals finality
+    if note and _is_finality_note(note):
+        for d in actions.get("dismissed", []):
+            if d.get("item") == item_id:
+                d["status"] = "resolved"
+                d["resolved_at"] = datetime.now().isoformat()
+                break
+        else:
+            # Item wasn't dismissed yet — create a resolved entry
+            actions.setdefault("dismissed", []).append({
+                "item": item_id,
+                "dismissed_at": datetime.now().isoformat(),
+                "resolved_at": datetime.now().isoformat(),
+                "status": "resolved",
+            })
     _save_digest_actions(actions)
 
 

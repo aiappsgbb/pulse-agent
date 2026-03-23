@@ -13,6 +13,7 @@ Default retention (days):
   - job history (.job-history.jsonl): truncate to 30 days
   - digest state (.digest-state.json): prune entries older than 30 days
   - intel state (.intel-state.json): prune entries older than 30 days
+  - digest actions (.digest-actions.json): prune expired snoozed (>1d) and archived (>30d)
 """
 
 import json
@@ -126,6 +127,70 @@ def _prune_state_file(path: Path, max_age_days: int) -> int:
     return 0
 
 
+def _prune_digest_actions(path: Path) -> int:
+    """Prune expired entries from .digest-actions.json.
+
+    Removes:
+      - Snoozed entries older than 1 day
+      - Archived entries older than 30 days
+      - Notes for items that no longer exist in the dismissed list
+    Keeps:
+      - Resolved entries (no expiry — permanently done)
+      - Active snoozed/archived entries within TTL
+    Returns the number of entries removed.
+    """
+    if not path.exists():
+        return 0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return 0
+
+        dismissed = data.get("dismissed", [])
+        original_count = len(dismissed)
+        now = datetime.now()
+        kept = []
+
+        for d in dismissed:
+            status = d.get("status", "archived")
+            # Resolved items never expire
+            if status == "resolved":
+                kept.append(d)
+                continue
+            try:
+                dismissed_at = datetime.fromisoformat(d.get("dismissed_at", ""))
+                age_days = (now - dismissed_at).days
+            except (ValueError, TypeError):
+                age_days = 0
+
+            if status == "dismissed" and age_days > 1:
+                continue  # expired snooze
+            if status in ("archived", "") and age_days > 30:
+                continue  # expired archive (includes legacy entries)
+            kept.append(d)
+
+        removed = original_count - len(kept)
+
+        # Also prune orphaned notes (notes for items no longer in dismissed list)
+        kept_ids = {d.get("item") for d in kept}
+        notes = data.get("notes", {})
+        pruned_notes = {k: v for k, v in notes.items() if k in kept_ids}
+        notes_removed = len(notes) - len(pruned_notes)
+
+        if removed > 0 or notes_removed > 0:
+            data["dismissed"] = kept
+            data["notes"] = pruned_notes
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            import os
+            os.replace(str(tmp), str(path))
+
+        return removed + notes_removed
+    except (OSError, json.JSONDecodeError) as e:
+        log.debug(f"Housekeeping: could not prune {path.name}: {e}")
+    return 0
+
+
 def run_housekeeping(config: dict | None = None) -> dict:
     """Run daily housekeeping. Returns a summary of what was cleaned up.
 
@@ -179,6 +244,10 @@ def run_housekeeping(config: dict | None = None) -> dict:
     for state_file in (".digest-state.json", ".intel-state.json"):
         n = _prune_state_file(PULSE_HOME / state_file, retention["state_files"])
         summary[state_file] = n
+
+    # 9. Digest actions — prune expired dismissed/archived entries
+    n = _prune_digest_actions(PULSE_HOME / ".digest-actions.json")
+    summary["digest_actions"] = n
 
     total = sum(summary.values())
     if total > 0:

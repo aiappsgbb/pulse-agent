@@ -1,6 +1,7 @@
 """Tests for sdk/runner.py — trigger variable building and pre-processing."""
 
 import json
+from datetime import datetime, timedelta
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -10,6 +11,7 @@ from sdk.runner import (
     _build_carry_forward,
     _build_collection_warnings,
     _build_trigger_variables,
+    _build_verification_query,
     _load_previous_digest,
     _load_projects,
     _build_projects_block,
@@ -161,15 +163,18 @@ def test_trigger_variables_digest_with_previous(sample_config, tmp_dir):
     assert result["workiq_window"] == "since 2026-02-17"
 
 
-def test_trigger_variables_digest_dismissed_and_notes(sample_config, tmp_dir):
+def test_trigger_variables_digest_dismissed_with_inline_notes(sample_config, tmp_dir):
+    """Notes are included inline in the dismissed block, not as a separate block."""
     with patch("sdk.runner.OUTPUT_DIR", tmp_dir), \
          patch("sdk.runner.load_actions", return_value={
-             "dismissed": [{"item": "old-thing"}],
-             "notes": {"escalation-x": {"note": "follow up Monday"}},
+             "dismissed": [{"item": "old-thing", "status": "archived",
+                            "dismissed_at": datetime.now().isoformat()}],
+             "notes": {"old-thing": {"note": "follow up Monday"}},
          }):
         result = _build_trigger_variables("digest", sample_config, {})
     assert "old-thing" in result["dismissed_block"]
-    assert "follow up Monday" in result["notes_block"]
+    assert "follow up Monday" in result["dismissed_block"]  # notes inline
+    assert result["notes_block"] == ""  # no separate notes block
 
 
 def test_trigger_variables_intel(sample_config):

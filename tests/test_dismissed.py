@@ -12,8 +12,8 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_dismiss_item_stores_snoozed_status(tmp_dir):
-    """TUI dismiss stores status='dismissed' (snooze)."""
+def test_dismiss_item_stores_archived_status(tmp_dir):
+    """TUI dismiss (D key) stores status='archived' — archive is the new default."""
     from tui.ipc import dismiss_item, _load_digest_actions, DIGEST_ACTIONS_FILE
 
     actions_file = tmp_dir / ".digest-actions.json"
@@ -23,7 +23,7 @@ def test_dismiss_item_stores_snoozed_status(tmp_dir):
     assert len(actions["dismissed"]) == 1
     entry = actions["dismissed"][0]
     assert entry["item"] == "reply-alice"
-    assert entry["status"] == "dismissed"
+    assert entry["status"] == "archived"  # D now archives, not snoozes
     assert entry["title"] == "Alice budget review"
     assert entry["source"] == "teams"
     assert entry["reason"] == "not now"
@@ -42,13 +42,13 @@ def test_dismiss_item_deduplicates(tmp_dir):
     assert len(actions["dismissed"]) == 1
 
 
-def test_archive_item_changes_status(tmp_dir):
-    """Archive changes status from 'dismissed' to 'archived'."""
-    from tui.ipc import dismiss_item, archive_item, _load_digest_actions
+def test_archive_item_upgrades_snooze_to_archive(tmp_dir):
+    """Archive changes status from 'dismissed' (snoozed) to 'archived'."""
+    from tui.ipc import snooze_item, archive_item, _load_digest_actions
 
     actions_file = tmp_dir / ".digest-actions.json"
     with patch("tui.ipc.DIGEST_ACTIONS_FILE", actions_file):
-        dismiss_item("reply-alice", title="Alice")
+        snooze_item("reply-alice", title="Alice")
         archive_item("reply-alice")
         actions = _load_digest_actions()
     assert actions["dismissed"][0]["status"] == "archived"
@@ -81,19 +81,18 @@ def test_restore_nonexistent_item_is_safe(tmp_dir):
 
 
 def test_load_dismissed_items_returns_all(tmp_dir):
-    """load_dismissed_items returns both snoozed and archived items."""
-    from tui.ipc import dismiss_item, archive_item, load_dismissed_items
+    """load_dismissed_items returns items with various statuses."""
+    from tui.ipc import dismiss_item, snooze_item, load_dismissed_items
 
     actions_file = tmp_dir / ".digest-actions.json"
     with patch("tui.ipc.DIGEST_ACTIONS_FILE", actions_file):
-        dismiss_item("item-a", title="A")
-        dismiss_item("item-b", title="B")
-        archive_item("item-b")
+        dismiss_item("item-a", title="A")   # D key = archived
+        snooze_item("item-b", title="B")    # S key = snoozed
         items = load_dismissed_items()
     assert len(items) == 2
     statuses = {i["item"]: i["status"] for i in items}
-    assert statuses["item-a"] == "dismissed"
-    assert statuses["item-b"] == "archived"
+    assert statuses["item-a"] == "archived"
+    assert statuses["item-b"] == "dismissed"
 
 
 def test_backwards_compat_legacy_entries(tmp_dir):
