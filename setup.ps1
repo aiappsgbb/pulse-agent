@@ -70,8 +70,9 @@ if ($py) {
 
 if (-not $pyOk) {
     Write-Host "   Installing Python 3.12 via winget..." -ForegroundColor Yellow
-    winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent
-    if ($LASTEXITCODE -ne 0) {
+    $wingetOut = winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-String
+    # winget returns non-zero for "already installed" or "no upgrade" — check output
+    if ($LASTEXITCODE -ne 0 -and $wingetOut -notmatch "already installed|No newer package|No available upgrade") {
         Write-Fail "Python install failed. Install manually from https://python.org (check 'Add to PATH')"
         Pop-Location; exit 1
     }
@@ -159,8 +160,12 @@ if ($gh) {
         Write-Host "   Then re-run install.bat to finish Copilot CLI setup." -ForegroundColor Yellow
     } else {
         Write-Ok "GitHub CLI authenticated"
-        # Install Copilot extension
-        & gh extension install github/gh-copilot 2>&1 | Out-Null
+        # Install Copilot extension (stderr warning if already installed is normal)
+        try {
+            $null = & gh extension install github/gh-copilot 2>&1
+        } catch {
+            # gh writes to stderr when extension already exists — not a real error
+        }
         Write-Ok "Copilot CLI extension installed"
     }
 } else {

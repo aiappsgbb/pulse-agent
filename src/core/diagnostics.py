@@ -403,6 +403,26 @@ def _check_pulse_home() -> HealthCheck:
 
 
 def _check_playwright_edge() -> HealthCheck:
+    """Check if Playwright can launch Edge.
+
+    Skips the actual browser launch if we're inside an asyncio event loop
+    (sync_playwright can't run there). In that case, just checks that the
+    playwright package is importable — the async browser auth check covers
+    the actual launch test.
+    """
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        return HealthCheck("Playwright Edge", False, "playwright not installed", "pip install playwright")
+
+    # If we're inside an event loop, can't use sync API — defer to async check
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+        return HealthCheck("Playwright Edge", True, "installed (launch test deferred to browser auth check)")
+    except RuntimeError:
+        pass  # No event loop — safe to use sync API
+
     try:
         from playwright.sync_api import sync_playwright
         pw = sync_playwright().__enter__()
@@ -414,8 +434,6 @@ def _check_playwright_edge() -> HealthCheck:
             return HealthCheck("Playwright Edge", False, str(e), "python -m playwright install msedge")
         finally:
             pw.__exit__(None, None, None)
-    except ImportError:
-        return HealthCheck("Playwright Edge", False, "playwright not installed", "pip install playwright")
     except Exception as e:
         return HealthCheck("Playwright Edge", False, str(e), "python -m playwright install msedge")
 
