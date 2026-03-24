@@ -110,10 +110,11 @@ async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) ->
     Raises:
         TransientExtractionError: Auth/page-load failures (caller should NOT mark attempted).
     """
-    # Skip API URLs that trigger downloads instead of rendering pages
+    # Skip API URLs that trigger downloads instead of rendering pages.
+    # This is permanent — the URL structure won't change on retry.
     if "/_api/" in sharepoint_url or "/media/transcripts/" in sharepoint_url:
         log.info(f"    Skipping API/transcript URL (not a viewable page): {sharepoint_url[:80]}")
-        return None
+        return False
 
     log.info(f"    Navigating to SharePoint Stream: {sharepoint_url[:100]}...")
     try:

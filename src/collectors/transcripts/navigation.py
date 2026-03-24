@@ -295,11 +295,22 @@ async def _log_popup_diagnostics(page: Page, meeting_name: str):
         log.info(f"    [DIAG] Could not inspect popup for '{meeting_name[:40]}': {e}")
 
 
+@dataclass
+class DiscoveryResult:
+    """Result of meeting discovery including skip reason breakdown."""
+    meetings: list[MeetingInfo]
+    total_scanned: int = 0
+    skipped_already_attempted: int = 0
+    skipped_future: int = 0
+    skipped_no_recap: int = 0
+    skipped_no_url: int = 0
+
+
 async def discover_meetings_with_recaps(
     page: Page,
     skip_slugs: set[str],
     slugify_fn,
-) -> list[MeetingInfo]:
+) -> DiscoveryResult:
     """Click each meeting event, check for 'View recap', extract SharePoint URLs.
 
     For each meeting with a recap:
@@ -310,7 +321,7 @@ async def discover_meetings_with_recaps(
     5. Close launcher tab, return to calendar tab
     6. Close popup (Escape)
 
-    Returns list of MeetingInfo with SharePoint URLs.
+    Returns DiscoveryResult with meetings and skip reason breakdown.
 
     skip_slugs: set of slugs to skip (already collected/attempted).
     slugify_fn: function to convert meeting title to slug.
@@ -321,8 +332,10 @@ async def discover_meetings_with_recaps(
 
     results = []
     seen_slugs = set()
-    skipped_count = 0
-    future_count = 0
+    skipped_already_attempted = 0
+    skipped_future = 0
+    skipped_no_recap = 0
+    skipped_no_url = 0
     today = date.today()
 
     for meeting_name in meeting_buttons:
@@ -330,13 +343,13 @@ async def discover_meetings_with_recaps(
         if not slug or slug in seen_slugs:
             continue
         if slug in skip_slugs:
-            skipped_count += 1
+            skipped_already_attempted += 1
             continue
 
         # Skip future meetings — they can't have recaps yet
         meeting_date = _parse_meeting_date(meeting_name)
         if meeting_date and meeting_date > today:
-            future_count += 1
+            skipped_future += 1
             continue
 
         seen_slugs.add(slug)
@@ -351,9 +364,10 @@ async def discover_meetings_with_recaps(
 
         # Poll for recap button with increasing wait — "View recap" loads
         # asynchronously as Outlook checks whether a recording exists.
-        # Total budget: ~8 seconds (1+1+2+2+2)
+        # Total budget: ~15 seconds (1+1+2+2+3+3+3) — extended from 8s
+        # because Teams is often slow to render the recap button.
         recap_btn = None
-        poll_waits = [1000, 1000, 2000, 2000, 2000]
+        poll_waits = [1000, 1000, 2000, 2000, 3000, 3000, 3000]
 
         for poll_i, wait_ms in enumerate(poll_waits):
             await page.wait_for_timeout(wait_ms)
@@ -368,6 +382,7 @@ async def discover_meetings_with_recaps(
                 await _log_popup_diagnostics(page, meeting_name)
 
             # No recap — close popup and continue
+            skipped_no_recap += 1
             try:
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(500)
@@ -441,11 +456,20 @@ async def discover_meetings_with_recaps(
             ))
             log.info(f"    → SharePoint URL: {sharepoint_url[:80]}...")
         else:
+            skipped_no_url += 1
             log.warning(f"    No SharePoint URL found for: {meeting_name[:50]}")
 
     log.info(
         f"  Discovery complete: {len(results)} recaps found, {len(seen_slugs)} checked, "
-        f"{skipped_count} skipped (attempted), {future_count} skipped (future)"
+        f"{skipped_already_attempted} skipped (attempted), {skipped_future} skipped (future), "
+        f"{skipped_no_recap} skipped (no recap), {skipped_no_url} skipped (no URL)"
     )
     await _nav_diag(page, "discover-end")
-    return results
+    return DiscoveryResult(
+        meetings=results,
+        total_scanned=len(meeting_buttons),
+        skipped_already_attempted=skipped_already_attempted,
+        skipped_future=skipped_future,
+        skipped_no_recap=skipped_no_recap,
+        skipped_no_url=skipped_no_url,
+    )

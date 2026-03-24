@@ -1,32 +1,46 @@
-# Pulse Agent - Setup Instructions
+# Pulse Agent — Setup Guide
 
-You are setting up Pulse Agent on a Windows 11 machine. Follow these instructions step by step. Run each command, check the output, and handle errors before moving on. Ask the user for input when indicated.
+You are an AI assistant helping a user set up Pulse Agent on their Windows 11 machine. This guide orchestrates the process — explain what's happening at each step, handle errors, and guide the user through interactive parts.
 
-## Environment
+**Philosophy**: The automated installer (`setup.ps1`) handles everything it can. This guide handles what the script can't: Git auth, browser auth, and the onboarding conversation. Your job is to make the whole experience feel like one continuous flow.
 
-- **OS**: Windows 11
-- **Shell**: PowerShell
-- **Required**: OneDrive for Business must be syncing (check that `$env:OneDriveCommercial` env var exists)
+---
+
+## Before You Start
+
+Explain to the user what Pulse Agent is and what setup will do:
+
+> "Pulse Agent is a local-first information processing engine that runs on your machine. It reads your meeting transcripts, scans your Teams and Outlook inbox, and delivers a daily digest of what needs your attention — all without you having to ask.
+>
+> Setup takes about 10 minutes. Here's what will happen:
+> 1. **Install tools** — Python, Node.js, GitHub CLI (automated)
+> 2. **Authenticate** — GitHub CLI + Microsoft Teams (you'll sign in twice)
+> 3. **Configure** — Pulse will ask you a few questions about your role and preferences
+> 4. **Verify** — A health check confirms everything works
+>
+> Ready?"
+
+Wait for the user to confirm before proceeding.
 
 ---
 
 ## Phase 1: Clone the Repository
 
-First, make sure Git is installed:
+Check if Git is installed:
 
 ```powershell
 git --version
 ```
 
-If Git is not found:
+If Git is not found, install it:
 
 ```powershell
 winget install Git.Git --accept-source-agreements --accept-package-agreements
 ```
 
-After install, **close and reopen the terminal**, then verify `git --version` works.
+After install, the user must **close and reopen their terminal** for Git to be on PATH.
 
-Now clone the repo and navigate into it:
+Clone the repo (skip if it already exists):
 
 ```powershell
 mkdir -Force "$env:USERPROFILE\dev" | Out-Null
@@ -35,288 +49,212 @@ git clone https://github.com/aiappsgbb/pulse-agent.git
 cd pulse-agent
 ```
 
-If the repo already exists at a known path, just `cd` into it instead.
-
-**IMPORTANT**: All remaining commands run from the repo root directory (`pulse-agent/`).
+**All remaining steps run from the repo root** (`pulse-agent/`).
 
 ---
 
-## Phase 2: Install Prerequisites
+## Phase 2: Run the Automated Installer
 
-Check and install each tool. Use `winget` (built into Windows 11) for missing software.
-
-### 2.1 Python 3.12+
+The installer handles Python, Node.js, GitHub CLI, WorkIQ, virtual environment, Playwright, data directories, config template, and Desktop shortcut — all in one script.
 
 ```powershell
-python --version
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-If Python is not found or version is below 3.12:
+Watch the output. The script reports OK/WARN/FAIL for each step. Common outcomes:
 
-```powershell
-winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
-```
+| Output | Meaning | Action needed? |
+|--------|---------|----------------|
+| All green `OK` | Everything installed | No |
+| Yellow `WARN: GitHub CLI not authenticated` | Expected — we'll handle it next | No |
+| Yellow `WARN: WorkIQ installed but not on PATH` | PATH needs refresh | Close and reopen terminal |
+| Red `FAIL: Python install failed` | Rare — install manually from python.org | Yes |
 
-After install, **close and reopen the terminal** so Python is on PATH, then verify:
+If setup.ps1 reports any FAIL, troubleshoot that specific step before continuing.
 
-```powershell
-python --version
-```
+---
 
-### 2.2 Node.js
+## Phase 3: GitHub CLI Authentication
 
-```powershell
-node --version
-```
+This is interactive — the user needs to complete a browser sign-in flow.
 
-If Node.js is not found:
-
-```powershell
-winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
-```
-
-After install, **close and reopen the terminal**, then verify:
-
-```powershell
-node --version
-npm --version
-```
-
-### 2.3 GitHub CLI
-
-```powershell
-gh --version
-```
-
-If `gh` is not found:
-
-```powershell
-winget install GitHub.cli --accept-source-agreements --accept-package-agreements
-```
-
-After install, **close and reopen the terminal**, then verify:
-
-```powershell
-gh --version
-```
-
-### 2.4 Authenticate GitHub CLI
+Check current auth status:
 
 ```powershell
 gh auth status
 ```
 
-If not authenticated, run:
+If not authenticated:
+
+**ASK THE USER**: "GitHub CLI needs to authenticate with your GitHub account. This is needed for the Copilot agent runtime. I'll start the login flow — a browser window will open for you to sign in."
 
 ```powershell
 gh auth login
 ```
 
-**ASK THE USER**: "GitHub CLI needs authentication. Run `gh auth login` in your terminal. It will open a browser for you to sign in with your GitHub account. Let me know when you're done."
+Walk the user through the prompts:
+1. **Account type**: GitHub.com
+2. **Preferred protocol**: HTTPS
+3. **Authenticate**: Login with a web browser
+4. Copy the one-time code shown in the terminal, paste it in the browser, and authorize.
 
-After auth, install the Copilot CLI extension:
+After auth succeeds, install the Copilot CLI extension:
 
 ```powershell
 gh extension install github/gh-copilot
 ```
 
-### 2.5 WorkIQ MCP Server
-
-```powershell
-npm install -g @microsoft/workiq
-```
-
 Verify:
 
 ```powershell
-workiq --version
+gh auth status
+gh copilot --version 2>$null || echo "Copilot CLI extension not found"
 ```
-
-If `workiq` is not found after install, the npm global bin directory may not be on PATH. Run:
-
-```powershell
-npm config get prefix
-```
-
-And add `{prefix}` to the user's PATH if needed.
 
 ---
 
-## Phase 3: Python Environment
+## Phase 4: Browser Authentication
 
-### 3.1 Create virtual environment
+**This is the most important step that people get wrong.** Pulse uses its own dedicated browser profile (separate from the user's normal Edge). Signing into Teams in the user's regular Edge browser does NOT work — the auth must happen in Pulse's profile.
 
-```powershell
-python -m venv .venv
-```
+Explain to the user:
 
-### 3.2 Activate it
+> "Pulse needs to read your Teams inbox and meeting transcripts using browser automation. It uses a dedicated Edge profile that's separate from your normal browser. I need to open that profile so you can sign into Microsoft Teams in it. This is a one-time step."
+
+Activate the virtual environment first (if not already active):
 
 ```powershell
 .venv\Scripts\activate
 ```
 
-You should see `(.venv)` in the prompt.
-
-### 3.3 Install dependencies
+Then run the health check, which will detect the missing auth and offer to open the browser:
 
 ```powershell
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python src/pulse.py --health-check
 ```
 
-### 3.4 Install Playwright Edge browser
+The health check will:
+1. Validate all installed components
+2. Detect that Teams auth is missing in the daemon profile
+3. Ask: "Open browser to sign in now? [Y/n]"
+4. Open a visible Edge window using Pulse's dedicated profile
+5. The user signs into `teams.microsoft.com` with their work account
+6. The user closes the browser window when done
+7. The health check verifies auth succeeded
+
+**If the user prefers to do this manually later**, that's fine — Pulse will work for everything except transcript collection and inbox scanning until they complete this step.
+
+**IMPORTANT**: If the health check shows `[FAIL] Playwright Edge`, the user needs to run:
 
 ```powershell
 python -m playwright install msedge
 ```
 
----
-
-## Phase 4: Data Directory Setup
-
-Pulse stores all data on OneDrive. Detect the path:
-
-```powershell
-echo $env:OneDriveCommercial
-```
-
-If this prints a valid path (e.g., `C:\Users\username\OneDrive - Microsoft`), create the Pulse data directories:
-
-```powershell
-$pulseHome = Join-Path $env:OneDriveCommercial "Documents\Pulse"
-$pulseTeam = Join-Path $env:OneDriveCommercial "Documents\Pulse-Team"
-
-$dirs = @(
-    "transcripts", "documents", "emails", "teams-messages",
-    "digests", "intel", "projects", "pulse-signals",
-    "jobs/pending", "jobs/completed", "logs", "Agent Instructions"
-)
-
-foreach ($d in $dirs) {
-    New-Item -ItemType Directory -Path (Join-Path $pulseHome $d) -Force | Out-Null
-}
-New-Item -ItemType Directory -Path $pulseTeam -Force | Out-Null
-
-Write-Host "PULSE_HOME: $pulseHome"
-Write-Host "Pulse-Team: $pulseTeam"
-```
-
-If `OneDriveCommercial` is empty, **ASK THE USER**: "OneDrive for Business doesn't seem to be syncing. Is your OneDrive path different? I need to know where to store Pulse data."
-
-### 4.1 Copy config template
-
-```powershell
-$siDest = Join-Path $pulseHome "standing-instructions.yaml"
-if (-not (Test-Path $siDest)) {
-    Copy-Item "config\standing-instructions.template.yaml" $siDest
-    Write-Host "Config template copied to: $siDest"
-}
-```
+Then re-run `--health-check`.
 
 ---
 
-## Phase 5: Create Desktop Shortcut
+## Phase 5: Verify Everything
 
-Create a batch file on the Desktop so the user can double-click to start Pulse:
+If you didn't already run the health check in Phase 4, run it now:
 
 ```powershell
-$desktop = [System.Environment]::GetFolderPath("Desktop")
-$repoRoot = (Get-Location).Path
-
-$content = @"
-@echo off
-cd /d "$repoRoot"
-call .venv\Scripts\activate.bat
-python src\pulse.py
-pause
-"@
-
-Set-Content -Path (Join-Path $desktop "Start Pulse.bat") -Value $content -Encoding ASCII
-Write-Host "Created 'Start Pulse.bat' on Desktop"
+python src/pulse.py --health-check
 ```
 
----
+All checks should pass. The key ones to look for:
 
-## Phase 6: One-time Browser Setup
+| Check | Must pass? | Notes |
+|-------|-----------|-------|
+| Python version | Yes | 3.12+ required |
+| Playwright Edge | Yes | Browser automation |
+| GitHub CLI auth | Yes | Agent runtime |
+| Copilot CLI extension | Yes | Agent runtime |
+| PULSE_HOME | Yes | Data storage |
+| Browser: Teams auth | Recommended | Transcript + inbox scanning |
+| WorkIQ MCP server | Optional | M365 data queries |
+| Config: user identity | No (next step) | Onboarding will set this |
 
-**ASK THE USER**: "Almost done -- open Microsoft Edge and sign into https://teams.microsoft.com with your work account. This is needed so Pulse can read your meeting transcripts and inbox. Let me know when you're signed in."
-
----
-
-## Phase 7: Verify Installation
-
-Run the test suite to confirm everything works:
+Optionally run the test suite for extra confidence:
 
 ```powershell
 python -m pytest tests/ -q --tb=line
 ```
 
-All tests should pass (880+). If any fail, investigate the errors.
+---
 
-Then start Pulse to verify it launches:
+## Phase 6: First Run + Onboarding
+
+Launch Pulse with the setup flag to force the onboarding conversation:
 
 ```powershell
-python src/pulse.py --once --mode monitor
+python src/pulse.py --setup
 ```
 
-This runs a single triage cycle and exits. If it starts without errors, the install is good.
+This starts the full Pulse TUI (terminal dashboard). The Chat tab will automatically activate and walk the user through:
+
+1. **Identity** — name, email, role, organization
+2. **Focus** — what they work on day-to-day
+3. **What matters vs. noise** — what should surface in digests
+4. **Schedule** — digest time, triage frequency, office hours
+5. **Team** (optional) — colleagues also running Pulse
+6. **Intelligence** (optional) — topics and competitors to watch
+
+The agent asks one question at a time. Defaults are offered in brackets — the user can accept them or customize.
+
+After all questions are answered, the agent saves the config and confirms. The user can re-run `--setup` anytime to change their preferences.
+
+**Tell the user**: "From now on, just double-click 'Start Pulse' on your Desktop. Pulse runs automatically — morning digest at 7 AM, triage every 30 minutes, intel brief at 9 AM. Press `?` in the TUI for keyboard shortcuts."
 
 ---
 
-## Phase 8: First Run
+## Setup Complete
 
-Tell the user:
+Summarize what was set up:
 
-"**Setup is complete!** Here's how to use Pulse Agent:
+| Component | What it does |
+|-----------|-------------|
+| Python + venv | Pulse runtime |
+| GitHub CLI + Copilot | Agent brain (LLM via GitHub Copilot SDK) |
+| Playwright + Edge | Browser automation (transcripts, inbox, sending) |
+| WorkIQ | Microsoft 365 data access (calendar, email, people) |
+| PULSE_HOME (OneDrive) | All your data — syncs automatically |
+| Desktop shortcut | Double-click to start |
+| Standing instructions | Your preferences and schedule |
 
-1. **Double-click 'Start Pulse' on your Desktop** to launch
-2. The first time, the **Chat tab** will ask you a few questions (your name, email, what topics matter to you)
-3. After that, Pulse runs automatically -- morning digest at 7 AM, triage every 30 minutes, intel brief at 9 AM
-4. Press `?` in the TUI for keyboard shortcuts
-
-Your data lives on OneDrive and syncs automatically. No cloud backend, no external services."
+Your data lives entirely on OneDrive. No cloud backend, no third-party services beyond GitHub Copilot and Microsoft 365.
 
 ---
 
-## Upgrading Existing Installations
+## Upgrading
 
-If Pulse Agent is already installed and you need to update to the latest version:
+### AI-Assisted (Recommended)
 
-### AI-Assisted Upgrade (Recommended)
+Open a terminal in the repo folder and tell your AI assistant:
 
-Open a terminal in the Pulse Agent repo folder, then paste this into GitHub Copilot Chat or any AI assistant with terminal access:
+> "Pull the latest Pulse Agent code, update dependencies, and verify everything works."
 
-> "Pull the latest Pulse Agent code, update dependencies, and verify everything works. The repo is https://github.com/aiappsgbb/pulse-agent.git"
-
-### Manual Upgrade
-
-From the repo root (`pulse-agent/`):
+### Manual
 
 ```powershell
-# 1. Pull latest code
+cd path\to\pulse-agent
 git pull origin main
-
-# 2. Activate the virtual environment
 .venv\Scripts\activate
-
-# 3. Update dependencies (in case new packages were added)
 python -m pip install -r requirements.txt
-
-# 4. Run tests to verify
-python -m pytest tests/ -q --tb=line
+python src/pulse.py --health-check
 ```
 
-That's it. Your data in `PULSE_HOME` (OneDrive) is untouched — only the code updates.
+Data in PULSE_HOME is untouched — only code updates.
 
 ### What if something breaks?
 
 | Problem | Fix |
 |---------|-----|
-| Merge conflicts on `git pull` | You shouldn't have local code changes. Run `git stash` then `git pull` |
-| New dependencies fail to install | Delete `.venv/` and recreate: `python -m venv .venv` then reinstall |
-| Tests fail after upgrade | Check the error — likely a missing dependency. Re-run `pip install -r requirements.txt` |
-| Desktop shortcut stops working | Re-run Phase 5 from the setup instructions above |
+| Merge conflicts | `git stash` then `git pull` |
+| New deps fail | Delete `.venv/`, recreate: `python -m venv .venv`, reinstall |
+| Tests fail after upgrade | Re-run `pip install -r requirements.txt` |
+| Desktop shortcut broken | Re-run `setup.ps1` |
+| Browser auth expired | `python src/pulse.py --health-check` (will offer re-login) |
 
 ---
 
@@ -324,25 +262,13 @@ That's it. Your data in `PULSE_HOME` (OneDrive) is untouched — only the code u
 
 | Problem | Fix |
 |---------|-----|
-| `winget` not found | Install "App Installer" from the Microsoft Store |
+| `winget` not found | Install "App Installer" from Microsoft Store |
 | `git` not found | `winget install Git.Git` then reopen terminal |
-| Python not on PATH after install | Close and reopen terminal, or add manually via System Settings > Environment Variables |
+| Python not on PATH | Close and reopen terminal |
 | `npm install -g` permission error | Run terminal as Administrator |
-| `gh auth login` fails | Ensure you have a GitHub account with Copilot access |
-| `playwright install msedge` fails | Edge might need updating -- check edge://settings/help |
-| Tests fail with import errors | Make sure the venv is activated (`.venv\Scripts\activate`) |
-| `OneDriveCommercial` is empty | OneDrive for Business isn't syncing. Open OneDrive settings and sign in with your work account |
-
----
-
-## What Was Installed
-
-| Tool | Purpose | Installed via |
-|------|---------|--------------|
-| Git | Source control | winget |
-| Python 3.12 | Core runtime | winget |
-| Node.js LTS | Needed for WorkIQ MCP server | winget |
-| GitHub CLI | Needed for Copilot CLI extension | winget |
-| WorkIQ | Microsoft 365 data access (emails, calendar, Teams) | npm |
-| GitHub Copilot CLI | Agent runtime (SDK server mode) | gh extension |
-| Playwright + Edge | Browser automation for transcript/inbox scanning | pip + playwright install |
+| `gh auth login` fails | Ensure GitHub account has Copilot access |
+| `playwright install msedge` fails | Update Edge: `edge://settings/help` |
+| Tests fail with import errors | Activate venv: `.venv\Scripts\activate` |
+| `OneDriveCommercial` not set | Open OneDrive settings, sign in with work account |
+| Transcript collection finds nothing | Re-run `--health-check` to verify browser auth |
+| "Browser launch failed" errors | Kill orphan Edge: `taskkill /F /IM msedge.exe` then retry |

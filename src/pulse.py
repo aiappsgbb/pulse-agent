@@ -61,12 +61,22 @@ def main():
         action="store_true",
         help="Run daemon without TUI (headless mode)",
     )
+    parser.add_argument(
+        "--health-check",
+        action="store_true",
+        help="Run comprehensive installation health check and exit",
+    )
     args = parser.parse_args()
 
     # Set config override before anything calls load_config()
     if args.config:
         import os
         os.environ["PULSE_CONFIG"] = args.config
+
+    # --- Health check mode ---
+    if args.health_check:
+        asyncio.run(_health_check_main())
+        return
 
     # --- CLI mode: --once and/or --mode → run and exit, no TUI ---
     if args.once or args.mode:
@@ -116,6 +126,61 @@ def main():
         daemon_thread.join(timeout=15)
         if daemon_thread.is_alive():
             print("Daemon thread did not exit cleanly.", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Health check mode — validates full installation
+# ---------------------------------------------------------------------------
+
+async def _health_check_main():
+    """Run comprehensive health check, optionally fix browser auth."""
+    from core.config import load_config
+    from core.diagnostics import (
+        run_health_check_async, print_health_report,
+        verify_browser_auth, open_browser_for_login,
+    )
+
+    try:
+        config = load_config()
+    except Exception:
+        config = None
+
+    print("\nRunning health checks...")
+    checks = await run_health_check_async(config)
+    print_health_report(checks)
+
+    # If browser auth failed, offer to open browser for login
+    browser_auth = next((c for c in checks if c.name == "Browser: Teams auth"), None)
+    if browser_auth and not browser_auth.ok:
+        print("  Browser authentication is required for transcript collection")
+        print("  and inbox scanning. Pulse will open a browser window using")
+        print("  its dedicated profile so you can sign into Microsoft Teams.")
+        print()
+        try:
+            answer = input("  Open browser to sign in now? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+
+        if answer in ("", "y", "yes"):
+            print("\n  Opening browser...")
+            await open_browser_for_login()
+
+            # Verify auth worked
+            print("  Verifying authentication...")
+            result = await verify_browser_auth(headless=True)
+            if result["ok"]:
+                print("  Authentication successful! Teams loaded correctly.\n")
+            elif result["needs_login"]:
+                print("  Still not authenticated. Please try again or sign in")
+                print("  manually by running: python src/pulse.py --health-check\n")
+            else:
+                print(f"  Verification error: {result.get('error', 'unknown')}\n")
+
+    # If config needs setup, mention it
+    config_check = next((c for c in checks if "Config" in c.name and not c.ok), None)
+    if config_check:
+        print("  To complete configuration, run: python src/pulse.py --setup")
+        print()
 
 
 # ---------------------------------------------------------------------------

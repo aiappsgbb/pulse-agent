@@ -14,6 +14,7 @@ from collectors.transcripts.navigation import (
     navigate_to_outlook_calendar,
     navigate_weeks_back,
     discover_meetings_with_recaps,
+    DiscoveryResult,
 )
 from collectors.transcripts.extraction import (
     extract_transcript_from_sharepoint,
@@ -211,13 +212,24 @@ async def run_transcript_collection(client, config: dict):
         # Phase 1: Discover all meetings with recaps across all weeks
         # Start with CURRENT week (not scanned if we skip straight to back-navigation)
         all_meetings = []
+        # Aggregate skip reasons across all weeks
+        total_scanned = 0
+        total_skip_attempted = 0
+        total_skip_future = 0
+        total_skip_no_recap = 0
+        total_skip_no_url = 0
 
         log.info(f"  --- Current week ---")
         await _diag(page, "week0-current")
-        meetings = await discover_meetings_with_recaps(
+        discovery = await discover_meetings_with_recaps(
             page, skip_slugs, _slugify
         )
-        for m in meetings:
+        total_scanned += discovery.total_scanned
+        total_skip_attempted += discovery.skipped_already_attempted
+        total_skip_future += discovery.skipped_future
+        total_skip_no_recap += discovery.skipped_no_recap
+        total_skip_no_url += discovery.skipped_no_url
+        for m in discovery.meetings:
             if m.slug not in skip_slugs:
                 all_meetings.append(m)
                 skip_slugs.add(m.slug)
@@ -230,11 +242,16 @@ async def run_transcript_collection(client, config: dict):
             await navigate_weeks_back(page, 1)
             await _diag(page, f"week{week_num}-navigated")
 
-            meetings = await discover_meetings_with_recaps(
+            discovery = await discover_meetings_with_recaps(
                 page, skip_slugs, _slugify
             )
+            total_scanned += discovery.total_scanned
+            total_skip_attempted += discovery.skipped_already_attempted
+            total_skip_future += discovery.skipped_future
+            total_skip_no_recap += discovery.skipped_no_recap
+            total_skip_no_url += discovery.skipped_no_url
 
-            for m in meetings:
+            for m in discovery.meetings:
                 if m.slug not in skip_slugs:
                     all_meetings.append(m)
                     skip_slugs.add(m.slug)  # prevent duplicates across weeks
@@ -322,6 +339,13 @@ async def run_transcript_collection(client, config: dict):
     _write_collection_status(
         success=True, collected=collected, skipped=skipped,
         errors=len(errors), error_message=None,
+        skip_reasons={
+            "already_attempted": total_skip_attempted,
+            "future_meeting": total_skip_future,
+            "no_recap_button": total_skip_no_recap,
+            "no_sharepoint_url": total_skip_no_url,
+        },
+        total_scanned=total_scanned,
     )
 
 
@@ -331,21 +355,31 @@ def _write_collection_status(
     skipped: int = 0,
     errors: int = 0,
     error_message: str | None = None,
+    skip_reasons: dict[str, int] | None = None,
+    total_scanned: int = 0,
 ):
     """Write transcript collection status to a JSON file.
 
     Downstream consumers (digest pre-processing) read this to surface
     collection failures to the user instead of silently producing
     incomplete digests.
+
+    skip_reasons breakdown:
+    - already_attempted: slug in attempted history (collected or permanently failed)
+    - future_meeting: meeting date is in the future
+    - no_recap_button: no "View recap" button found (not recorded or transcription disabled)
+    - no_sharepoint_url: recap clicked but no SharePoint URL extracted
     """
     import json
     status = {
         "timestamp": datetime.now().isoformat(),
         "success": success,
+        "total_scanned": total_scanned,
         "collected": collected,
         "skipped": skipped,
         "errors": errors,
         "error_message": error_message,
+        "skip_reasons": skip_reasons or {},
     }
     try:
         TRANSCRIPT_STATUS_FILE.write_text(

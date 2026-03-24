@@ -195,11 +195,11 @@ class TestFindRecapElement:
 class TestExtractionReturnTypes:
     """Tests that extract_transcript_from_sharepoint returns the right types."""
 
-    async def test_api_url_returns_none(self):
-        """API URLs return None (transient — might get a proper URL next time)."""
+    async def test_api_url_returns_false(self):
+        """API URLs return False (permanent — URL structure won't change on retry)."""
         page = _make_mock_page()
         result = await extract_transcript_from_sharepoint(page, "https://example.com/_api/stream")
-        assert result is None
+        assert result is False
 
     async def test_access_denied_returns_false(self):
         """AccessDenied pages return False (permanent)."""
@@ -589,7 +589,8 @@ class TestDiscoverMeetingsWithRecaps:
             skip = {"team-standup-1100-am-to-1200-pm-monday"}
             results = await discover_meetings_with_recaps(page, skip, _slugify)
 
-        assert len(results) == 0
+        assert len(results.meetings) == 0
+        assert results.skipped_already_attempted == 1
         # get_by_role should be called for "Project Review" click (not "Team Standup")
         role_calls = [
             c for c in page.get_by_role.call_args_list
@@ -661,10 +662,11 @@ class TestDiscoverMeetingsWithRecaps:
             results = await discover_meetings_with_recaps(page, set(), _slugify)
 
         assert diag_called
-        assert len(results) == 0
+        assert len(results.meetings) == 0
+        assert results.skipped_no_recap == 1
 
-    async def test_polling_uses_5_wait_intervals(self):
-        """Verifies that the polling loop waits 5 times before giving up."""
+    async def test_polling_uses_7_wait_intervals(self):
+        """Verifies that the polling loop waits 7 times before giving up."""
         page = self._make_discovery_page([
             "Test Meeting 1:00 PM to 2:00 PM Thursday",
         ])
@@ -685,8 +687,8 @@ class TestDiscoverMeetingsWithRecaps:
 
             await discover_meetings_with_recaps(page, set(), _slugify)
 
-        # Should have polled _find_recap_element exactly 5 times
-        assert find_recap_calls == 5
+        # Should have polled _find_recap_element exactly 7 times (extended from 5)
+        assert find_recap_calls == 7
 
     async def test_escape_pressed_after_no_recap(self):
         """Escape key is pressed to close popup when no recap found."""

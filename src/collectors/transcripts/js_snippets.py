@@ -94,7 +94,7 @@ async () => {
         const prev = Object.keys(entries).length;
         pos += step;
         scrollZone.scrollTop = pos;
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 300));
         collectVisible();
         stale = Object.keys(entries).length === prev ? stale + 1 : 0;
         if (pos > scrollZone.scrollHeight + step * 2) break;

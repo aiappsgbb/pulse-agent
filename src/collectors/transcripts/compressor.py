@@ -200,7 +200,11 @@ async def compress_existing_transcripts(
                     f"**Compressed**: {len(compressed)} chars\n\n"
                 )
                 md_path = txt_path.with_suffix(".md")
-                md_path.write_text(header + compressed, encoding="utf-8")
+                tmp_path = txt_path.with_suffix(".md.tmp")
+                # Atomic write: .tmp -> rename to .md -> delete .txt
+                # Prevents data loss if process crashes mid-write.
+                tmp_path.write_text(header + compressed, encoding="utf-8")
+                tmp_path.rename(md_path)
                 txt_path.unlink()
                 log.info(f"  Replaced {txt_path.name} -> {md_path.name}")
                 compressed_count += 1
@@ -208,7 +212,33 @@ async def compress_existing_transcripts(
                 log.warning(f"  Could not compress {txt_path.name} — keeping raw")
 
     except Exception as e:
-        log.warning(f"  Batch compression session failed: {e}")
+        log.warning(f"  Batch compression session failed: {e} — continuing with per-file fallback")
+        # Batch session died — try remaining files individually
+        remaining = [f for f in to_compress if not f.with_suffix(".md").exists() and f.exists()]
+        for txt_path in remaining:
+            try:
+                individual_result = await compress_transcript(
+                    client, txt_path.read_text(encoding="utf-8"),
+                    txt_path.stem.split("_", 1)[-1].replace("-", " ").title(),
+                    model=model,
+                )
+                if individual_result:
+                    date_part = txt_path.stem.split("_", 1)[0]
+                    header = (
+                        f"# {txt_path.stem.split('_', 1)[-1].replace('-', ' ').title()}\n"
+                        f"**Date**: {date_part} | "
+                        f"**Original length**: {len(txt_path.read_text(encoding='utf-8'))} chars | "
+                        f"**Compressed**: {len(individual_result)} chars\n\n"
+                    )
+                    md_path = txt_path.with_suffix(".md")
+                    tmp_path = txt_path.with_suffix(".md.tmp")
+                    tmp_path.write_text(header + individual_result, encoding="utf-8")
+                    tmp_path.rename(md_path)
+                    txt_path.unlink()
+                    log.info(f"  Fallback compressed: {txt_path.name} -> {md_path.name}")
+                    compressed_count += 1
+            except Exception as fallback_err:
+                log.warning(f"  Fallback compression failed for {txt_path.name}: {fallback_err}")
     finally:
         if session:
             try:
