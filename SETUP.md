@@ -128,33 +128,26 @@ Then re-run `--health-check`.
 
 ---
 
-## Phase 5: MSX-MCP Plugin (Optional — Microsoft Sellers)
+## Phase 5: CRM Plugin (Optional)
 
-MSX-MCP gives Pulse access to MSX Dataverse — pipeline, deals, accounts, milestones. If the user works with MSX, install it. If not, skip.
+Pulse can integrate with CRM/pipeline data (deals, accounts, milestones) via a Copilot CLI plugin.
 
-**ASK THE USER**: "Do you use MSX for pipeline/CRM data? I can install the MSX-MCP plugin so you can query deals and accounts from Pulse chat. [Y/n]"
-
-If yes, run the install, Azure CLI auth, and verify — all automated:
+**Microsoft internal staff**: Install the MSX-MCP plugin for Dataverse access:
 
 ```powershell
-# Install the plugin
 copilot plugin install mcaps-microsoft/MSX-MCP
+```
 
-# Azure CLI auth for Dataverse (Microsoft corporate tenant)
-az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47
+This requires access to the `mcaps-microsoft` GitHub organization (Microsoft employees only). After install, authenticate with Azure CLI and verify:
 
-# Verify
+```powershell
+az login
 copilot plugin list
 ```
 
-**IMPORTANT**: MSX requires Microsoft corporate VPN to reach Dataverse. Remind the user to connect to VPN before using MSX tools.
+**External users**: Skip this step — Pulse works fine without CRM integration. If your organization has a compatible Copilot CLI CRM plugin, install it per your internal docs.
 
-If `copilot plugin install` fails (e.g. not on VPN, no access to mcaps-microsoft org):
-1. Ensure the user has joined the `mcaps-microsoft` GitHub organization
-2. Ensure VPN is connected
-3. Try again
-
-If the user doesn't use MSX or skips, move on — Pulse works fine without it. MSX tools simply won't appear in chat.
+Pulse auto-detects installed CRM plugins at startup — no config changes needed.
 
 ---
 
@@ -177,7 +170,7 @@ All checks should pass. The key ones:
 | PULSE_HOME | Yes | Data storage |
 | Browser: Teams auth | Recommended | Transcript + inbox scanning |
 | WorkIQ MCP server | Optional | M365 data queries |
-| MSX-MCP plugin | Optional | MSX pipeline queries |
+| CRM plugin | Optional | Pipeline/deal queries |
 | Config: user identity | No (next step) | Onboarding will set this |
 
 If any check fails, fix it before moving on. Run the test suite for extra confidence:
@@ -221,7 +214,7 @@ Summarize what was set up:
 | GitHub CLI + Copilot | Agent brain (LLM via GitHub Copilot SDK) |
 | Playwright + Edge | Browser automation (transcripts, inbox, sending) |
 | WorkIQ | Microsoft 365 data access (calendar, email, people) |
-| MSX-MCP (optional) | MSX pipeline, deals, accounts, milestones |
+| CRM plugin (optional) | Pipeline, deals, accounts, milestones |
 | PULSE_HOME (OneDrive) | All your data — syncs automatically |
 | Desktop shortcut | Double-click to start |
 | Standing instructions | Your preferences and schedule |
@@ -240,15 +233,9 @@ Open a terminal in the repo folder and tell your AI assistant:
 
 The assistant will handle `git pull`, `pip install`, and `--health-check` automatically.
 
-### New in This Update: MSX-MCP Integration
+### New in This Update: CRM Plugin Support
 
-If you're a Microsoft seller and want MSX pipeline data in Pulse chat, install the MSX-MCP plugin:
-
-> "Install the MSX-MCP plugin for Copilot CLI and verify it works."
-
-Or manually: `copilot plugin install mcaps-microsoft/MSX-MCP` + `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47`. Requires VPN.
-
-Pulse auto-detects the plugin — no config changes needed. If it's not installed, MSX tools are silently skipped.
+Pulse now auto-detects Copilot CLI CRM plugins. Microsoft staff can install MSX-MCP (`copilot plugin install mcaps-microsoft/MSX-MCP`). External users with a compatible plugin can install per their internal docs. No config changes needed — just restart Pulse.
 
 ### Manual
 
@@ -271,7 +258,7 @@ Data in PULSE_HOME is untouched — only code updates.
 | Tests fail after upgrade | Re-run `pip install -r requirements.txt` |
 | Desktop shortcut broken | Re-run `setup.ps1` |
 | Browser auth expired | `python src/pulse.py --health-check` (will offer re-login) |
-| MSX tools not showing | `copilot plugin install mcaps-microsoft/MSX-MCP` + restart daemon |
+| CRM tools not showing | `copilot plugin install mcaps-microsoft/MSX-MCP` (MS internal) + restart daemon |
 
 ---
 
