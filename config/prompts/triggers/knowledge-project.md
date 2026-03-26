@@ -27,9 +27,11 @@ Delegate to the **knowledge-miner** agent to process **this single project**:
   - Commitment status updates (overdue if past due, done if fulfilled)
 
 ### 2. Staleness Check
-- Commitments past due with `status: open` → mark `overdue`
+- Commitments past due with `status: open` AND `due_confidence: explicit` → mark `overdue`
+- Commitments past due with `status: open` AND `due_confidence: inferred` (or missing) → flag `[SOFT DUE]` but do NOT mark overdue
 - Commitments with no mention in 7+ days → flag `[STALE]`
 - Stakeholders with no interaction in 14+ days → flag `[INFO]`
+- Review `involvement` field — update if evidence shows changed role (e.g., you started driving meetings → promote to `lead`)
 
 ### 3. Run Watch Queries
 For each `watch_queries` entry in the project:

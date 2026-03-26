@@ -437,9 +437,11 @@ def _load_today_items(
 
 _STATUS_ORDER = {"active": 0, "blocked": 1, "on-hold": 2, "completed": 3}
 _RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+_INVOLVEMENT_ORDER = {"lead": 0, "contributor": 1, "observer": 2}
 
-PROJECT_SORT_MODES = ["urgency", "next_meeting", "status", "alphabetical"]
+PROJECT_SORT_MODES = ["relevance", "urgency", "next_meeting", "status", "alphabetical"]
 PROJECT_SORT_LABELS = {
+    "relevance": "Relevance (involvement/risk)",
     "urgency": "Urgency (overdue/risk)",
     "next_meeting": "Next meeting",
     "status": "Status",
@@ -448,15 +450,44 @@ PROJECT_SORT_LABELS = {
 
 
 def _overdue_count(project: dict) -> int:
+    """Count only commitments with explicit due dates that are overdue."""
     return sum(
         1 for c in project.get("commitments", [])
         if c.get("status", "").lower() == "overdue"
+        and c.get("due_confidence", "explicit").lower() == "explicit"
+    )
+
+
+def _soft_overdue_count(project: dict) -> int:
+    """Count overdue commitments with inferred due dates (soft overdues)."""
+    return sum(
+        1 for c in project.get("commitments", [])
+        if c.get("status", "").lower() == "overdue"
+        and c.get("due_confidence", "explicit").lower() != "explicit"
+    )
+
+
+def _involvement_rank(project: dict) -> int:
+    """Return sort rank for involvement: lead=0, contributor=1, observer=2."""
+    return _INVOLVEMENT_ORDER.get(
+        project.get("involvement", "observer").lower(), 2
     )
 
 
 def _sort_projects(projects: list[dict], mode: str) -> list[dict]:
     """Sort projects by the given mode. Returns a new list."""
-    if mode == "urgency":
+    if mode == "relevance":
+        # Involvement first (lead > contributor > observer), then risk, then
+        # explicit overdue count, then status, then alpha.  This puts YOUR
+        # projects first and pushes observer/low-risk projects to the bottom.
+        return sorted(projects, key=lambda p: (
+            _involvement_rank(p),
+            _RISK_ORDER.get(p.get("risk_level", "medium").lower(), 2),
+            -_overdue_count(p),
+            _STATUS_ORDER.get(p.get("status", "active").lower(), 0),
+            p.get("project", p.get("_id", "")).lower(),
+        ))
+    elif mode == "urgency":
         # Overdue count desc, then risk severity, then status, then alpha
         return sorted(projects, key=lambda p: (
             -_overdue_count(p),
@@ -810,6 +841,43 @@ class ProjectStatusModal(ModalScreen):
             new_status = bid[4:]  # strip "btn-"
             if new_status in ("active", "blocked", "on-hold", "completed"):
                 self.dismiss(new_status)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class InvolvementModal(ModalScreen):
+    """Modal for changing a project's involvement level."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, project: dict, **kwargs):
+        super().__init__(**kwargs)
+        self._project = project
+
+    def compose(self) -> ComposeResult:
+        name = self._project.get("project", "?")
+        current = self._project.get("involvement", "observer")
+        with Widget(id="status-dialog"):
+            yield Label(f"Set involvement: {name}", id="status-title")
+            yield Label(f"Current: [bold]{current}[/bold]", id="status-current")
+            yield Label("[dim]lead = you own it  |  contributor = you participate  |  observer = just CC'd[/dim]")
+            with Horizontal(id="status-buttons"):
+                for s in ("lead", "contributor", "observer"):
+                    variant = "primary" if s == current else "default"
+                    yield Button(s.capitalize(), id=f"inv-{s}", variant=variant)
+            yield Button("Cancel (Esc)", id="inv-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "inv-cancel":
+            self.dismiss(None)
+        elif bid.startswith("inv-"):
+            new_inv = bid[4:]  # strip "inv-"
+            if new_inv in ("lead", "contributor", "observer"):
+                self.dismiss(new_inv)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1681,7 +1749,7 @@ class ProjectsPane(Widget):
         super().__init__(**kwargs)
         self._projects: list[dict] = []
         self._selected_idx: int = 0
-        self._sort_mode: str = "urgency"  # default: most actionable first
+        self._sort_mode: str = "relevance"  # default: your projects first
 
     def _title_width(self) -> int:
         """Max character width for project names in list items."""
@@ -1730,12 +1798,26 @@ class ProjectsPane(Widget):
             name = p.get("project", p.get("_id", "?"))[:tw]
             status = p.get("status", "active")
             risk = p.get("risk_level", "medium")
+            involvement = p.get("involvement", "observer").lower()
             sc = self.PROJECT_STATUS_COLORS.get(status, "white")
             rc = self.RISK_COLORS.get(risk, "white")
 
+            # Involvement badge
+            if involvement == "lead":
+                inv_badge = "[bold #00CC88]lead[/bold #00CC88]"
+            elif involvement == "contributor":
+                inv_badge = "[#00D4FF]contrib[/#00D4FF]"
+            else:
+                inv_badge = "[dim]observer[/dim]"
+
             overdue = _overdue_count(p)
-            overdue_badge = f"  [bold red]({overdue} overdue)[/bold red]" if overdue else ""
-            text = f"[{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{overdue_badge}"
+            soft_overdue = _soft_overdue_count(p)
+            badges = ""
+            if overdue:
+                badges += f"  [bold red]({overdue} overdue)[/bold red]"
+            if soft_overdue:
+                badges += f"  [dim yellow]({soft_overdue} soft due)[/dim yellow]"
+            text = f"{inv_badge}  [{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{badges}"
             lv.append(ListItem(Label(text)))
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -1763,6 +1845,30 @@ class ProjectsPane(Widget):
         self.notify(f"Sort: {label}")
 
     # -- Project actions --
+
+    def update_involvement_selected(self) -> None:
+        """Open involvement modal for selected project."""
+        project = self.get_selected_project()
+        if project:
+            self.app.push_screen(InvolvementModal(project), self._on_involvement_result)
+
+    def _on_involvement_result(self, result) -> None:
+        if result is None:
+            return
+        project = self.get_selected_project()
+        if not project:
+            return
+        project_id = project.get("_id", "")
+        if not project_id:
+            return
+        old_inv = project.get("involvement", "observer")
+        project["involvement"] = result
+        project["updated_at"] = datetime.now().isoformat()
+        if _save_project_yaml(project_id, project):
+            self.notify(f"Involvement: {old_inv} -> {result}")
+            self.load_data()
+        else:
+            self.notify("Failed to save project", severity="error")
 
     def update_status_selected(self) -> None:
         """Open status modal for selected project."""
@@ -1870,25 +1976,34 @@ class ProjectsPane(Widget):
     def _show_detail(self, project: dict) -> None:
         detail = self.query_one(".detail-container Static", Static)
 
+        involvement = project.get("involvement", "observer")
+        inv_label = {"lead": "[bold #00CC88]Lead[/bold #00CC88]",
+                     "contributor": "[#00D4FF]Contributor[/#00D4FF]",
+                     "observer": "[dim]Observer[/dim]"}.get(involvement.lower(), involvement)
         lines = [
             f"[bold]{project.get('project', '?')}[/bold]",
-            f"Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
+            f"Role: {inv_label}  |  Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
             "",
             project.get("summary", ""),
             "",
-            "[dim]Actions: U=status  C=done  R=research  D=digest  N=note[/dim]",
+            "[dim]Actions: U=status  I=involvement  C=done  R=research  D=digest  N=note[/dim]",
         ]
 
-        # Commitments — overdue first, then open, highlighted
+        # Commitments — hard overdue first, then soft overdue, then open
         commitments = project.get("commitments", [])
         if commitments:
-            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
+            hard_overdue = [c for c in commitments
+                           if c.get("status", "").lower() == "overdue"
+                           and c.get("due_confidence", "explicit").lower() == "explicit"]
+            soft_overdue = [c for c in commitments
+                           if c.get("status", "").lower() == "overdue"
+                           and c.get("due_confidence", "explicit").lower() != "explicit"]
             upcoming = [c for c in commitments if c.get("status", "").lower() == "open"]
             done = [c for c in commitments if c.get("status", "").lower() in ("done", "cancelled")]
 
-            if overdue:
+            if hard_overdue:
                 lines += ["", "[bold red]Overdue commitments:[/bold red]"]
-                for c in overdue:
+                for c in hard_overdue:
                     what = c.get("what", "?")
                     due = c.get("due", "")
                     who = c.get("who", "")
@@ -1900,6 +2015,16 @@ class ProjectsPane(Widget):
                         line += f"  — {who}"
                     if to:
                         line += f" to {to}"
+                    lines.append(line)
+
+            if soft_overdue:
+                lines += ["", "[dim yellow]Soft due (inferred deadlines):[/dim yellow]"]
+                for c in soft_overdue:
+                    what = c.get("what", "?")
+                    due = c.get("due", "")
+                    line = f"  [dim yellow][SOFT DUE][/dim yellow] {what}"
+                    if due:
+                        line += f"  (est: {due})"
                     lines.append(line)
 
             if upcoming:

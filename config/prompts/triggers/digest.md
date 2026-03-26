@@ -47,6 +47,7 @@ These come from real-time browser scans. They show what is ACTUALLY happening ri
 **Project YAML schema** (use this exact structure):
 ```yaml
 project: "Human-readable name"
+involvement: lead  # lead | contributor | observer — YOUR role in this project
 status: active  # active | blocked | on-hold | completed
 risk_level: medium  # low | medium | high | critical
 summary: "1-2 sentence context"
@@ -58,7 +59,8 @@ commitments:
   - what: "Send pricing proposal"
     who: "You"
     to: "Customer Name"
-    due: "2026-02-28"
+    due: "2026-02-28"  # ONLY if explicitly stated — leave empty if inferred
+    due_confidence: explicit  # explicit | inferred — was the date stated verbatim?
     status: open  # open | done | overdue | cancelled
     source: "Feb 20 standup transcript"
 next_meeting: "2026-02-25 14:00"
@@ -67,6 +69,10 @@ key_dates:
     event: "Contract renewal deadline"
 tags: [deal, enterprise]
 ```
+
+**`involvement` rules:** `lead` = you own it (schedule meetings, drive action items). `contributor` = you participate but don't drive. `observer` = you're CC'd or mentioned in passing. **Default to `observer` if unsure.**
+
+**`due_confidence` rules:** Only set `due` with `due_confidence: explicit` if the date was stated verbatim in the source material. Vague phrases ("follow up next week", "circle back") get `due_confidence: inferred` at most — and inferred dates do NOT trigger overdue alerts.
 
 **Example `update_project` call:**
 ```

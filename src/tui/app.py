@@ -178,6 +178,7 @@ class PulseApp(App):
         # Project-specific actions
         # s = snooze on Inbox, sort on Projects (handled in action_item_snooze)
         Binding("u", "project_status", "Status", show=False),
+        Binding("i", "project_involvement", "Involvement", show=False),
         Binding("c", "project_commitment", "Complete", show=False),
         # Always visible
         Binding("question_mark", "show_help", "? Help", show=True),
@@ -505,6 +506,13 @@ class PulseApp(App):
         pane = self._get_active_projects_pane()
         if pane:
             pane.update_status_selected()
+
+    def action_project_involvement(self) -> None:
+        if self._input_is_focused():
+            return
+        pane = self._get_active_projects_pane()
+        if pane:
+            pane.update_involvement_selected()
 
     def action_project_commitment(self) -> None:
         if self._input_is_focused():

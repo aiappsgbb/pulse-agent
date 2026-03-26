@@ -444,12 +444,18 @@ def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) 
             except (ValueError, TypeError):
                 continue
             days_overdue = (today - due_date).days
+            confidence = (c.get("due_confidence") or "explicit").lower()
             if days_overdue > max_overdue_days:
-                c["status"] = "cancelled"
-                c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
+                if confidence == "inferred":
+                    # Inferred dates just get quietly cancelled — never alarmed
+                    c["status"] = "cancelled"
+                    c["cancelled_reason"] = f"Auto-cancelled: inferred deadline {days_overdue}d past"
+                else:
+                    c["status"] = "cancelled"
+                    c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
                 changed = True
                 total_cancelled += 1
-                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue)")
+                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue, confidence={confidence})")
 
         if changed:
             data["updated_at"] = datetime.now().isoformat()
@@ -478,8 +484,9 @@ def _build_projects_block(projects: list[dict]) -> str:
         name = project.get("project", project.get("_file", "unnamed"))
         status = project.get("status", "active")
         risk = project.get("risk_level", "unknown")
+        involvement = project.get("involvement", "observer")
         pid = project.get("_file", "").replace(".yaml", "")
-        lines.append(f"### {name} (status: {status}, risk: {risk}, file: {pid})")
+        lines.append(f"### {name} (involvement: {involvement}, status: {status}, risk: {risk}, file: {pid})")
 
         stakeholders = project.get("stakeholders", [])
         if stakeholders:
@@ -565,12 +572,14 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
     """Build a global commitment summary across all projects.
 
     Highlights overdue and approaching-deadline commitments.
+    Only treats commitments with explicit due dates as truly overdue.
     """
     if not projects:
         return ""
 
     today = datetime.now().date()
-    overdue = []
+    hard_overdue = []
+    soft_overdue = []
     upcoming = []
     open_count = 0
 
@@ -583,6 +592,7 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
             what = c.get("what", "?")
             to = c.get("to", "?")
             due_str = c.get("due", "")
+            confidence = (c.get("due_confidence") or "explicit").lower()
 
             try:
                 due_date = datetime.strptime(str(due_str), "%Y-%m-%d").date()
@@ -593,28 +603,37 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
             entry = f"- **{what}** (to: {to}, project: {project_name}, due: {due_str})"
 
             if days_until is not None and days_until < 0:
-                entry += f" -- **{abs(days_until)} days OVERDUE**"
-                overdue.append(entry)
+                if confidence == "explicit":
+                    entry += f" -- **{abs(days_until)} days OVERDUE**"
+                    hard_overdue.append(entry)
+                else:
+                    entry += f" -- inferred deadline {abs(days_until)}d past (soft due)"
+                    soft_overdue.append(entry)
             elif days_until is not None and days_until <= 3:
                 entry += f" -- due in {days_until} day(s)"
                 upcoming.append(entry)
 
-    if not overdue and not upcoming:
+    if not hard_overdue and not soft_overdue and not upcoming:
         if open_count:
             return f"({open_count} open commitment(s), none overdue or due soon.)\n"
         return ""
 
     lines = ["## Commitment Status\n"]
-    if overdue:
-        lines.append(f"**OVERDUE ({len(overdue)}):**")
-        lines.extend(overdue)
+    if hard_overdue:
+        lines.append(f"**OVERDUE ({len(hard_overdue)}):**")
+        lines.extend(hard_overdue)
+        lines.append("")
+    if soft_overdue:
+        lines.append(f"**Soft due — inferred deadlines ({len(soft_overdue)}):**")
+        lines.extend(soft_overdue)
         lines.append("")
     if upcoming:
         lines.append(f"**Due soon ({len(upcoming)}):**")
         lines.extend(upcoming)
         lines.append("")
-    if open_count > len(overdue) + len(upcoming):
-        remaining = open_count - len(overdue) - len(upcoming)
+    total_flagged = len(hard_overdue) + len(soft_overdue) + len(upcoming)
+    if open_count > total_flagged:
+        remaining = open_count - total_flagged
         lines.append(f"({remaining} other open commitment(s) with no imminent deadline.)\n")
 
     return "\n".join(lines)
