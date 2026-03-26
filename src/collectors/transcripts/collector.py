@@ -58,9 +58,15 @@ def _load_attempted_slugs(output_dir: Path | None = None) -> dict[str, str]:
     """
     state = load_json_state(TRANSCRIPT_STATE_FILE, {"attempted": {}})
     attempted = state.get("attempted", {})
-    cutoff = (datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS)).isoformat()
-    # Prune expired entries
-    pruned = {slug: ts for slug, ts in attempted.items() if ts > cutoff}
+    cutoff_dt = datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS)
+    # Prune expired entries (parse timestamps properly to handle timezone offsets)
+    pruned = {}
+    for slug, ts in attempted.items():
+        try:
+            if datetime.fromisoformat(ts) > cutoff_dt:
+                pruned[slug] = ts
+        except (ValueError, TypeError):
+            pass  # drop unparseable entries
 
     # Also prune attempted slugs that have no transcript file — these were
     # extraction failures that should be retried now that we distinguish

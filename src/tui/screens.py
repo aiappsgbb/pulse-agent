@@ -2275,17 +2275,19 @@ class ChatPane(Widget):
         chat_log = self.query_one(RichLog)
         chat_log.write(f"[bold cyan]You:[/bold cyan] {prompt}")
 
+        # Reset streaming state BEFORE sending request to avoid race with _poll_stream
+        self._stream_offset = 0
+        self._response_buf = ""
+        self._response_started = False
+        self._wait_ticks = 0
+        self._streaming = True  # Must be set BEFORE send_chat_request
+
         # Clear stale stream BEFORE sending so we never read old responses
         from tui.ipc import clear_chat_stream
         clear_chat_stream()
 
         # Send to daemon via file IPC
         self._current_request_id = send_chat_request(prompt)
-        self._stream_offset = 0
-        self._response_buf = ""
-        self._response_started = False
-        self._wait_ticks = 0
-        self._streaming = True
 
     def _poll_stream(self) -> None:
         # Always check for job completion notifications (even when not streaming)
@@ -2306,9 +2308,15 @@ class ChatPane(Widget):
         if not self._streaming:
             return
 
-        new_text, is_done, new_offset = read_chat_stream_deltas(self._stream_offset, self._current_request_id)
+        new_text, is_done, new_offset, statuses = read_chat_stream_deltas(self._stream_offset, self._current_request_id)
         self._stream_offset = new_offset
         chat_log = self.query_one(RichLog)
+
+        # Show tool activity status messages
+        for status in statuses:
+            self._wait_ticks = 0  # reset timeout on activity
+            safe_status = status.encode("ascii", "replace").decode("ascii")
+            chat_log.write(f"[dim]{safe_status}[/dim]")
 
         if new_text:
             self._wait_ticks = 0

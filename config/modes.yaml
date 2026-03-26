@@ -4,7 +4,7 @@
 # default_mcp_servers: inherited by all non-standalone modes unless overridden.
 # Unconfigured servers (e.g. dataverse without a URL) are skipped gracefully.
 
-default_mcp_servers: [workiq, dataverse]
+default_mcp_servers: [workiq, msx, dataverse]
 
 monitor:
   model_key: triage
@@ -52,6 +52,7 @@ chat:
   excluded_tools:
     - fetch_copilot_cli_documentation
     - create
+    - task
     - powershell
     - read_powershell
     - write_powershell

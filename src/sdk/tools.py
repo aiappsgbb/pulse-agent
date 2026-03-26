@@ -181,7 +181,10 @@ def dismiss_item(params: DismissItemParams, invocation: ToolInvocation) -> str:
     if params.reason:
         entry["reason"] = params.reason
     actions["dismissed"].append(entry)
-    _save_actions(actions)
+    try:
+        _save_actions(actions)
+    except OSError as e:
+        return f"ERROR: Failed to save dismissal: {e}"
     return f"Archived: {params.item}"
 
 
@@ -195,7 +198,10 @@ def add_note(params: AddNoteParams, invocation: ToolInvocation) -> str:
         "note": params.note,
         "added_at": datetime.now().isoformat(),
     }
-    _save_actions(actions)
+    try:
+        _save_actions(actions)
+    except OSError as e:
+        return f"ERROR: Failed to save note: {e}"
     return f"Note added to: {params.item}"
 
 

@@ -23,6 +23,19 @@ log = logging.getLogger("pulse")
 
 # Module-level singleton
 _manager: "BrowserManager | None" = None
+_manager_lock: asyncio.Lock | None = None
+
+
+def _get_lock() -> asyncio.Lock:
+    """Get or create the module-level async lock.
+
+    The lock is created lazily because asyncio.Lock() binds to the running
+    event loop, which may not exist at module import time.
+    """
+    global _manager_lock
+    if _manager_lock is None:
+        _manager_lock = asyncio.Lock()
+    return _manager_lock
 
 CDP_PORT = 9222
 DAEMON_PROFILE = "pulse-daemon-profile"
@@ -36,26 +49,42 @@ def get_browser_manager() -> "BrowserManager | None":
     return _manager
 
 
+async def stop_browser():
+    """Stop the shared browser under the module lock.
+
+    Safe to call from any async context — acquires the lock to prevent
+    races with ensure_browser() or the idle watcher.
+    """
+    global _manager
+    async with _get_lock():
+        if _manager:
+            await _manager.stop()
+
+
 async def ensure_browser() -> "BrowserManager | None":
     """Get the shared browser, starting it lazily if needed.
 
     Returns the BrowserManager if available, None if startup fails.
     All callers that need the browser should use this instead of
     get_browser_manager() to benefit from lazy start.
+
+    Uses an async lock to prevent two concurrent callers from both
+    seeing _manager as None and racing to start the browser.
     """
     global _manager
-    if _manager and _manager.is_alive:
-        _manager.touch()
-        return _manager
+    async with _get_lock():
+        if _manager and _manager.is_alive:
+            _manager.touch()
+            return _manager
 
-    # Start fresh
-    mgr = BrowserManager()
-    try:
-        await mgr.start()
-        return mgr
-    except Exception as e:
-        log.warning(f"Lazy browser start failed: {e}")
-        return None
+        # Start fresh
+        mgr = BrowserManager()
+        try:
+            await mgr.start()
+            return mgr
+        except Exception as e:
+            log.warning(f"Lazy browser start failed: {e}")
+            return None
 
 
 def _default_profile_dir() -> str:
@@ -238,7 +267,8 @@ class BrowserManager:
                 idle = self.idle_seconds
                 if idle >= BROWSER_IDLE_TIMEOUT:
                     log.info(f"Browser idle for {idle:.0f}s — auto-stopping to free memory")
-                    await self.stop()
+                    async with _get_lock():
+                        await self.stop()
                     return
         except asyncio.CancelledError:
             pass

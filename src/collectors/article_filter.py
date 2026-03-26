@@ -7,6 +7,7 @@ Falls back to unfiltered articles if the SDK call fails.
 
 import asyncio
 import json
+import re
 
 from copilot import CopilotClient
 
@@ -123,11 +124,9 @@ async def filter_articles(
 
         # Parse JSON — strip markdown code blocks if the model wraps them
         json_text = raw_response
-        if json_text.startswith("```"):
-            json_text = "\n".join(json_text.split("\n")[1:])
-            if json_text.endswith("```"):
-                json_text = json_text[:-3]
-            json_text = json_text.strip()
+        match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?\s*```', json_text)
+        if match:
+            json_text = match.group(1).strip()
 
         kept_items = json.loads(json_text)
         if not isinstance(kept_items, list):

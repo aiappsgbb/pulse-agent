@@ -17,6 +17,7 @@ Default retention (days):
 """
 
 import json
+import stat as stat_module
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,21 +38,35 @@ DEFAULT_RETENTION = {
 }
 
 
+def _age_days_from_stat(st_mtime: float) -> float:
+    """Return the age in days given a stat mtime value."""
+    return (time.time() - st_mtime) / 86400
+
+
 def _age_days(path: Path) -> float:
     """Return the age of a file in days based on modification time."""
     try:
-        return (time.time() - path.stat().st_mtime) / 86400
+        return _age_days_from_stat(path.stat().st_mtime)
     except (OSError, ValueError):
         return 0
 
 
 def _delete_old_files(directory: Path, pattern: str, max_age_days: int) -> int:
-    """Delete files matching pattern older than max_age_days. Returns count deleted."""
+    """Delete files matching pattern older than max_age_days. Returns count deleted.
+
+    Caches stat() per file to avoid redundant system calls (is_file + age check).
+    """
     if not directory.exists():
         return 0
     deleted = 0
     for f in directory.glob(pattern):
-        if f.is_file() and _age_days(f) > max_age_days:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if not stat_module.S_ISREG(st.st_mode):
+            continue
+        if _age_days_from_stat(st.st_mtime) > max_age_days:
             try:
                 f.unlink()
                 deleted += 1

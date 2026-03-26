@@ -39,8 +39,11 @@ def _extract_pdf(filepath: Path) -> str | None:
     import PyPDF2
     with open(filepath, "rb") as f:
         reader = PyPDF2.PdfReader(f)
-        text_parts = [page.extract_text() for page in reader.pages
-                      if page.extract_text() and page.extract_text().strip()]
+        text_parts = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text and text.strip():
+                text_parts.append(text)
         return "\n\n".join(text_parts)
 
 

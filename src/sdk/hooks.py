@@ -12,6 +12,7 @@ The SDK also catches hook exceptions silently, but we add our own layer.
 """
 
 import json
+import sys
 import time
 from datetime import datetime
 
@@ -30,8 +31,8 @@ def _write_audit_entry(entry: dict) -> None:
         log_file = LOGS_DIR / f"{date_str}.jsonl"
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str, ensure_ascii=False) + "\n")
-    except Exception:
-        pass  # never crash — audit is best-effort
+    except Exception as e:
+        print(f"[AUDIT ERROR] {e}", file=sys.stderr)
 
 
 def _ctx_session_id(context) -> str:
@@ -67,8 +68,8 @@ def make_post_tool_use_hook():
                 "result_preview": result_str,
                 "session_id": _ctx_session_id(context),
             })
-        except Exception:
-            pass  # never crash the session
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}", file=sys.stderr)
 
     return hook
 
@@ -102,7 +103,8 @@ def make_pre_tool_use_hook():
                     }
 
             return None  # allow
-        except Exception:
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}", file=sys.stderr)
             return None  # fail open — don't block tools on hook errors
 
     return hook
@@ -136,7 +138,8 @@ def make_error_occurred_hook():
                 return {"errorHandling": "retry", "retryCount": 1}
 
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}", file=sys.stderr)
             return None  # never crash the session
 
     return hook
@@ -165,8 +168,8 @@ def make_session_end_hook(mode: str, start_time: float):
 
             _write_audit_entry(entry)
             log.info(f"  Session ended: mode={mode}, reason={reason}, duration={duration:.1f}s")
-        except Exception:
-            pass  # never crash the session
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}", file=sys.stderr)
 
     return hook
 

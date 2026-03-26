@@ -104,34 +104,43 @@ async def poll_tui_chat_requests(
 async def _handle_chat_request(client, config: dict, prompt: str, request_id: str):
     """Process a TUI chat request directly (fast-lane, bypasses job queue)."""
     from daemon.worker import run_chat_query, process_pending_actions
-    from tui.ipc import write_chat_delta, finish_chat_stream, clear_chat_stream
+    from tui.ipc import write_chat_delta, write_chat_status, finish_chat_stream, clear_chat_stream
 
     # Onboarding: inject context exactly ONCE per daemon lifetime.
-    global _onboarding_sent
+    # Use the canonical flag from worker.py to share state across modules.
+    import daemon.worker as _worker
     from core.onboarding import is_first_run
-    if not _onboarding_sent and is_first_run(config):
+    if not _worker._onboarding_sent and is_first_run(config):
         prompt = _build_onboarding_prompt(config, prompt)
-        _onboarding_sent = True
+        _worker._onboarding_sent = True
 
     # File-based streaming for TUI
     clear_chat_stream()
 
+    _delta_written = False
+
     def _tui_delta(text: str) -> None:
+        nonlocal _delta_written
+        _delta_written = True
         write_chat_delta(text, request_id)
 
+    def _tui_status(text: str) -> None:
+        write_chat_status(text, request_id)
+
     try:
-        await run_chat_query(client, config, prompt, on_delta=_tui_delta)
+        result = await run_chat_query(client, config, prompt, on_delta=_tui_delta, on_status=_tui_status)
+        # If agent returned text but no deltas were streamed (error or fallback),
+        # write the result so the TUI shows it instead of "(no response)"
+        if result and not _delta_written:
+            write_chat_delta(result + "\n", request_id)
     except Exception as e:
         log.error(f"  Chat fast-lane error: {e}")
+        write_chat_delta(f"Error: {e}\n", request_id)
     finally:
         finish_chat_stream(request_id)
 
     # Process any browser actions the agent queued
     await process_pending_actions()
-
-
-# Module-level onboarding flag — mirrors the one in worker.py but for the fast-lane
-_onboarding_sent = False
 
 
 def _build_onboarding_prompt(config: dict, user_prompt: str) -> str:

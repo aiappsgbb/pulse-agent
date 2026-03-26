@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from time import mktime
 
@@ -37,10 +38,17 @@ def collect_feeds(config: dict) -> list[dict]:
         feed_limit = feed_cfg.get("max", per_feed_max)
         log.info(f"  Fetching: {name}...")
 
-        try:
-            feed = feedparser.parse(url)
-        except Exception as e:
-            log.info(f"    ERROR: {e}")
+        feed = None
+        for attempt in range(2):
+            try:
+                feed = feedparser.parse(url)
+                break
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                log.info(f"    ERROR after retry: {e}")
+        if feed is None:
             continue
 
         count = 0

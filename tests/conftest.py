@@ -52,3 +52,79 @@ def sample_config():
             {"name": "Bob Test", "alias": "bob"},
         ],
     }
+
+
+@pytest.fixture
+def sample_digest_json():
+    """Realistic digest JSON matching the schema LLM outputs."""
+    return {
+        "items": [
+            {
+                "id": "test-item-1",
+                "title": "Review Q1 proposal",
+                "source": "Teams chat",
+                "priority": "high",
+                "status": "outstanding",
+                "reply_needed": True,
+                "suggested_actions": [{
+                    "action_type": "teams_reply",
+                    "target": "John Smith",
+                    "chat_name": "John Smith",
+                    "draft": "Thanks, I'll review by EOD."
+                }]
+            },
+            {
+                "id": "test-item-2",
+                "title": "FYI: Updated pricing doc",
+                "source": "Email",
+                "priority": "low",
+                "status": "new",
+                "reply_needed": False,
+                "suggested_actions": []
+            }
+        ],
+        "stats": {"outstanding": 1, "new": 1, "resolved": 0}
+    }
+
+
+@pytest.fixture
+def sample_monitoring_json():
+    """Realistic monitoring/triage JSON."""
+    return {
+        "items": [
+            {
+                "id": "mon-1",
+                "title": "Urgent: Customer escalation",
+                "source": "Teams",
+                "urgency": "high",
+                "reply_needed": True,
+                "suggested_actions": [{
+                    "action_type": "draft_teams_reply",
+                    "target": "Esther Barthel",
+                    "chat_name": "Esther Barthel",
+                    "draft": "On it — checking now."
+                }]
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def sample_job_yaml():
+    """Realistic job YAML content."""
+    return {
+        "type": "digest",
+        "description": "Morning digest",
+        "created_at": "2026-03-25T07:00:00",
+        "priority": "normal"
+    }
+
+
+@pytest.fixture
+def pulse_home_structure(tmp_path):
+    """Create a realistic PULSE_HOME directory structure."""
+    dirs = ["transcripts", "documents", "emails", "digests", "intel",
+            "projects", "pulse-signals", "jobs/pending", "jobs/completed", "logs"]
+    for d in dirs:
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+    return tmp_path

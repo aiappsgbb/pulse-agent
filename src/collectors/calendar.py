@@ -150,7 +150,7 @@ async def _do_scan(page) -> list[dict]:
     """Navigate to Outlook Calendar work week view and extract events."""
     log.info("Scanning calendar for work week events...")
 
-    await page.goto("https://outlook.office.com/calendar/view/workweek", wait_until="domcontentloaded")
+    await page.goto("https://outlook.office.com/calendar/view/workweek", wait_until="domcontentloaded", timeout=30000)
     try:
         await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:

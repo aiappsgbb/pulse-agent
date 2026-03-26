@@ -66,24 +66,32 @@ def send_chat_request(prompt: str) -> str:
     return request_id
 
 
-def read_chat_stream_deltas(offset: int, request_id: str = "") -> tuple[str, bool, int]:
+def read_chat_stream_deltas(offset: int, request_id: str = "") -> tuple[str, bool, int, list[str]]:
     """Read new chat stream content after byte offset.
 
     When request_id is provided, only deltas matching that request are returned.
     Stale deltas from previous requests are skipped.
 
-    Returns (new_text, is_done, new_offset).
+    Returns (new_text, is_done, new_offset, status_messages).
     """
     try:
         if not CHAT_STREAM_FILE.exists():
-            return "", False, offset
+            return "", False, offset, []
         content = CHAT_STREAM_FILE.read_bytes()
         if len(content) <= offset:
-            return "", False, offset
+            return "", False, offset, []
         new_content = content[offset:].decode("utf-8", errors="replace")
-        new_offset = len(content)
+        # Don't process partial trailing line (daemon may still be writing)
+        if not new_content.endswith("\n"):
+            last_nl = new_content.rfind("\n")
+            if last_nl == -1:
+                # Entire chunk is one partial line — wait for more
+                return "", False, offset, []
+            new_content = new_content[:last_nl + 1]
+        new_offset = offset + len(new_content.encode("utf-8"))
         new_text = ""
         is_done = False
+        statuses: list[str] = []
         for line in new_content.splitlines():
             line = line.strip()
             if not line:
@@ -95,13 +103,15 @@ def read_chat_stream_deltas(offset: int, request_id: str = "") -> tuple[str, boo
                     continue
                 if entry.get("type") == "delta":
                     new_text += entry.get("text", "")
+                elif entry.get("type") == "status":
+                    statuses.append(entry.get("text", ""))
                 elif entry.get("type") == "done":
                     is_done = True
             except json.JSONDecodeError:
                 pass
-        return new_text, is_done, new_offset
+        return new_text, is_done, new_offset, statuses
     except Exception:
-        return "", False, offset
+        return "", False, offset, []
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +126,20 @@ def write_chat_delta(text: str, request_id: str) -> None:
             f.write(line + "\n")
     except Exception:
         log.debug("Failed to write chat delta", exc_info=True)
+
+
+def write_chat_status(text: str, request_id: str) -> None:
+    """Append a status message to .chat-stream.jsonl (daemon-side, sync).
+
+    Status messages show tool activity (e.g. 'Searching local files...')
+    so the user sees progress instead of staring at 'Processing...' for minutes.
+    """
+    try:
+        line = json.dumps({"type": "status", "text": text, "request_id": request_id})
+        with CHAT_STREAM_FILE.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def finish_chat_stream(request_id: str) -> None:
@@ -356,7 +380,8 @@ def dismiss_item(
             "reason": reason,
             "status": "archived",
         })
-        _save_digest_actions(actions)
+        if not _save_digest_actions(actions):
+            log.warning("Failed to persist dismiss action for item %s", item_id)
 
 
 def snooze_item(
@@ -377,7 +402,8 @@ def snooze_item(
             "reason": reason,
             "status": "dismissed",
         })
-        _save_digest_actions(actions)
+        if not _save_digest_actions(actions):
+            log.warning("Failed to persist snooze action for item %s", item_id)
 
 
 def archive_item(
@@ -407,7 +433,8 @@ def archive_item(
             "archived_at": datetime.now().isoformat(),
             "status": "archived",
         })
-    _save_digest_actions(actions)
+    if not _save_digest_actions(actions):
+        log.warning("Failed to persist archive action for item %s", item_id)
 
 
 def restore_item(item_id: str) -> None:
@@ -416,7 +443,8 @@ def restore_item(item_id: str) -> None:
     actions["dismissed"] = [
         d for d in actions.get("dismissed", []) if d.get("item") != item_id
     ]
-    _save_digest_actions(actions)
+    if not _save_digest_actions(actions):
+        log.warning("Failed to persist restore action for item %s", item_id)
 
 
 def load_dismissed_items() -> list[dict]:
@@ -468,7 +496,8 @@ def add_note(item_id: str, note: str) -> None:
                 "resolved_at": datetime.now().isoformat(),
                 "status": "resolved",
             })
-    _save_digest_actions(actions)
+    if not _save_digest_actions(actions):
+        log.warning("Failed to persist note action for item %s", item_id)
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +731,7 @@ def write_reply_job(item: dict, draft: str) -> bool:
             "_source": "tui",
         }
     else:
+        log.warning("Unknown action_type %r for reply job — item: %s", action_type, item.get("title", "?"))
         return False
 
     try:

@@ -175,7 +175,7 @@ async def _do_scan(page) -> list[dict]:
     """Navigate to Outlook inbox and extract unread emails."""
     log.info("Scanning Outlook inbox for unread emails...")
 
-    await page.goto("https://outlook.office.com/mail/inbox", wait_until="domcontentloaded")
+    await page.goto("https://outlook.office.com/mail/inbox", wait_until="domcontentloaded", timeout=30000)
     try:
         await page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:

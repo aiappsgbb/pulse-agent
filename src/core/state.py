@@ -20,9 +20,18 @@ def save_json_state(path: Path, data: dict):
     """Save JSON state file atomically (write to .tmp then rename).
 
     os.replace() is atomic on NTFS and POSIX, so a crash mid-write
-    won't corrupt the main file.
+    won't corrupt the main file.  On failure the tmp file is cleaned up
+    and the error includes the target path for easier debugging.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(tmp_path, path)
+    try:
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError as e:
+        # Clean up tmp file on failure
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise OSError(f"Failed to save state to {path}: {e}") from e

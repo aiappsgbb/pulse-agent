@@ -17,17 +17,55 @@ from typing import Any
 from core.logging import log, safe_encode
 
 
+def _extract_error_message(data: Any) -> str:
+    """Extract a human-readable error from SDK session error data.
+
+    The SDK emits Data objects with dozens of None fields. We only care about
+    the message and a hint about where it failed.
+    """
+    if data is None:
+        return "Unknown session error"
+
+    # Try to get structured fields
+    message = getattr(data, "message", None)
+    error_type = getattr(data, "error_type", None)
+    stack = getattr(data, "stack", None)
+
+    if message:
+        # Extract the failing function name from the stack (e.g. "buildSettingsAndTools")
+        hint = ""
+        if stack:
+            import re
+            # Look for "at async t.functionName" patterns in stack trace
+            funcs = re.findall(r'at async (?:t\.)?(\w+)', str(stack))
+            if funcs:
+                hint = f" (in {' -> '.join(funcs[:3])})"
+        prefix = f"[{error_type}] " if error_type else ""
+        return f"{prefix}{message}{hint}"
+
+    # Fallback: stringify but truncate
+    raw = str(data)
+    if len(raw) > 200:
+        return raw[:200] + "..."
+    return raw
+
+
 class EventHandler:
     """Dispatch session events to handlers. Tracks completion for non-blocking sends."""
 
+    # Lazy-initialized dispatch table. Safe without locking because Python's
+    # asyncio runs on a single thread — only one coroutine can execute
+    # _get_dispatch() at a time, so the read-then-write is never a race.
     _dispatch: dict | None = None
 
     def __init__(
         self,
         on_delta: Callable[[str], None] | None = None,
+        on_status: Callable[[str], None] | None = None,
         log_file: str | Path | None = None,
     ) -> None:
         self.on_delta = on_delta
+        self.on_status = on_status
         self.log_file = Path(log_file) if log_file else None
         self.final_text: str | None = None
         self.error: str | None = None
@@ -91,7 +129,7 @@ class EventHandler:
 
     def _handle_error(self, event: Any) -> None:
         data = getattr(event, "data", None)
-        self.error = str(data) if data else "Unknown session error"
+        self.error = _extract_error_message(data)
         log.error(f"SESSION_ERROR: {self.error}")
         self._write_log({
             "ts": datetime.now().isoformat(),
@@ -110,6 +148,8 @@ class EventHandler:
         elif data and hasattr(data, "input") and data.input:
             args = f" {safe_encode(str(data.input)[:200])}"
         print(safe_encode(f"\n>> [TOOL] {tool_name}{mcp}{args}"), flush=True)
+        if self.on_status:
+            self.on_status(f"Using {tool_name}{mcp}...")
         self._write_log({
             "ts": datetime.now().isoformat(),
             "type": "tool_start",

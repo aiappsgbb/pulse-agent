@@ -106,6 +106,13 @@ async def compress_transcript(
         if not compressed:
             return None
 
+        if len(compressed) < 50:
+            log.warning("  Compressed output too short, discarding")
+            return None
+        if compressed.count("\n") < 3:
+            log.warning("  Compressed output lacks structure, discarding")
+            return None
+
         ratio = len(compressed) / len(raw_text) * 100
         log.info(f"  Compressed: {len(raw_text)} -> {len(compressed)} chars ({ratio:.0f}%)")
         return compressed

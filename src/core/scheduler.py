@@ -321,7 +321,7 @@ async def scheduler_loop(
                     if cleaned:
                         log.info(f"Scheduler: cleaned {cleaned} stale running job(s)")
                 except Exception:
-                    pass
+                    log.warning("Scheduler: orphaned job cleanup failed", exc_info=True)
 
             schedules = _load_schedules()
             now = datetime.now()

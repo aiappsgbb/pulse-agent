@@ -169,7 +169,14 @@ async def test_compress_transcript_success():
     # Simulate the event handler being set up and completing
     def fake_on(handler):
         # When session.on(handler) is called, set up the handler to complete
-        handler.final_text = "## Meeting Summary\n- Discussed topic A"
+        handler.final_text = (
+            "## Meeting Summary\n"
+            "- Discussed topic A and B in detail\n"
+            "- Agreed on timeline for delivery\n"
+            "\n"
+            "## Action Items\n"
+            "- John will send the proposal by Friday\n"
+        )
         handler.done.set()
         return MagicMock()  # unsub function
 

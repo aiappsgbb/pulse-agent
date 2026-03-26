@@ -46,6 +46,41 @@ def workiq_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> M
     )
 
 
+def msx_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig | None:
+    """MSX-MCP config — Dataverse/CRM tools for MSX pipeline data.
+
+    Matches the plugin's own .mcp.json: stdio transport, node scripts/bootstrap.mjs.
+    Only loaded if the msx-mcp plugin is installed in the Copilot CLI.
+    Returns None if not installed (graceful skip).
+    """
+    # Check both install paths (direct install vs marketplace)
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        plugin_dir = Path.home() / ".copilot" / "installed-plugins" / subdir
+        if plugin_dir.exists():
+            break
+    else:
+        return None
+
+    # Use bootstrap.mjs (their .mcp.json entry point), fall back to dist/index.js
+    bootstrap = plugin_dir / "scripts" / "bootstrap.mjs"
+    entry = str(bootstrap) if bootstrap.exists() else str(plugin_dir / "dist" / "index.js")
+
+    # Pass system PATH so the node process can find Azure CLI (az) for auth.
+    # Without this, AzureCliCredential fails with "Azure CLI: Not installed".
+    import os
+    env = {"PATH": os.environ.get("PATH", "")}
+
+    return MCPLocalServerConfig(
+        type="local",
+        command="node",
+        args=[entry],
+        tools=["*"],
+        timeout=120000,  # 2 min — first call includes auth token acquisition
+        cwd=str(plugin_dir),
+        env=env,
+    )
+
+
 def playwright_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPLocalServerConfig:
     """Playwright MCP config — reused across agents that need browser automation.
 
@@ -102,6 +137,7 @@ def dataverse_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPRe
 
 _MCP_BUILDERS: dict[str, callable] = {
     "workiq": workiq_mcp_config,
+    "msx": msx_mcp_config,
     "playwright": playwright_mcp_config,
     "dataverse": dataverse_mcp_config,
 }

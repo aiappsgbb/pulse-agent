@@ -344,6 +344,14 @@ def run_health_check(config: dict | None = None) -> list[HealthCheck]:
         "npm install -g @microsoft/workiq",
     ))
 
+    # MSX-MCP (optional — MSX/Dataverse/CRM tools)
+    msx_found = _check_msx_mcp_plugin()
+    checks.append(HealthCheck(
+        "MSX-MCP plugin", msx_found,
+        "installed" if msx_found else "not found (optional — MSX pipeline queries unavailable)",
+        "copilot plugin install mcaps-microsoft/MSX-MCP",
+    ))
+
     # PULSE_HOME
     checks.append(_check_pulse_home())
 
@@ -362,6 +370,15 @@ def run_health_check(config: dict | None = None) -> list[HealthCheck]:
     ))
 
     return checks
+
+
+def _check_msx_mcp_plugin() -> bool:
+    """Check if MSX-MCP plugin is installed in Copilot CLI."""
+    home = Path.home() / ".copilot" / "installed-plugins"
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        if (home / subdir).exists():
+            return True
+    return False
 
 
 def _check_gh_auth() -> HealthCheck:

@@ -26,19 +26,15 @@ Wait for the user to confirm before proceeding.
 
 ## Phase 1: Clone the Repository
 
-Check if Git is installed:
+Check if Git is installed. If not, install it automatically:
 
 ```powershell
 git --version
-```
-
-If Git is not found, install it:
-
-```powershell
+# If not found:
 winget install Git.Git --accept-source-agreements --accept-package-agreements
 ```
 
-After install, the user must **close and reopen their terminal** for Git to be on PATH.
+After install, the user needs to **close and reopen their terminal** for Git to be on PATH. Tell them this — it's the one thing you can't do for them.
 
 Clone the repo (skip if it already exists):
 
@@ -49,19 +45,19 @@ git clone https://github.com/aiappsgbb/pulse-agent.git
 cd pulse-agent
 ```
 
-**All remaining steps run from the repo root** (`pulse-agent/`).
+**All remaining steps run from the repo root** (`pulse-agent/`). Run everything yourself — don't paste commands for the user to copy.
 
 ---
 
 ## Phase 2: Run the Automated Installer
 
-The installer handles Python, Node.js, GitHub CLI, WorkIQ, virtual environment, Playwright, data directories, config template, and Desktop shortcut — all in one script.
+Run the installer — it handles Python, Node.js, GitHub CLI, WorkIQ, virtual environment, Playwright, data directories, config template, and Desktop shortcut automatically:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-Watch the output. The script reports OK/WARN/FAIL for each step. Common outcomes:
+Check the output. The script reports OK/WARN/FAIL for each step. Common outcomes:
 
 | Output | Meaning | Action needed? |
 |--------|---------|----------------|
@@ -76,75 +72,53 @@ If setup.ps1 reports any FAIL, troubleshoot that specific step before continuing
 
 ## Phase 3: GitHub CLI Authentication
 
-This is interactive — the user needs to complete a browser sign-in flow.
+This is the one interactive step — the user must complete a browser sign-in. Run the commands yourself and explain what's happening.
 
-Check current auth status:
+Check auth status and start login if needed:
 
 ```powershell
 gh auth status
-```
-
-If not authenticated:
-
-**ASK THE USER**: "GitHub CLI needs to authenticate with your GitHub account. This is needed for the Copilot agent runtime. I'll start the login flow — a browser window will open for you to sign in."
-
-```powershell
+# If not authenticated:
 gh auth login
 ```
 
-Walk the user through the prompts:
+**Tell the user**: "A browser window will open — sign in with your GitHub account and approve. I'll wait."
+
+The `gh auth login` prompts will appear in the terminal. Select:
 1. **Account type**: GitHub.com
 2. **Preferred protocol**: HTTPS
 3. **Authenticate**: Login with a web browser
-4. Copy the one-time code shown in the terminal, paste it in the browser, and authorize.
 
 After auth succeeds, install the Copilot CLI extension:
 
 ```powershell
 gh extension install github/gh-copilot
-```
-
-Verify:
-
-```powershell
 gh auth status
-gh copilot --version 2>$null || echo "Copilot CLI extension not found"
 ```
 
 ---
 
 ## Phase 4: Browser Authentication
 
-**This is the most important step that people get wrong.** Pulse uses its own dedicated browser profile (separate from the user's normal Edge). Signing into Teams in the user's regular Edge browser does NOT work — the auth must happen in Pulse's profile.
+**This is the most important step that people get wrong.** Pulse uses a dedicated Edge profile (separate from the user's normal Edge). Signing into Teams in the regular browser does NOT work.
 
-Explain to the user:
+**Tell the user**: "I'm going to open a special browser window. Sign into Microsoft Teams with your work account, then close the window. This is a one-time step."
 
-> "Pulse needs to read your Teams inbox and meeting transcripts using browser automation. It uses a dedicated Edge profile that's separate from your normal browser. I need to open that profile so you can sign into Microsoft Teams in it. This is a one-time step."
-
-Activate the virtual environment first (if not already active):
+Activate the venv and run the health check — it detects missing auth and opens the browser automatically:
 
 ```powershell
 .venv\Scripts\activate
-```
-
-Then run the health check, which will detect the missing auth and offer to open the browser:
-
-```powershell
 python src/pulse.py --health-check
 ```
 
 The health check will:
 1. Validate all installed components
-2. Detect that Teams auth is missing in the daemon profile
-3. Ask: "Open browser to sign in now? [Y/n]"
-4. Open a visible Edge window using Pulse's dedicated profile
-5. The user signs into `teams.microsoft.com` with their work account
-6. The user closes the browser window when done
-7. The health check verifies auth succeeded
+2. Detect missing Teams auth in Pulse's browser profile
+3. Ask: "Open browser to sign in now? [Y/n]" — accept
+4. Open a visible Edge window → user signs into Teams → closes window
+5. Verify auth succeeded
 
-**If the user prefers to do this manually later**, that's fine — Pulse will work for everything except transcript collection and inbox scanning until they complete this step.
-
-**IMPORTANT**: If the health check shows `[FAIL] Playwright Edge`, the user needs to run:
+If `[FAIL] Playwright Edge` appears, fix it first:
 
 ```powershell
 python -m playwright install msedge
@@ -154,15 +128,45 @@ Then re-run `--health-check`.
 
 ---
 
-## Phase 5: Verify Everything
+## Phase 5: MSX-MCP Plugin (Optional — Microsoft Sellers)
 
-If you didn't already run the health check in Phase 4, run it now:
+MSX-MCP gives Pulse access to MSX Dataverse — pipeline, deals, accounts, milestones. If the user works with MSX, install it. If not, skip.
+
+**ASK THE USER**: "Do you use MSX for pipeline/CRM data? I can install the MSX-MCP plugin so you can query deals and accounts from Pulse chat. [Y/n]"
+
+If yes, run the install, Azure CLI auth, and verify — all automated:
+
+```powershell
+# Install the plugin
+copilot plugin install mcaps-microsoft/MSX-MCP
+
+# Azure CLI auth for Dataverse (Microsoft corporate tenant)
+az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47
+
+# Verify
+copilot plugin list
+```
+
+**IMPORTANT**: MSX requires Microsoft corporate VPN to reach Dataverse. Remind the user to connect to VPN before using MSX tools.
+
+If `copilot plugin install` fails (e.g. not on VPN, no access to mcaps-microsoft org):
+1. Ensure the user has joined the `mcaps-microsoft` GitHub organization
+2. Ensure VPN is connected
+3. Try again
+
+If the user doesn't use MSX or skips, move on — Pulse works fine without it. MSX tools simply won't appear in chat.
+
+---
+
+## Phase 6: Verify Everything
+
+Run the health check — do NOT ask the user to run it, run it yourself:
 
 ```powershell
 python src/pulse.py --health-check
 ```
 
-All checks should pass. The key ones to look for:
+All checks should pass. The key ones:
 
 | Check | Must pass? | Notes |
 |-------|-----------|-------|
@@ -173,9 +177,10 @@ All checks should pass. The key ones to look for:
 | PULSE_HOME | Yes | Data storage |
 | Browser: Teams auth | Recommended | Transcript + inbox scanning |
 | WorkIQ MCP server | Optional | M365 data queries |
+| MSX-MCP plugin | Optional | MSX pipeline queries |
 | Config: user identity | No (next step) | Onboarding will set this |
 
-Optionally run the test suite for extra confidence:
+If any check fails, fix it before moving on. Run the test suite for extra confidence:
 
 ```powershell
 python -m pytest tests/ -q --tb=line
@@ -183,15 +188,15 @@ python -m pytest tests/ -q --tb=line
 
 ---
 
-## Phase 6: First Run + Onboarding
+## Phase 7: First Run + Onboarding
 
-Launch Pulse with the setup flag to force the onboarding conversation:
+Launch Pulse with the setup flag — this starts the TUI and the onboarding conversation automatically:
 
 ```powershell
 python src/pulse.py --setup
 ```
 
-This starts the full Pulse TUI (terminal dashboard). The Chat tab will automatically activate and walk the user through:
+The Chat tab activates and walks the user through configuration — one question at a time, defaults offered. The user just answers:
 
 1. **Identity** — name, email, role, organization
 2. **Focus** — what they work on day-to-day
@@ -200,11 +205,9 @@ This starts the full Pulse TUI (terminal dashboard). The Chat tab will automatic
 5. **Team** (optional) — colleagues also running Pulse
 6. **Intelligence** (optional) — topics and competitors to watch
 
-The agent asks one question at a time. Defaults are offered in brackets — the user can accept them or customize.
+After all answers, the agent saves config automatically. The user can re-run `--setup` anytime.
 
-After all questions are answered, the agent saves the config and confirms. The user can re-run `--setup` anytime to change their preferences.
-
-**Tell the user**: "From now on, just double-click 'Start Pulse' on your Desktop. Pulse runs automatically — morning digest at 7 AM, triage every 30 minutes, intel brief at 9 AM. Press `?` in the TUI for keyboard shortcuts."
+**Tell the user**: "You're all set. From now on, double-click 'Start Pulse' on your Desktop. Press `?` for keyboard shortcuts."
 
 ---
 
@@ -218,6 +221,7 @@ Summarize what was set up:
 | GitHub CLI + Copilot | Agent brain (LLM via GitHub Copilot SDK) |
 | Playwright + Edge | Browser automation (transcripts, inbox, sending) |
 | WorkIQ | Microsoft 365 data access (calendar, email, people) |
+| MSX-MCP (optional) | MSX pipeline, deals, accounts, milestones |
 | PULSE_HOME (OneDrive) | All your data — syncs automatically |
 | Desktop shortcut | Double-click to start |
 | Standing instructions | Your preferences and schedule |
@@ -232,7 +236,19 @@ Your data lives entirely on OneDrive. No cloud backend, no third-party services 
 
 Open a terminal in the repo folder and tell your AI assistant:
 
-> "Pull the latest Pulse Agent code, update dependencies, and verify everything works."
+> "Pull the latest Pulse Agent code, update dependencies, and verify everything works. Then run the health check."
+
+The assistant will handle `git pull`, `pip install`, and `--health-check` automatically.
+
+### New in This Update: MSX-MCP Integration
+
+If you're a Microsoft seller and want MSX pipeline data in Pulse chat, install the MSX-MCP plugin:
+
+> "Install the MSX-MCP plugin for Copilot CLI and verify it works."
+
+Or manually: `copilot plugin install mcaps-microsoft/MSX-MCP` + `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47`. Requires VPN.
+
+Pulse auto-detects the plugin — no config changes needed. If it's not installed, MSX tools are silently skipped.
 
 ### Manual
 
@@ -255,6 +271,7 @@ Data in PULSE_HOME is untouched — only code updates.
 | Tests fail after upgrade | Re-run `pip install -r requirements.txt` |
 | Desktop shortcut broken | Re-run `setup.ps1` |
 | Browser auth expired | `python src/pulse.py --health-check` (will offer re-login) |
+| MSX tools not showing | `copilot plugin install mcaps-microsoft/MSX-MCP` + restart daemon |
 
 ---
 

@@ -288,7 +288,7 @@ class TestChatIPC:
             write_chat_delta("Hello ", "req-1")
             write_chat_delta("world!", "req-1")
 
-            text, done, offset = read_chat_stream_deltas(0, "req-1")
+            text, done, offset, *_ = read_chat_stream_deltas(0, "req-1")
 
         assert text == "Hello world!"
         assert done is False
@@ -304,7 +304,7 @@ class TestChatIPC:
             write_chat_delta("Result text", "req-1")
             finish_chat_stream("req-1")
 
-            text, done, _ = read_chat_stream_deltas(0, "req-1")
+            text, done, _, *_ = read_chat_stream_deltas(0, "req-1")
 
         assert text == "Result text"
         assert done is True
@@ -318,11 +318,11 @@ class TestChatIPC:
             clear_chat_stream()
             write_chat_delta("First ", "req-1")
 
-            text1, _, offset1 = read_chat_stream_deltas(0, "req-1")
+            text1, _, offset1, *_ = read_chat_stream_deltas(0, "req-1")
             assert text1 == "First "
 
             write_chat_delta("Second", "req-1")
-            text2, _, offset2 = read_chat_stream_deltas(offset1, "req-1")
+            text2, _, offset2, *_ = read_chat_stream_deltas(offset1, "req-1")
             assert text2 == "Second"
             assert offset2 > offset1
 
@@ -337,7 +337,7 @@ class TestChatIPC:
             write_chat_delta("New response", "req-NEW")
 
             # Read only req-NEW
-            text, _, _ = read_chat_stream_deltas(0, "req-NEW")
+            text, _, _, *_ = read_chat_stream_deltas(0, "req-NEW")
 
         assert text == "New response"
         assert "Old response" not in text
@@ -351,7 +351,7 @@ class TestChatIPC:
             write_chat_delta("Old data", "req-1")
             clear_chat_stream()
 
-            text, done, offset = read_chat_stream_deltas(0, "req-1")
+            text, done, offset, *_ = read_chat_stream_deltas(0, "req-1")
 
         assert text == ""
         assert done is False
@@ -363,7 +363,7 @@ class TestChatIPC:
 
         stream_file = tmp_dir / "nonexistent.jsonl"
         with patch("tui.ipc.CHAT_STREAM_FILE", stream_file):
-            text, done, offset = read_chat_stream_deltas(0)
+            text, done, offset, *_ = read_chat_stream_deltas(0)
 
         assert text == ""
         assert done is False
@@ -405,7 +405,7 @@ class TestChatIPC:
                 collected = ""
                 with patch("tui.ipc.CHAT_STREAM_FILE", stream_file):
                     for _ in range(100):
-                        text, _, offset = read_chat_stream_deltas(offset, "req-concurrent")
+                        text, _, offset, *_ = read_chat_stream_deltas(offset, "req-concurrent")
                         collected += text
                         time.sleep(0.001)
                     # Verify we got valid data (no corruption)
@@ -435,7 +435,7 @@ class TestChatIPC:
             clear_chat_stream()
             write_chat_delta("Meeting with Sch\u00f6nbrunn \u2014 \u2705 done", "req-1")
 
-            text, _, _ = read_chat_stream_deltas(0, "req-1")
+            text, _, _, *_ = read_chat_stream_deltas(0, "req-1")
 
         assert "\u00f6" in text  # ö
         assert "\u2014" in text  # —
@@ -454,7 +454,7 @@ class TestChatIPC:
         )
 
         with patch("tui.ipc.CHAT_STREAM_FILE", stream_file):
-            text, _, _ = read_chat_stream_deltas(0, "r1")
+            text, _, _, *_ = read_chat_stream_deltas(0, "r1")
 
         assert text == "good data"
 

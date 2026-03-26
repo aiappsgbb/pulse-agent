@@ -23,6 +23,10 @@ from sdk.prompts import load_prompt
 from sdk.session import agent_session, load_modes
 from sdk.tools import get_tools, load_actions
 
+# Session timeout constants (seconds)
+_TIMEOUT_DEFAULT = 1800   # 30 min — triage, digest, intel, chat
+_TIMEOUT_RESEARCH = 3600  # 60 min — deep research missions
+
 
 async def run_job(
     client: CopilotClient,
@@ -71,7 +75,7 @@ async def run_job(
     prompt = _build_trigger_prompt(mode_key, mode_cfg, config, context)
 
     # Determine timeout — generous limits since agent may use many tools
-    timeout = 3600 if mode_key == "research" else 1800
+    timeout = _TIMEOUT_RESEARCH if mode_key == "research" else _TIMEOUT_DEFAULT
 
     # Run the session
     async with agent_session(
@@ -90,9 +94,12 @@ async def run_job(
             return handler.final_text  # return partial if available
 
         if handler.error:
-            log.error(f"  Session error: {handler.error}")
-            if "ProxyResponseError" in str(handler.error):
+            error_str = str(handler.error)
+            log.error(f"  Session error: {error_str}")
+            if "ProxyResponseError" in error_str:
                 raise ProxyError(f"HTTP 502 proxy error: {handler.error}")
+            if "fetch failed" in error_str or "Request timed out" in error_str:
+                raise ProxyError(f"Transient MCP/network error: {handler.error}")
             return None
 
         # Post-process: validate digest JSON if written
@@ -964,10 +971,10 @@ def _list_recent_artifacts(days: int = 2) -> str:
             if not f.is_file():
                 continue
             try:
-                if f.stat().st_mtime >= cutoff:
+                st = f.stat()
+                if st.st_mtime >= cutoff:
                     rel = f.relative_to(directory)
-                    size = f.stat().st_size
-                    files.append(f"  - {label}/{rel} ({size:,} bytes)")
+                    files.append(f"  - {label}/{rel} ({st.st_size:,} bytes)")
             except Exception:
                 continue
 
@@ -1083,7 +1090,7 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
         try:
             await asyncio.wait_for(
                 run_transcript_collection(client, config),
-                timeout=1800,  # 30 min cap
+                timeout=_TIMEOUT_DEFAULT,  # 30 min cap
             )
             _log_pipeline("message", preview="Transcript collection complete")
         except asyncio.TimeoutError:

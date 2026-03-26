@@ -111,61 +111,92 @@ async def destroy_chat_session():
         _chat_session = None
 
 
-async def run_chat_query(client, config: dict, prompt: str, on_delta=None) -> str:
+async def run_chat_query(client, config: dict, prompt: str, on_delta=None, on_status=None) -> str:
     """Run a conversational query via GHCP SDK. Returns the response text.
 
     Uses a persistent session with infinite_sessions so the SDK maintains
     conversation context natively (auto-compacts when context fills up).
+    Auto-retries once on transient errors (fetch failed, MCP timeout).
     """
     global _chat_session
 
     log.info(f"  Chat query: {prompt[:80]}...")
 
-    # Get persistent session (creates if needed)
-    try:
-        session = await _get_chat_session(client, config)
-    except Exception as e:
-        log.error(f"  Failed to create chat session: {e}")
-        return f"Agent error: could not create session — {e}"
-
-    # Each message gets its own handler for completion tracking
-    from sdk.event_handler import EventHandler
-    handler = EventHandler(on_delta=on_delta)
-    unsub = session.on(handler)
-
-    try:
-        await session.send({"prompt": prompt})
-        await asyncio.wait_for(handler.done.wait(), timeout=1800)
-    except asyncio.TimeoutError:
-        log.warning("Chat query timed out after 1800s")
-        return handler.final_text or "Agent is still working — response timed out."
-    except Exception as e:
-        # Session died — destroy it so next message recreates
-        log.warning(f"  Chat session error, will recreate: {e}")
-        _chat_session = None
+    for attempt in range(2):  # max 1 retry
+        # Get persistent session (creates if needed)
         try:
-            await session.destroy()
-        except Exception:
-            pass
-        return f"Agent error: {e}"
-    finally:
-        if unsub:
+            session = await _get_chat_session(client, config)
+        except Exception as e:
+            log.error(f"  Failed to create chat session: {e}")
+            if attempt == 0 and _is_transient_error(str(e)):
+                log.info("  Transient error — retrying with fresh session...")
+                _chat_session = None
+                await asyncio.sleep(2)
+                continue
+            return f"Agent error: could not create session — {e}"
+
+        # Each message gets its own handler for completion tracking
+        from sdk.event_handler import EventHandler
+        handler = EventHandler(on_delta=on_delta, on_status=on_status)
+        unsub = session.on(handler)
+
+        try:
+            await session.send({"prompt": prompt})
+            await asyncio.wait_for(handler.done.wait(), timeout=1800)
+        except asyncio.TimeoutError:
+            log.warning("Chat query timed out after 1800s")
+            return handler.final_text or "Agent is still working — response timed out."
+        except Exception as e:
+            # Session died — destroy it so next message recreates
+            log.warning(f"  Chat session error, will recreate: {e}")
+            _chat_session = None
             try:
-                unsub()
+                await session.destroy()
             except Exception:
                 pass
+            if attempt == 0 and _is_transient_error(str(e)):
+                log.info("  Transient error — retrying with fresh session...")
+                await asyncio.sleep(2)
+                continue
+            return f"Agent error: {e}"
+        finally:
+            if unsub:
+                try:
+                    unsub()
+                except Exception:
+                    pass
 
-    if handler.error:
-        log.error(f"Chat session error: {handler.error}")
-        # If session errored, destroy so next message gets a fresh one
-        _chat_session = None
-        try:
-            await session.destroy()
-        except Exception:
-            pass
-        return f"Agent error: {handler.error}"
+        if handler.error:
+            error_str = str(handler.error)
+            log.error(f"Chat session error: {error_str}")
+            # If session errored, destroy so next message gets a fresh one
+            _chat_session = None
+            try:
+                await session.destroy()
+            except Exception:
+                pass
+            if attempt == 0 and _is_transient_error(error_str):
+                log.info("  Transient error — retrying with fresh session...")
+                await asyncio.sleep(2)
+                continue
+            return f"Agent error: {handler.error}"
 
-    return handler.final_text or "No response from agent."
+        return handler.final_text or "No response from agent."
+
+    return "Agent error: all retries exhausted"
+
+
+def _is_transient_error(error: str) -> bool:
+    """Check if an error is transient and worth retrying."""
+    transient_patterns = [
+        "fetch failed",           # MCP server HTTP fetch failed
+        "Something went wrong",   # Generic Copilot CLI transient error
+        "Request timed out",      # MCP tool execution timeout
+        "ECONNREFUSED",           # MCP server not running
+        "ECONNRESET",             # Connection dropped
+        "ProxyResponseError",     # Proxy/firewall 502
+    ]
+    return any(p.lower() in error.lower() for p in transient_patterns)
 
 
 async def job_worker(client, config: dict, job_queue: asyncio.Queue):
@@ -400,6 +431,15 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     log.warning(f"  Proxy 502 — requeued {job_name} (attempt {retry_count}, retry in 5 min)")
             else:
                 log.exception(f"  Job failed: {job_name} — {e}")
+                # Notify user of failure via TUI and desktop toast
+                try:
+                    write_job_notification(job_type, f"FAILED: {str(e)[:100]}")
+                except Exception:
+                    pass
+                try:
+                    notify_desktop("Pulse — Job Failed", f"{job_name}: {str(e)[:80]}")
+                except Exception:
+                    pass
                 # Reset schedule so it retries instead of waiting until next day
                 schedule_id = job.get("_schedule_id")
                 if schedule_id:
