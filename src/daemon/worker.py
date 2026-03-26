@@ -195,6 +195,7 @@ def _is_transient_error(error: str) -> bool:
         "ECONNREFUSED",           # MCP server not running
         "ECONNRESET",             # Connection dropped
         "ProxyResponseError",     # Proxy/firewall 502
+        "Session not found",      # Server-side session expired/evicted
     ]
     return any(p.lower() in error.lower() for p in transient_patterns)
 

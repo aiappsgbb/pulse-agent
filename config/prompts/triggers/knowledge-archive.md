@@ -33,6 +33,7 @@ Look for recurring names, companies, or initiatives across:
 - Calendar events (via WorkIQ)
 
 If you find a customer/initiative mentioned 2+ times across different sources with no project file, create one using `update_project`.
+{{msx_instructions}}
 
 ## Output
 

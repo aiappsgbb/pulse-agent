@@ -14,7 +14,30 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from daemon.heartbeat import parse_interval
 from core.scheduler import is_office_hours
-from daemon.worker import _write_agent_response, _requeue_with_delay
+from daemon.worker import _write_agent_response, _requeue_with_delay, _is_transient_error
+
+
+# --- _is_transient_error ---
+
+def test_session_not_found_is_transient():
+    """'Session not found' errors should trigger automatic retry with fresh session."""
+    error = "JSON-RPC Error -32603: Request session.send failed with message: Session not found: ae16145a-1a5c-4a72-80b1-b7a0ee8f9b57"
+    assert _is_transient_error(error) is True
+
+
+def test_known_transient_errors():
+    """All known transient patterns are recognized."""
+    assert _is_transient_error("fetch failed") is True
+    assert _is_transient_error("Something went wrong") is True
+    assert _is_transient_error("Request timed out") is True
+    assert _is_transient_error("ECONNREFUSED 127.0.0.1:3000") is True
+    assert _is_transient_error("ProxyResponseError: 502") is True
+
+
+def test_non_transient_errors():
+    """Non-transient errors should not trigger retry."""
+    assert _is_transient_error("Invalid tool arguments") is False
+    assert _is_transient_error("Permission denied") is False
 
 
 # --- parse_interval ---

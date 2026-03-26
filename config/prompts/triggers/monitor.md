@@ -13,6 +13,7 @@ Run a 30-minute triage cycle NOW. Focus on the LAST 60 MINUTES only — not the 
 {{calendar_block}}
 
 {{dismissed_block}}
+{{msx_context}}
 
 ## Your Task
 

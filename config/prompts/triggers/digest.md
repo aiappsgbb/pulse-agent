@@ -28,7 +28,9 @@ These come from real-time browser scans. They show what is ACTUALLY happening ri
 
 {{commitments_summary}}
 {{projects_block}}
+{{msx_block}}
 
+{{msx_instructions}}
 ### MANDATORY: Persist Project Memory Before Writing Digest
 
 **You MUST call `update_project` for every active project before writing the digest.** This creates persistent YAML files that carry context across digest cycles. If you skip this, tomorrow's digest starts from zero.

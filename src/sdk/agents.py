@@ -46,6 +46,18 @@ def workiq_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> M
     )
 
 
+def is_msx_available() -> bool:
+    """Check if MSX-MCP plugin is installed (without building full config).
+
+    Reusable lightweight check — used by pre-processing to decide whether
+    to inject MSX prompt blocks. Avoids constructing a full MCPLocalServerConfig.
+    """
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        if (Path.home() / ".copilot" / "installed-plugins" / subdir).exists():
+            return True
+    return False
+
+
 def msx_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig | None:
     """MSX-MCP config — Dataverse/CRM tools for MSX pipeline data.
 

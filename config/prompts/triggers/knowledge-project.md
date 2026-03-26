@@ -39,6 +39,7 @@ For each `watch_queries` entry in the project:
 
 ### 4. Save Updated Project
 Call `update_project` with the project ID `{{project_id}}` and the enriched YAML.
+{{msx_instructions}}
 
 ## Output
 
