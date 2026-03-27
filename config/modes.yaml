@@ -4,7 +4,7 @@
 # default_mcp_servers: inherited by all non-standalone modes unless overridden.
 # Unconfigured servers (e.g. dataverse without a URL) are skipped gracefully.
 
-default_mcp_servers: [workiq, msx, dataverse]
+default_mcp_servers: [workiq, dataverse]
 
 monitor:
   model_key: triage

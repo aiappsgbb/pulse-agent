@@ -67,12 +67,6 @@ tags: [deal, enterprise, migration]  # optional categorization
 - **inferred**: You estimated the date from context ("let's follow up next week", "circle back soon", "we should do this"). **Inferred dates should NOT trigger overdue alerts.**
 - **If no date is mentioned at all, leave `due` empty** — don't guess.
 
-## Optional: MSX Pipeline Data
-
-If the trigger prompt includes an "MSX" section with instructions, follow those to link projects to MSX opportunities using `msx-mcp-*` tools. Add an `msx:` block to the project YAML with opportunity_id, stage, close_date, revenue, and deal team info.
-
-If no MSX section is present in the trigger prompt, skip this entirely — MSX-MCP is not installed.
-
 ## Rules
 
 - **ONE project per customer engagement** — a customer's workshop, architecture review, whitepaper, and KYC meeting are all part of ONE project, not separate projects. Use the customer name as the primary slug (e.g., `vodafone-agentic-platform`, not also `vodafone-architecture` and `vodafone-frontier`). Sub-tasks go as commitments or timeline entries, not separate files.

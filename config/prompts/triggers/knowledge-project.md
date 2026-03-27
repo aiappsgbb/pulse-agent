@@ -39,9 +39,11 @@ For each `watch_queries` entry in the project:
 - If new activity found, update the project timeline
 - If new info **contradicts** current state, update fields with `[UPDATED]` entries
 
-### 4. Save Updated Project
-Call `update_project` with the project ID `{{project_id}}` and the enriched YAML.
+### 4. CRM Pipeline Sync
 {{msx_instructions}}
+
+### 5. Save Updated Project
+Call `update_project` with the project ID `{{project_id}}` and the enriched YAML.
 
 ## Output
 

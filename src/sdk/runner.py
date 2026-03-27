@@ -198,6 +198,8 @@ def _build_trigger_prompt(mode: str, mode_cfg: dict, config: dict, context: dict
 
 def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
     """Build the variable dict for trigger prompt interpolation."""
+    from sdk.prompts import load_enrichments
+
     variables = {}
     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -251,21 +253,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         # Collection warnings (transcript failures, stale data)
         variables["collection_warnings"] = context.get("collection_warnings", "")
 
-        # MSX pipeline enrichment (optional — empty when MSX not installed)
+        # CRM pipeline enrichment (optional — loaded from enrichment files when available)
         variables["msx_block"] = context.get("msx_gap_block", "")
-        if context.get("msx_available"):
-            variables["msx_instructions"] = (
-                "### MSX Pipeline Enrichment\n\n"
-                "MSX-MCP tools are available. When creating or updating projects via `update_project`:\n"
-                "1. For NEW projects: call `msx-mcp-search_opportunities` with the customer name to find MSX opportunities\n"
-                "2. If found: include an `msx:` block with opportunity_id, opportunity_name, stage, close_date, revenue, account_id\n"
-                "3. For EXISTING projects with `msx:` block: call `msx-mcp-get_opportunity_details` to verify stage/revenue are current\n"
-                "4. To check deal team membership: call `msx-mcp-get_account_team` and set `in_deal_team: true/false`\n"
-                "5. Surface any discrepancies (e.g., project says 'active' but MSX says 'closed-lost') in the digest\n"
-                "6. If MSX tool calls fail (auth error, timeout), skip MSX enrichment and continue without it\n"
-            )
-        else:
-            variables["msx_instructions"] = ""
+        variables["msx_instructions"] = load_enrichments("trigger-digest")
 
     elif mode == "intel":
         variables["date"] = date_str
@@ -302,18 +292,8 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
         variables["dismissed_block"] = _build_dismissed_block()
 
-        # MSX context for triage enrichment (optional)
-        if context.get("msx_available"):
-            variables["msx_context"] = (
-                "\n## MSX Pipeline Context (optional enrichment)\n\n"
-                "MSX-MCP tools are available. When triaging items from known customers/accounts:\n"
-                "- Call `msx-mcp-search_accounts` or `msx-mcp-search_opportunities` to add deal context\n"
-                "- Include MSX stage and revenue in the `context` field of triage items\n"
-                "- This helps prioritize: a message from a $5M deal contact is more urgent than a $50K one\n"
-                "- If MSX tool calls fail, skip and continue — MSX context is optional\n"
-            )
-        else:
-            variables["msx_context"] = ""
+        # CRM enrichment context (optional — loaded from enrichment files)
+        variables["msx_context"] = load_enrichments("trigger-monitor")
 
     elif mode == "knowledge-archive":
         variables["date"] = date_str
@@ -323,18 +303,8 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
 
-        # MSX linking for new project discovery (optional)
-        if context.get("msx_available"):
-            variables["msx_instructions"] = (
-                "\n### MSX Linking for New Projects\n\n"
-                "MSX-MCP is available. When discovering new projects:\n"
-                "- Call `msx-mcp-search_opportunities` with the customer name\n"
-                "- If found, include `msx:` block in the project YAML (opportunity_id, name, stage, close_date, revenue)\n"
-                "- Call `msx-mcp-get_account_team` to check deal team membership\n"
-                "- If MSX tool calls fail, skip and continue\n"
-            )
-        else:
-            variables["msx_instructions"] = ""
+        # CRM enrichment (optional — loaded from enrichment files)
+        variables["msx_instructions"] = load_enrichments("trigger-knowledge-archive")
 
     elif mode == "knowledge-project":
         variables["date"] = date_str
@@ -344,19 +314,8 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["project_yaml"] = context.get("project_yaml", "# No project data")
         variables["recent_artifacts"] = context.get("recent_artifacts", "No recent artifacts found.")
 
-        # MSX sync for per-project enrichment (optional)
-        if context.get("msx_available"):
-            variables["msx_instructions"] = (
-                "\n### MSX Pipeline Sync\n\n"
-                "MSX-MCP is available. After enriching this project:\n"
-                "1. If project has `msx.opportunity_id`: call `msx-mcp-get_opportunity_details` to refresh stage/revenue/close_date\n"
-                "2. If no `msx:` block: call `msx-mcp-search_opportunities` with '{{project_name}}' to find a match\n"
-                "3. Call `msx-mcp-get_account_team` to verify deal team membership\n"
-                "4. Update the `msx:` block in the project YAML if data changed\n"
-                "5. If MSX tool calls fail, skip and continue\n"
-            )
-        else:
-            variables["msx_instructions"] = ""
+        # CRM enrichment (optional — loaded from enrichment files)
+        variables["msx_instructions"] = load_enrichments("trigger-knowledge-project")
 
     elif mode == "research":
         task = context.get("task", {})
@@ -514,7 +473,7 @@ def _build_projects_block(projects: list[dict]) -> str:
         if next_mtg:
             lines.append(f"  Next meeting: {next_mtg}")
 
-        # Surface MSX pipeline data when present (optional — absent for non-MSX users)
+        # Surface CRM pipeline data when present (optional — absent for non-CRM users)
         msx = project.get("msx", {})
         if msx:
             opp = msx.get("opportunity_name", msx.get("opportunity_id", ""))
@@ -522,12 +481,44 @@ def _build_projects_block(projects: list[dict]) -> str:
             revenue = msx.get("revenue", "?")
             close = msx.get("close_date", "")
             in_team = msx.get("in_deal_team")
-            msx_line = f"  MSX: {opp} | Stage: {stage} | Revenue: {revenue}"
+            solution_area = msx.get("solution_area", "")
+            deal_type = msx.get("deal_type", "")
+
+            msx_line = f"  CRM: {opp} | Stage: {stage} | Revenue: {revenue}"
+            if solution_area:
+                msx_line += f" | {solution_area}"
+            if deal_type:
+                msx_line += f" | {deal_type}"
             if close:
                 msx_line += f" | Close: {close}"
             if in_team is False:
-                msx_line += " | ⚠ NOT in deal team"
+                msx_line += " | !! NOT in deal team"
             lines.append(msx_line)
+
+            # Deal team members
+            deal_team = msx.get("deal_team", [])
+            if deal_team:
+                team_str = ", ".join(
+                    f"{m.get('name', '?')} ({m.get('role', '?')})"
+                    for m in deal_team[:6]
+                )
+                lines.append(f"  Deal team: {team_str}")
+
+            # Active milestones (show up to 4 most relevant)
+            milestones = msx.get("milestones", [])
+            if milestones:
+                lines.append("  Milestones:")
+                for ms in milestones[:4]:
+                    ms_name = ms.get("name", "?")
+                    ms_status = ms.get("status", "?")
+                    ms_date = ms.get("date", "")
+                    ms_acr = ms.get("monthly_acr", "")
+                    ms_line = f"    - [{ms_status}] {ms_name}"
+                    if ms_date:
+                        ms_line += f" (due: {ms_date})"
+                    if ms_acr:
+                        ms_line += f" — ACR: {ms_acr}"
+                    lines.append(ms_line)
 
         lines.append("")
 
@@ -539,11 +530,11 @@ def _build_projects_block(projects: list[dict]) -> str:
 
 
 def _build_msx_gap_block(projects: list[dict]) -> str:
-    """Identify active projects without MSX opportunity links for gap detection.
+    """Identify active projects without CRM opportunity links for gap detection.
 
-    Returns a prompt block highlighting projects that may be missing from MSX,
-    or an empty string if all projects are linked (or no projects exist).
-    Only called when MSX-MCP is available.
+    Returns a prompt block highlighting projects that may be missing from the
+    CRM pipeline, or an empty string if all projects are linked (or no projects
+    exist). Only called when CRM tools are available.
     """
     active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
     if not active:
@@ -556,14 +547,14 @@ def _build_msx_gap_block(projects: list[dict]) -> str:
         return ""  # All projects have MSX links — no gaps
 
     lines = [
-        "\n## Part E — MSX Pipeline Gap Analysis\n",
-        f"{len(linked)} of {len(active)} active projects are linked to MSX opportunities.",
-        "The following projects have NO MSX opportunity link — search MSX to find matches:\n",
+        "\n## Part E — CRM Pipeline Gap Analysis\n",
+        f"{len(linked)} of {len(active)} active projects are linked to CRM opportunities.",
+        "The following projects have NO CRM opportunity link — search for matches:\n",
     ]
     for p in unlinked:
         name = p.get("project", p.get("_file", "?"))
         pid = p.get("_file", "").replace(".yaml", "")
-        lines.append(f"- **{name}** (file: {pid}) — call `msx-mcp-search_opportunities` with the customer name")
+        lines.append(f"- **{name}** (file: {pid}) — search CRM for this customer")
     lines.append("")
     return "\n".join(lines)
 
@@ -1297,6 +1288,10 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
 
     recent_artifacts = _list_recent_artifacts(days=2)
 
+    # MSX availability for per-project enrichment
+    from sdk.agents import is_msx_available
+    msx_available = is_msx_available()
+
     # Determine lookback window for per-project context
     state = load_json_state(KNOWLEDGE_STATE_FILE, {})
     last_run = state.get("last_run")
@@ -1322,6 +1317,7 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
             "project_yaml": yaml.dump(project_copy, default_flow_style=False, allow_unicode=True),
             "recent_artifacts": recent_artifacts,
             "lookback_window": lookback_window,
+            "msx_available": msx_available,
         }
 
         try:

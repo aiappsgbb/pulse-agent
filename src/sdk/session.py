@@ -38,11 +38,18 @@ def auto_approve_handler(request: PermissionRequest, context: dict) -> Permissio
 
 def _build_system_prompt(config: dict, mode: str, mode_cfg: dict) -> str:
     """Build system prompt by loading base + mode-specific prompt with variable interpolation."""
+    from sdk.prompts import load_enrichments
+
     # Chat mode replaces the entire system prompt
     if mode_cfg.get("system_prompt_mode") == "replace":
         prompt_path = mode_cfg["system_prompt"]
         variables = _build_prompt_variables(config, mode)
-        return load_prompt(prompt_path, variables)
+        text = load_prompt(prompt_path, variables)
+        # Append feature-specific enrichments (e.g., CRM tool listings for chat)
+        enrichment = load_enrichments(mode)
+        if enrichment:
+            text += "\n\n" + enrichment
+        return text
 
     # Other modes: base + mode-specific additions
     base = load_prompt("config/prompts/system/base.md")
@@ -51,6 +58,11 @@ def _build_system_prompt(config: dict, mode: str, mode_cfg: dict) -> str:
     if prompt_path:
         variables = _build_prompt_variables(config, mode)
         base += "\n" + load_prompt(prompt_path, variables)
+
+    # Append feature-specific enrichments
+    enrichment = load_enrichments(mode)
+    if enrichment:
+        base += "\n\n" + enrichment
 
     return base
 
@@ -124,6 +136,22 @@ def build_session_config(
         cfg = _mcp_config(name, config, cdp_endpoint)
         if cfg is not None:
             mcp_servers[name] = cfg
+
+    # Auto-inject MCP servers from enrichment system (e.g., CRM tools when available)
+    from sdk.agents import _ENRICHMENT_MCP_MAP
+    from sdk.prompts import ENRICHMENTS_DIR
+    import importlib
+    for prefix, checker_path in _ENRICHMENT_MCP_MAP:
+        if prefix not in mcp_servers:
+            # Only inject if at least one enrichment file exists for this prefix
+            has_enrichment = any(ENRICHMENTS_DIR.glob(f"{prefix}-*.md")) if ENRICHMENTS_DIR.exists() else False
+            if has_enrichment:
+                module_path, func_name = checker_path.rsplit(".", 1)
+                mod = importlib.import_module(module_path)
+                if getattr(mod, func_name)():
+                    cfg = _mcp_config(prefix, config, cdp_endpoint)
+                    if cfg is not None:
+                        mcp_servers[prefix] = cfg
 
     # Custom agents
     agent_names = mode_cfg.get("agents", [])

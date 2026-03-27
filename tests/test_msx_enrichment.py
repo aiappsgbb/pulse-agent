@@ -1,7 +1,10 @@
-"""Tests for optional MSX-MCP enrichment integration.
+"""Tests for the CRM enrichment system (MSX-MCP as reference implementation).
 
-Validates that MSX enrichment is additive-only — everything works identically
-when MSX is not installed. No regressions for non-MSX users.
+Validates that:
+1. Enrichments are additive-only — everything works identically without them
+2. Enrichment files are loaded and injected only when the feature is available
+3. Main prompts contain zero CRM-specific terminology
+4. MCP servers are auto-injected alongside enrichments
 """
 
 from unittest.mock import patch
@@ -57,15 +60,68 @@ class TestMsxAvailability:
 
 
 # ---------------------------------------------------------------------------
-# 2. _build_projects_block with MSX data
+# 2. load_enrichments()
 # ---------------------------------------------------------------------------
 
 
-class TestProjectsBlockMsx:
-    """Test that _build_projects_block surfaces MSX data when present."""
+class TestLoadEnrichments:
+    """Test the enrichment loading system."""
+
+    def test_loads_msx_enrichment_when_available(self):
+        """Returns enrichment file content when MSX is available."""
+        from sdk.prompts import load_enrichments
+
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            text = load_enrichments("knowledge-miner")
+
+        assert text != ""
+        assert "msx-mcp" in text.lower() or "CRM" in text
+
+    def test_returns_empty_when_msx_not_available(self):
+        """Returns empty string when MSX is not available."""
+        from sdk.prompts import load_enrichments
+
+        with patch("sdk.agents.is_msx_available", return_value=False):
+            text = load_enrichments("knowledge-miner")
+
+        assert text == ""
+
+    def test_returns_empty_for_nonexistent_enrichment(self):
+        """Returns empty string when no enrichment file exists for the name."""
+        from sdk.prompts import load_enrichments
+
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            text = load_enrichments("nonexistent-agent-that-has-no-file")
+
+        assert text == ""
+
+    def test_trigger_enrichment_files_exist(self):
+        """All expected trigger enrichment files exist."""
+        from sdk.prompts import ENRICHMENTS_DIR
+
+        for mode in ("trigger-digest", "trigger-monitor", "trigger-knowledge-archive", "trigger-knowledge-project"):
+            path = ENRICHMENTS_DIR / f"msx-{mode}.md"
+            assert path.exists(), f"Missing enrichment file: {path}"
+
+    def test_agent_enrichment_files_exist(self):
+        """All expected agent enrichment files exist."""
+        from sdk.prompts import ENRICHMENTS_DIR
+
+        for agent in ("knowledge-miner", "project-researcher", "chat"):
+            path = ENRICHMENTS_DIR / f"msx-{agent}.md"
+            assert path.exists(), f"Missing enrichment file: {path}"
+
+
+# ---------------------------------------------------------------------------
+# 3. _build_projects_block with CRM data
+# ---------------------------------------------------------------------------
+
+
+class TestProjectsBlockCrm:
+    """Test that _build_projects_block surfaces CRM data when present."""
 
     def test_project_with_msx_block(self):
-        """MSX data appears in projects block output."""
+        """CRM data appears in projects block output."""
         from sdk.runner import _build_projects_block
 
         projects = [{
@@ -82,13 +138,13 @@ class TestProjectsBlockMsx:
         }]
 
         block = _build_projects_block(projects)
-        assert "MSX: Contoso Enterprise Renewal" in block
+        assert "CRM: Contoso Enterprise Renewal" in block
         assert "Stage: Proposal" in block
         assert "Revenue: $2.4M" in block
         assert "Close: 2026-04-15" in block
 
     def test_project_without_msx_block(self):
-        """No MSX line when project has no msx: block."""
+        """No CRM line when project has no msx: block."""
         from sdk.runner import _build_projects_block
 
         projects = [{
@@ -99,7 +155,7 @@ class TestProjectsBlockMsx:
         }]
 
         block = _build_projects_block(projects)
-        assert "MSX:" not in block
+        assert "CRM:" not in block
         assert "Contoso Migration" in block
 
     def test_project_not_in_deal_team(self):
@@ -158,7 +214,7 @@ class TestProjectsBlockMsx:
         }]
 
         block = _build_projects_block(projects)
-        assert "MSX: OP-12345" in block
+        assert "CRM: OP-12345" in block
 
     def test_msx_without_close_date(self):
         """No 'Close:' segment when close_date is absent."""
@@ -179,36 +235,106 @@ class TestProjectsBlockMsx:
         assert "Close:" not in block
 
     def test_mixed_projects_msx_and_no_msx(self):
-        """Only projects with msx: block show MSX line."""
+        """Only projects with msx: block show CRM line."""
         from sdk.runner import _build_projects_block
 
         projects = [
             {
-                "project": "With MSX",
+                "project": "With CRM",
                 "status": "active",
-                "_file": "with-msx.yaml",
+                "_file": "with-crm.yaml",
                 "msx": {"opportunity_name": "Deal A", "stage": "Propose", "revenue": "$2M"},
             },
             {
-                "project": "Without MSX",
+                "project": "Without CRM",
                 "status": "active",
-                "_file": "without-msx.yaml",
+                "_file": "without-crm.yaml",
             },
         ]
 
         block = _build_projects_block(projects)
-        # MSX line only appears once (for the first project)
-        assert block.count("MSX:") == 1
+        assert block.count("CRM:") == 1
         assert "Deal A" in block
 
+    def test_deal_team_rendering(self):
+        """Deal team members are rendered when present."""
+        from sdk.runner import _build_projects_block
+
+        projects = [{
+            "project": "Test",
+            "status": "active",
+            "_file": "test.yaml",
+            "msx": {
+                "opportunity_name": "Test",
+                "stage": "Propose",
+                "revenue": "$1M",
+                "deal_team": [
+                    {"name": "Jane Smith", "role": "AE"},
+                    {"name": "Bob Jones", "role": "SA"},
+                ],
+            },
+        }]
+
+        block = _build_projects_block(projects)
+        assert "Deal team:" in block
+        assert "Jane Smith (AE)" in block
+        assert "Bob Jones (SA)" in block
+
+    def test_milestones_rendering(self):
+        """Milestones are rendered when present."""
+        from sdk.runner import _build_projects_block
+
+        projects = [{
+            "project": "Test",
+            "status": "active",
+            "_file": "test.yaml",
+            "msx": {
+                "opportunity_name": "Test",
+                "stage": "Propose",
+                "revenue": "$1M",
+                "milestones": [
+                    {"name": "Architecture Review", "status": "on-track", "date": "2026-03-15", "monthly_acr": "$50K"},
+                    {"name": "PoC Execution", "status": "at-risk", "date": "2026-04-01"},
+                ],
+            },
+        }]
+
+        block = _build_projects_block(projects)
+        assert "Milestones:" in block
+        assert "[on-track] Architecture Review" in block
+        assert "due: 2026-03-15" in block
+        assert "ACR: $50K" in block
+        assert "[at-risk] PoC Execution" in block
+
+    def test_solution_area_and_deal_type_rendering(self):
+        """Solution area and deal type show in CRM line."""
+        from sdk.runner import _build_projects_block
+
+        projects = [{
+            "project": "Test",
+            "status": "active",
+            "_file": "test.yaml",
+            "msx": {
+                "opportunity_name": "Test",
+                "stage": "Qualify",
+                "revenue": "$500K",
+                "solution_area": "Azure",
+                "deal_type": "New",
+            },
+        }]
+
+        block = _build_projects_block(projects)
+        assert "Azure" in block
+        assert "New" in block
+
 
 # ---------------------------------------------------------------------------
-# 3. _build_msx_gap_block
+# 4. _build_msx_gap_block
 # ---------------------------------------------------------------------------
 
 
-class TestMsxGapBlock:
-    """Test MSX gap analysis block generation."""
+class TestCrmGapBlock:
+    """Test CRM gap analysis block generation."""
 
     def test_no_projects(self):
         """Returns empty string when no projects."""
@@ -216,7 +342,7 @@ class TestMsxGapBlock:
         assert _build_msx_gap_block([]) == ""
 
     def test_all_projects_linked(self):
-        """Returns empty string when all active projects have MSX links."""
+        """Returns empty string when all active projects have CRM links."""
         from sdk.runner import _build_msx_gap_block
 
         projects = [{
@@ -247,10 +373,10 @@ class TestMsxGapBlock:
         ]
 
         block = _build_msx_gap_block(projects)
-        assert "MSX Pipeline Gap Analysis" in block
+        assert "CRM Pipeline Gap Analysis" in block
         assert "1 of 2 active projects" in block
         assert "Fabrikam" in block
-        assert "Contoso" not in block.split("The following")[1]  # Contoso not in unlinked list
+        assert "Contoso" not in block.split("The following")[1]
 
     def test_all_unlinked(self):
         """All active projects shown as unlinked."""
@@ -276,7 +402,7 @@ class TestMsxGapBlock:
         ]
 
         block = _build_msx_gap_block(projects)
-        assert "0 of 1 active projects" in block  # only "Active" counted, and it's unlinked
+        assert "0 of 1 active projects" in block
         assert "Done" not in block
 
     def test_empty_msx_block_treated_as_unlinked(self):
@@ -303,14 +429,14 @@ class TestMsxGapBlock:
 
 
 # ---------------------------------------------------------------------------
-# 4. Trigger variable wiring
+# 5. Trigger variable wiring (enrichment-based)
 # ---------------------------------------------------------------------------
 
 
 class TestTriggerVariablesMsx:
-    """Test MSX variables in _build_trigger_variables."""
+    """Test trigger variables load from enrichment files."""
 
-    def _make_context(self, msx_available=False, msx_gap_block=""):
+    def _make_context(self, msx_gap_block=""):
         """Helper to create a minimal context dict."""
         return {
             "content_block": "test content",
@@ -321,61 +447,61 @@ class TestTriggerVariablesMsx:
             "calendar_block": "no events",
             "projects_block": "",
             "commitments_summary": "",
-            "msx_available": msx_available,
             "msx_gap_block": msx_gap_block,
         }
 
     def test_digest_msx_available(self, sample_config):
-        """Digest variables include MSX block and instructions when available."""
+        """Digest variables include enrichment content when available."""
         from sdk.runner import _build_trigger_variables
 
-        ctx = self._make_context(msx_available=True, msx_gap_block="## Gap analysis here")
-        variables = _build_trigger_variables("digest", sample_config, ctx)
+        ctx = self._make_context(msx_gap_block="## Gap analysis here")
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            variables = _build_trigger_variables("digest", sample_config, ctx)
 
         assert variables["msx_block"] == "## Gap analysis here"
-        assert "MSX Pipeline Enrichment" in variables["msx_instructions"]
-        assert "msx-mcp-search_opportunities" in variables["msx_instructions"]
+        assert variables["msx_instructions"] != ""  # loaded from enrichment file
 
     def test_digest_msx_not_available(self, sample_config):
-        """Digest variables have empty MSX strings when not available."""
+        """Digest variables have empty strings when not available."""
         from sdk.runner import _build_trigger_variables
 
-        ctx = self._make_context(msx_available=False)
-        variables = _build_trigger_variables("digest", sample_config, ctx)
+        ctx = self._make_context()
+        with patch("sdk.agents.is_msx_available", return_value=False):
+            variables = _build_trigger_variables("digest", sample_config, ctx)
 
         assert variables["msx_block"] == ""
         assert variables["msx_instructions"] == ""
 
     def test_monitor_msx_available(self, sample_config):
-        """Monitor variables include MSX context when available."""
+        """Monitor variables include enrichment context when available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
             "teams_inbox": "test",
             "outlook_inbox_block": "test",
             "calendar_block": "test",
-            "msx_available": True,
         }
-        variables = _build_trigger_variables("monitor", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            variables = _build_trigger_variables("monitor", sample_config, ctx)
 
-        assert "MSX Pipeline Context" in variables["msx_context"]
+        assert variables["msx_context"] != ""
 
     def test_monitor_msx_not_available(self, sample_config):
-        """Monitor variables have empty MSX context when not available."""
+        """Monitor variables have empty context when not available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
             "teams_inbox": "test",
             "outlook_inbox_block": "test",
             "calendar_block": "test",
-            "msx_available": False,
         }
-        variables = _build_trigger_variables("monitor", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=False):
+            variables = _build_trigger_variables("monitor", sample_config, ctx)
 
         assert variables["msx_context"] == ""
 
     def test_knowledge_archive_msx_available(self, sample_config):
-        """Knowledge-archive includes MSX instructions when available."""
+        """Knowledge-archive includes enrichment instructions when available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
@@ -384,14 +510,14 @@ class TestTriggerVariablesMsx:
             "recent_artifacts": "",
             "teams_inbox_block": "",
             "outlook_inbox_block": "",
-            "msx_available": True,
         }
-        variables = _build_trigger_variables("knowledge-archive", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            variables = _build_trigger_variables("knowledge-archive", sample_config, ctx)
 
-        assert "MSX Linking" in variables["msx_instructions"]
+        assert variables["msx_instructions"] != ""
 
     def test_knowledge_archive_msx_not_available(self, sample_config):
-        """Knowledge-archive has empty MSX instructions when not available."""
+        """Knowledge-archive has empty instructions when not available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
@@ -400,14 +526,14 @@ class TestTriggerVariablesMsx:
             "recent_artifacts": "",
             "teams_inbox_block": "",
             "outlook_inbox_block": "",
-            "msx_available": False,
         }
-        variables = _build_trigger_variables("knowledge-archive", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=False):
+            variables = _build_trigger_variables("knowledge-archive", sample_config, ctx)
 
         assert variables["msx_instructions"] == ""
 
     def test_knowledge_project_msx_available(self, sample_config):
-        """Knowledge-project includes MSX sync instructions when available."""
+        """Knowledge-project includes enrichment instructions when available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
@@ -416,14 +542,14 @@ class TestTriggerVariablesMsx:
             "project_name": "Contoso Migration",
             "project_yaml": "project: Contoso",
             "recent_artifacts": "",
-            "msx_available": True,
         }
-        variables = _build_trigger_variables("knowledge-project", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=True):
+            variables = _build_trigger_variables("knowledge-project", sample_config, ctx)
 
-        assert "MSX Pipeline Sync" in variables["msx_instructions"]
+        assert variables["msx_instructions"] != ""
 
     def test_knowledge_project_msx_not_available(self, sample_config):
-        """Knowledge-project has empty MSX instructions when not available."""
+        """Knowledge-project has empty instructions when not available."""
         from sdk.runner import _build_trigger_variables
 
         ctx = {
@@ -432,60 +558,60 @@ class TestTriggerVariablesMsx:
             "project_name": "Contoso Migration",
             "project_yaml": "project: Contoso",
             "recent_artifacts": "",
-            "msx_available": False,
         }
-        variables = _build_trigger_variables("knowledge-project", sample_config, ctx)
+        with patch("sdk.agents.is_msx_available", return_value=False):
+            variables = _build_trigger_variables("knowledge-project", sample_config, ctx)
 
         assert variables["msx_instructions"] == ""
 
 
 # ---------------------------------------------------------------------------
-# 5. Template contract tests
+# 6. Template contract tests
 # ---------------------------------------------------------------------------
 
 
 class TestTemplateContracts:
-    """Verify trigger templates contain MSX placeholders."""
+    """Verify trigger templates contain enrichment placeholders."""
 
     def _read_template(self, name):
         template_dir = Path(__file__).parent.parent / "config" / "prompts" / "triggers"
         return (template_dir / f"{name}.md").read_text(encoding="utf-8")
 
-    def test_digest_template_has_msx_placeholders(self):
+    def test_digest_template_has_enrichment_placeholders(self):
         text = self._read_template("digest")
         assert "{{msx_block}}" in text
         assert "{{msx_instructions}}" in text
 
-    def test_monitor_template_has_msx_placeholder(self):
+    def test_monitor_template_has_enrichment_placeholder(self):
         text = self._read_template("monitor")
         assert "{{msx_context}}" in text
 
-    def test_knowledge_project_template_has_msx_placeholder(self):
+    def test_knowledge_project_template_has_enrichment_placeholder(self):
         text = self._read_template("knowledge-project")
         assert "{{msx_instructions}}" in text
 
-    def test_knowledge_archive_template_has_msx_placeholder(self):
+    def test_knowledge_archive_template_has_enrichment_placeholder(self):
         text = self._read_template("knowledge-archive")
         assert "{{msx_instructions}}" in text
 
 
 # ---------------------------------------------------------------------------
-# 6. Agent MCP server loading
+# 7. Agent enrichment injection
 # ---------------------------------------------------------------------------
 
 
-class TestAgentMcpLoading:
-    """Test knowledge-miner agent loads MSX when available."""
+class TestAgentEnrichmentInjection:
+    """Test that agents get enrichments and MCP servers auto-injected."""
 
-    def test_knowledge_miner_has_msx_in_mcp_servers(self):
-        """Knowledge-miner front-matter declares msx in mcp_servers."""
+    def test_knowledge_miner_no_msx_in_frontmatter(self):
+        """knowledge-miner front-matter does NOT contain 'msx' — it's auto-injected."""
         from sdk.agents import parse_front_matter
         path = Path(__file__).parent.parent / "config" / "prompts" / "agents" / "knowledge-miner.md"
         meta, _ = parse_front_matter(path)
-        assert "msx" in meta.get("mcp_servers", [])
+        assert "msx" not in meta.get("mcp_servers", [])
 
     def test_knowledge_miner_skips_msx_when_unavailable(self, sample_config, tmp_path):
-        """load_agent filters out msx when plugin not installed."""
+        """load_agent does NOT inject msx when plugin not installed."""
         from sdk.agents import load_agent
 
         with patch("sdk.agents.Path.home", return_value=tmp_path):
@@ -494,14 +620,13 @@ class TestAgentMcpLoading:
         mcp_servers = agent.get("mcp_servers", {})
         assert "msx" not in mcp_servers
 
-    def test_knowledge_miner_includes_msx_when_available(self, sample_config, tmp_path):
-        """load_agent includes msx when plugin is installed."""
+    def test_knowledge_miner_gets_msx_when_available(self, sample_config, tmp_path):
+        """load_agent auto-injects msx MCP server when plugin is installed."""
         from sdk.agents import load_agent
 
         # Create fake plugin dir
         plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
         plugin_dir.mkdir(parents=True)
-        # Create bootstrap.mjs so config finds an entry point
         scripts = plugin_dir / "scripts"
         scripts.mkdir()
         (scripts / "bootstrap.mjs").write_text("// fake")
@@ -512,24 +637,59 @@ class TestAgentMcpLoading:
         mcp_servers = agent.get("mcp_servers", {})
         assert "msx" in mcp_servers
 
+    def test_knowledge_miner_prompt_includes_enrichment(self, sample_config, tmp_path):
+        """Agent prompt includes enrichment content when MSX is available."""
+        from sdk.agents import load_agent
+
+        plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "scripts").mkdir()
+        (plugin_dir / "scripts" / "bootstrap.mjs").write_text("// fake")
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            agent = load_agent("knowledge-miner", sample_config)
+
+        assert "msx-mcp" in agent["prompt"].lower() or "CRM" in agent["prompt"]
+
+    def test_knowledge_miner_prompt_clean_without_msx(self, sample_config, tmp_path):
+        """Agent prompt has no CRM/MSX content when plugin not installed."""
+        from sdk.agents import load_agent
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            agent = load_agent("knowledge-miner", sample_config)
+
+        assert "msx-mcp" not in agent["prompt"].lower()
+
 
 # ---------------------------------------------------------------------------
-# 7. Agent prompt content
+# 8. Main prompts are clean (no CRM terminology)
 # ---------------------------------------------------------------------------
 
 
-class TestAgentPromptContent:
-    """Test agent prompts contain MSX guidance."""
+class TestMainPromptsClean:
+    """Main agent prompts must not contain CRM-specific tool names."""
 
-    def test_project_researcher_mentions_msx(self):
-        """project-researcher has MSX guidance section."""
-        path = Path(__file__).parent.parent / "config" / "prompts" / "agents" / "project-researcher.md"
-        text = path.read_text(encoding="utf-8")
-        assert "MSX Pipeline Data" in text
-
-    def test_knowledge_miner_has_msx_mission(self):
-        """knowledge-miner has MSX Pipeline Sync mission."""
+    def test_knowledge_miner_no_msx_tools(self):
+        """knowledge-miner.md (base) does not mention msx-mcp tools."""
         path = Path(__file__).parent.parent / "config" / "prompts" / "agents" / "knowledge-miner.md"
         text = path.read_text(encoding="utf-8")
-        assert "MSX Pipeline Sync" in text
-        assert "msx-mcp-get_opportunity_details" in text
+        assert "msx-mcp" not in text.lower()
+
+    def test_project_researcher_no_msx_tools(self):
+        """project-researcher.md (base) does not mention msx-mcp tools."""
+        path = Path(__file__).parent.parent / "config" / "prompts" / "agents" / "project-researcher.md"
+        text = path.read_text(encoding="utf-8")
+        assert "msx-mcp" not in text.lower()
+
+    def test_chat_system_prompt_no_msx_tools(self):
+        """chat.md (base) does not mention msx-mcp tools."""
+        path = Path(__file__).parent.parent / "config" / "prompts" / "system" / "chat.md"
+        text = path.read_text(encoding="utf-8")
+        assert "msx-mcp" not in text.lower()
+
+    def test_modes_yaml_no_msx(self):
+        """modes.yaml default_mcp_servers does not contain 'msx'."""
+        import yaml
+        path = Path(__file__).parent.parent / "config" / "modes.yaml"
+        modes = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "msx" not in modes.get("default_mcp_servers", [])

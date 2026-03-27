@@ -1,0 +1,102 @@
+## CRM Pipeline Deep Sync (MSX-MCP available)
+
+MSX-MCP tools are available in this session. Execute these additional missions after your core missions.
+
+### Mission A: Link Unlinked Projects to MSX
+
+For each active project WITHOUT an `msx:` block:
+1. Call `msx-mcp-search_opportunities` with the customer/company name
+2. If multiple matches, pick the one closest in name and stage to the project context
+3. If no match, try alternate names (e.g., "Contoso" vs "Contoso Ltd" vs "Contoso Inc")
+
+### Mission B: Deep-Enrich Every Linked Project
+
+For each active project WITH an `msx.opportunity_id` (including newly linked ones):
+1. Call `msx-mcp-get_opportunity_details` — get FULL details: stage, revenue, close date, deal type, solution area, forecast comments, MACC data
+2. Call `msx-mcp-get_milestones_for_opportunity` — get ALL milestones: number, name, status, date, category, monthly ACR, staleness, commitment
+3. Call `msx-mcp-get_account_deal_teams` (with the account name) — get deal team roster: names, roles
+4. Call `msx-mcp-get_opportunity_solutions` — get product line items attached to the opportunity
+
+**Compare and update:**
+- If stage changed (e.g., "Qualify" to "Proposal"), update `msx.stage` and add timeline entry: `"[MSX] stage changed from Qualify to Proposal"`
+- If revenue changed, update `msx.revenue` and add timeline entry
+- If close date moved, update and add timeline entry
+- If a milestone status changed (on-track to at-risk), update `msx.milestones` and add timeline entry
+- If deal team members changed, update `msx.deal_team`
+- If MSX says deal is "closed-lost" but project status is `active`, escalate risk to `critical` and add timeline entry: `"[MSX] deal closed-lost in MSX but project still active -- verify"`
+- Set `msx.last_synced` to today's date
+
+**Verify deal team membership:**
+- Check if YOUR name appears in the deal team roster. Set `msx.in_deal_team: true/false`
+- If you're NOT on the deal team for an active project you lead, flag it: `"[MSX] You are NOT on the deal team for this opportunity -- consider joining"`
+
+### Mission C: Deal Portfolio Discovery
+
+Discover deals you're on the team for but DON'T have project files:
+
+1. Call `msx-mcp-get_my_deals` — get ALL opportunities where you're on the deal team
+2. For each deal returned, check if a project file already exists:
+   - Search `output/projects/` for the account/customer name
+   - If a project exists AND already has `msx.opportunity_id` matching — skip (already linked)
+   - If a project exists but NO `msx:` block — link it (add `msx:` block with full data)
+   - If NO project file exists — create a new one
+3. For newly discovered deals, create a project file with:
+   - `involvement: observer` (default -- you're on the deal team but may not be actively driving)
+   - `status: active`
+   - `summary:` generated from opportunity name + stage + solution area
+   - Full `msx:` block with all available data (call `get_opportunity_details` + `get_milestones_for_opportunity` for each)
+   - `tags: [crm-discovered]` to mark these as CRM-originated
+   - `watch_queries:` with the account name and opportunity name
+4. Also call `msx-mcp-get_my_milestones` to find stale milestones across all your deals -- add timeline entries to relevant projects: `"[MSX] milestone {number} is stale ({days} days without update)"`
+5. If `get_my_deals` fails, skip this mission entirely
+
+**This mission ensures you have visibility of your entire CRM portfolio**, not just engagements that happen to generate meetings or emails.
+
+### Extended MSX Block Schema
+
+Store all CRM/pipeline data under the `msx:` key in each project YAML. This block is entirely optional -- projects without it work identically.
+
+```yaml
+msx:
+  opportunity_id: "GUID"
+  opportunity_name: "Contoso Enterprise Renewal"
+  tpid: "12345"
+  account_name: "Contoso Ltd"
+  stage: "Proposal"
+  revenue: "$2.4M"
+  close_date: "2026-04-15"
+  deal_type: "New"
+  solution_area: "Azure"
+  in_deal_team: true
+  deal_team:
+    - name: "Jane Smith"
+      role: "Account Executive"
+    - name: "Bob Jones"
+      role: "Solution Architect"
+  milestones:
+    - number: "7-503251276"
+      name: "Architecture Review"
+      status: "on-track"
+      date: "2026-03-15"
+      category: "ADS"
+      monthly_acr: "$50K"
+    - number: "7-503251277"
+      name: "PoC Execution"
+      status: "at-risk"
+      date: "2026-04-01"
+      category: "PoC/Pilot"
+      monthly_acr: "$120K"
+  solutions:
+    - product: "Azure OpenAI Service"
+      quantity: 1
+      amount: "$1.2M"
+    - product: "Azure Kubernetes Service"
+      quantity: 1
+      amount: "$800K"
+  forecast_comments: "Customer aligned on architecture. PoC scheduled for March."
+  last_synced: "2026-03-27"
+```
+
+### Error Handling
+
+If any MSX tool call fails (auth error, timeout, VPN issue), skip that step and continue. Log a timeline entry: `"[MSX] sync failed -- {error reason}"`. Do NOT let MSX failures block your core missions.
