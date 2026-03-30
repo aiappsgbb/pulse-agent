@@ -23,13 +23,15 @@ def _get_enqueued_files(job_queue: asyncio.Queue) -> set[str]:
     return enqueued
 
 
-def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
+def sync_jobs_from_onedrive(config: dict, job_queue):
     """Enqueue any pending job files from JOBS_DIR/pending/.
 
     Inter-agent requests land directly in JOBS_DIR (which IS on OneDrive).
     This function just checks for new files and enqueues them.
+    Uses ``enqueue_job`` so file-based jobs respect priority ordering.
     """
-    # Enqueue any pending file-based jobs
+    from daemon.worker import enqueue_job
+
     enqueued_files = _get_enqueued_files(job_queue)
     for job in load_pending_tasks():
         job_file = job.get("_file")
@@ -37,7 +39,7 @@ def sync_jobs_from_onedrive(config: dict, job_queue: asyncio.Queue):
             continue
         if job_file in enqueued_files:
             continue
-        job_queue.put_nowait(job)
+        enqueue_job(job_queue, job, config)
         enqueued_files.add(job_file)
 
 

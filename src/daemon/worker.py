@@ -1,4 +1,12 @@
-"""Job worker — processes jobs from the asyncio queue one at a time."""
+"""Job worker — concurrent worker pool with priority queue.
+
+Multiple workers pull from a single PriorityQueue, each running its own
+SDK session.  Urgent jobs (triage, sends) get high priority and are never
+blocked by long-running jobs (knowledge enrichment, research).
+
+Knowledge Phase 2 is split into individual ``knowledge-project`` jobs
+queued at low priority so they naturally interleave with triage cycles.
+"""
 
 import asyncio
 import json
@@ -18,6 +26,69 @@ from tui.ipc import write_job_notification, append_job_event
 _PROXY_RETRY_DELAY = 300       # 5 minutes between retries
 _PROXY_MAX_RETRIES = 48        # 4 hours max (48 × 5 min)
 _BROWSER_JOB_TIMEOUT = 180    # 3 minute timeout for Playwright-based jobs
+
+# ---------------------------------------------------------------------------
+# Priority queue helpers — lower number = higher priority.
+# Default priorities; can be overridden via modes.yaml ``job_priorities:``.
+# ---------------------------------------------------------------------------
+DEFAULT_JOB_PRIORITIES: dict[str, int] = {
+    "monitor": 1,
+    "teams_send": 1,
+    "email_reply": 1,
+    "mark_read_teams": 1,
+    "mark_read_outlook": 1,
+    "inbox_sweep": 2,
+    "digest": 3,
+    "intel": 4,
+    "agent_request": 4,
+    "agent_response": 4,
+    "research": 5,
+    "transcripts": 6,
+    "knowledge-init": 6,
+    "housekeeping": 7,
+    "knowledge-project": 8,
+}
+_DEFAULT_PRIORITY = 5
+
+# Monotonic counter — preserves FIFO within the same priority level.
+_enqueue_seq = 0
+
+# Resolved priorities (updated on first call to enqueue_job with config).
+_resolved_priorities: dict[str, int] | None = None
+
+
+def _get_priorities(config: dict | None = None) -> dict[str, int]:
+    """Return merged job priorities (config overrides defaults)."""
+    global _resolved_priorities
+    if _resolved_priorities is not None:
+        return _resolved_priorities
+
+    merged = dict(DEFAULT_JOB_PRIORITIES)
+    if config:
+        overrides = config.get("job_priorities", {})
+        if isinstance(overrides, dict):
+            merged.update(overrides)
+    _resolved_priorities = merged
+    return merged
+
+
+def enqueue_job(
+    queue: asyncio.PriorityQueue,
+    job: dict,
+    config: dict | None = None,
+) -> None:
+    """Put a job onto the priority queue with correct ordering."""
+    global _enqueue_seq
+    _enqueue_seq += 1
+    priorities = _get_priorities(config)
+    priority = priorities.get(job.get("type", ""), _DEFAULT_PRIORITY)
+    queue.put_nowait((priority, _enqueue_seq, job))
+
+
+async def dequeue_job(queue: asyncio.PriorityQueue) -> dict:
+    """Blocking get — returns the job dict (strips priority wrapper)."""
+    _pri, _seq, job = await queue.get()
+    return job
 
 
 def _write_job_log(log_file: str | None, entry_type: str, **kwargs) -> None:
@@ -200,21 +271,27 @@ def _is_transient_error(error: str) -> bool:
     return any(p.lower() in error.lower() for p in transient_patterns)
 
 
-async def job_worker(client, config: dict, job_queue: asyncio.Queue):
-    """Process jobs from the queue as they arrive.
+async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, worker_id: int = 0):
+    """Single worker coroutine — multiple instances run concurrently.
 
-    Uses an asyncio.Lock to prevent concurrent SDK access (safety net
-    even though the queue is processed sequentially).
+    Each worker pulls the highest-priority job from the shared queue,
+    creates its own SDK session (via run_job), and processes it.  The old
+    asyncio.Lock is removed — concurrent SDK sessions are safe (proven by
+    the chat fast-lane which already runs alongside the job worker).
+
+    ``knowledge`` jobs are handled specially: Phase 0+1 runs as a single
+    ``knowledge-init`` step, then individual ``knowledge-project`` jobs
+    are queued at low priority so other workers can interleave triage.
     """
     from sdk.runner import run_job
 
-    lock = asyncio.Lock()
+    tag = f"[W{worker_id}]"
 
     # Shared state for TUI status bar — imported from tasks.py
-    from daemon.tasks import current_job
+    from daemon.tasks import active_workers
 
     while True:
-        job = await job_queue.get()
+        job = await dequeue_job(job_queue)
         job_type = job.get("type", "unknown")
         job_name = job.get("task", job_type)
         job_file = job.get("_file")
@@ -224,198 +301,224 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
         job_log_file = str(LOGS_DIR / f"job-{job_id}.jsonl")
 
-        log.info(f"=== Job: [{job_type}] {job_name} (id={job_id}) ===")
+        log.info(f"=== {tag} Job: [{job_type}] {job_name} (id={job_id}) ===")
 
-        # Track current job for status bar
-        current_job["type"] = job_type
-        current_job["started"] = datetime.now().isoformat()
-        current_job["job_id"] = job_id
+        # Track this worker's current job for status bar
+        active_workers[worker_id] = {
+            "type": job_type,
+            "started": datetime.now().isoformat(),
+            "job_id": job_id,
+        }
 
         append_job_event(job_id, job_type, "running", job_name, log_file=job_log_file)
 
         try:
-            async with lock:
-                if job_type == "research":
-                    context = {"task": job}
-                    await run_job(client, config, "research", context=context, job_log_file=job_log_file)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    notify_desktop("Pulse — Research", f"Research complete: {job_name}")
-                    write_job_notification("research", f"Research complete: {job_name}")
+            if job_type == "research":
+                context = {"task": job}
+                await run_job(client, config, "research", context=context, job_log_file=job_log_file)
+                if "_file" in job:
+                    mark_task_completed(job)
+                notify_desktop("Pulse — Research", f"Research complete: {job_name}")
+                write_job_notification("research", f"Research complete: {job_name}")
 
-                elif job_type == "transcripts":
-                    # Standalone mode — no SDK session, uses Playwright directly
-                    from collectors.transcripts import run_transcript_collection
-                    await run_transcript_collection(client, config)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    notify_desktop("Pulse — Transcripts", "Transcript collection complete.")
-                    write_job_notification("transcripts", "Transcript collection complete.")
+            elif job_type == "transcripts":
+                # Standalone mode — no SDK session, uses Playwright directly
+                from collectors.transcripts import run_transcript_collection
+                await run_transcript_collection(client, config)
+                if "_file" in job:
+                    mark_task_completed(job)
+                notify_desktop("Pulse — Transcripts", "Transcript collection complete.")
+                write_job_notification("transcripts", "Transcript collection complete.")
 
-                elif job_type == "knowledge":
-                    # Pipeline mode — archive + per-project enrichment sessions
-                    from sdk.runner import run_knowledge_pipeline
-                    await run_knowledge_pipeline(client, config, job_log_file=job_log_file)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    notify_desktop("Pulse — Knowledge", "Knowledge mining complete.")
-                    write_job_notification("knowledge", "Knowledge mining complete.")
+            elif job_type == "knowledge":
+                # Split into knowledge-init + N knowledge-project jobs.
+                # Phase 0+1 runs here; Phase 2 projects are queued individually.
+                await _run_knowledge_init(client, config, job_queue, job_log_file)
+                if "_file" in job:
+                    mark_task_completed(job)
 
-                elif job_type in ("digest", "monitor", "intel"):
-                    await run_job(client, config, job_type, job_log_file=job_log_file)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    toast_title, toast_body = build_toast_summary(job_type, PULSE_HOME)
-                    urgency = "urgent" if job_type == "monitor" else "normal"
-                    notify_desktop(toast_title, toast_body, urgency=urgency)
-                    write_job_notification(job_type, toast_body)
+            elif job_type == "knowledge-init":
+                # Explicit init (from file-based job or re-queue)
+                await _run_knowledge_init(client, config, job_queue, job_log_file)
+                if "_file" in job:
+                    mark_task_completed(job)
 
-                    # Post-triage auto-sweep: mark FYI/low items as read
-                    if job_type == "monitor":
-                        sweep_cfg = config.get("monitoring", {}).get("sweep", {})
-                        if sweep_cfg.get("enabled", False):
-                            try:
-                                sweep_result = await asyncio.wait_for(
-                                    _execute_inbox_sweep(config, full_sweep=False),
-                                    timeout=_BROWSER_JOB_TIMEOUT,
-                                )
-                                summary = sweep_result.get("summary", "Sweep done")
-                                log.info(f"  Auto-sweep: {summary}")
-                            except Exception as e:
-                                log.warning(f"  Auto-sweep failed: {e}")
-
-                elif job_type == "agent_request":
-                    result_text = await _handle_agent_request(client, config, job)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    _write_agent_response(config, job, result_text)
-
-                elif job_type == "agent_response":
-                    from_name = job.get("from", "Unknown")
-                    original_task = job.get("original_task", "")
-                    log.info(f"  Agent response from {from_name} (req: {job.get('request_id', '?')[:8]})")
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    notify_desktop(
-                        f"Pulse — Response from {from_name}",
-                        f"Re: {original_task[:80]}",
-                        urgency="urgent",
+            elif job_type == "knowledge-project":
+                # Single project enrichment — runs its own SDK session
+                project_context = job.get("_context", {})
+                pname = project_context.get("project_name", "?")
+                log.info(f"  {tag} Enriching: {pname}...")
+                try:
+                    await asyncio.wait_for(
+                        run_job(client, config, "knowledge-project",
+                                context=project_context, job_log_file=job_log_file),
+                        timeout=600,
                     )
+                    log.info(f"  {tag} Done: {pname}")
+                except asyncio.TimeoutError:
+                    log.warning(f"  {tag} Timeout enriching {pname} (10 min cap)")
+                # Check if this was the last project in the batch
+                _knowledge_project_done(job)
 
-                elif job_type == "teams_send":
-                    recipient = job.get("chat_name") or job.get("recipient") or ""
-                    _write_job_log(job_log_file, "tool_start", tool="teams_send", target=recipient)
-                    try:
-                        result = await asyncio.wait_for(
-                            _execute_teams_send(job), timeout=_BROWSER_JOB_TIMEOUT
-                        )
-                    except asyncio.TimeoutError:
-                        result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
-                    ok = result.get("success")
-                    status = "Sent" if ok else "Failed"
-                    detail = result.get("detail", "")
-                    _write_job_log(job_log_file, "tool_result", tool="teams_send", status=status, detail=detail)
-                    log.info(f"  Teams {status}: {detail}")
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    summary = f"Teams reply {status.lower()}: {recipient}" + (f" — {detail}" if not ok else "")
-                    notify_desktop("Pulse — Teams Reply", summary)
-                    write_job_notification("teams_send", summary)
+            elif job_type in ("digest", "monitor", "intel"):
+                await run_job(client, config, job_type, job_log_file=job_log_file)
+                if "_file" in job:
+                    mark_task_completed(job)
+                toast_title, toast_body = build_toast_summary(job_type, PULSE_HOME)
+                urgency = "urgent" if job_type == "monitor" else "normal"
+                notify_desktop(toast_title, toast_body, urgency=urgency)
+                write_job_notification(job_type, toast_body)
 
-                elif job_type == "email_reply":
-                    query = job.get("search_query", "")
-                    _write_job_log(job_log_file, "tool_start", tool="email_reply", target=query)
-                    try:
-                        result = await asyncio.wait_for(
-                            _execute_email_reply(job), timeout=_BROWSER_JOB_TIMEOUT
-                        )
-                    except asyncio.TimeoutError:
-                        result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
-                    ok = result.get("success")
-                    status = "Sent" if ok else "Failed"
-                    detail = result.get("detail", "")
-                    _write_job_log(job_log_file, "tool_result", tool="email_reply", status=status, detail=detail)
-                    log.info(f"  Email reply {status}: {detail}")
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    summary = f"Email reply {status.lower()}: {query}" + (f" — {detail}" if not ok else "")
-                    notify_desktop("Pulse — Email Reply", summary)
-                    write_job_notification("email_reply", summary)
+                # Post-triage auto-sweep: mark FYI/low items as read
+                if job_type == "monitor":
+                    sweep_cfg = config.get("monitoring", {}).get("sweep", {})
+                    if sweep_cfg.get("enabled", False):
+                        try:
+                            sweep_result = await asyncio.wait_for(
+                                _execute_inbox_sweep(config, full_sweep=False),
+                                timeout=_BROWSER_JOB_TIMEOUT,
+                            )
+                            summary = sweep_result.get("summary", "Sweep done")
+                            log.info(f"  Auto-sweep: {summary}")
+                        except Exception as e:
+                            log.warning(f"  Auto-sweep failed: {e}")
 
-                elif job_type == "inbox_sweep":
-                    full = job.get("full_sweep", False)
-                    _write_job_log(job_log_file, "tool_start", tool="inbox_sweep", full_sweep=full)
-                    try:
-                        result = await asyncio.wait_for(
-                            _execute_inbox_sweep(config, full_sweep=full),
-                            timeout=_BROWSER_JOB_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        result = {"success": False, "summary": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
-                    summary = result.get("summary", "Sweep complete")
-                    _write_job_log(job_log_file, "tool_result", tool="inbox_sweep", summary=summary)
-                    log.info(f"  {summary}")
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    notify_desktop("Pulse — Inbox Sweep", summary)
-                    write_job_notification("inbox_sweep", summary)
+            elif job_type == "agent_request":
+                result_text = await _handle_agent_request(client, config, job)
+                if "_file" in job:
+                    mark_task_completed(job)
+                _write_agent_response(config, job, result_text)
 
-                elif job_type == "mark_read_teams":
-                    chat_name = job.get("chat_name", "")
-                    _write_job_log(job_log_file, "tool_start", tool="mark_read_teams", target=chat_name)
-                    try:
-                        from collectors.teams_marker import mark_teams_chats_read
-                        result = await asyncio.wait_for(
-                            mark_teams_chats_read([chat_name]),
-                            timeout=_BROWSER_JOB_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        result = {"success": False, "marked": 0, "details": ["Timed out"]}
-                    ok = result.get("marked", 0) > 0
-                    status = "Done" if ok else "Failed"
-                    _write_job_log(job_log_file, "tool_result", tool="mark_read_teams", status=status)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    summary = f"Teams mark-read {status.lower()}: {chat_name}"
-                    notify_desktop("Pulse — Mark Read", summary)
-                    write_job_notification("mark_read_teams", summary)
+            elif job_type == "agent_response":
+                from_name = job.get("from", "Unknown")
+                original_task = job.get("original_task", "")
+                log.info(f"  Agent response from {from_name} (req: {job.get('request_id', '?')[:8]})")
+                if "_file" in job:
+                    mark_task_completed(job)
+                notify_desktop(
+                    f"Pulse — Response from {from_name}",
+                    f"Re: {original_task[:80]}",
+                    urgency="urgent",
+                )
 
-                elif job_type == "mark_read_outlook":
-                    sender = job.get("sender", "")
-                    _write_job_log(job_log_file, "tool_start", tool="mark_read_outlook", target=sender)
-                    try:
-                        from collectors.outlook_marker import mark_outlook_emails_read
-                        result = await asyncio.wait_for(
-                            mark_outlook_emails_read([{
-                                "conv_id": job.get("conv_id", ""),
-                                "sender": sender,
-                                "subject": job.get("subject", ""),
-                            }]),
-                            timeout=_BROWSER_JOB_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        result = {"success": False, "marked": 0, "details": ["Timed out"]}
-                    ok = result.get("marked", 0) > 0
-                    status = "Done" if ok else "Failed"
-                    _write_job_log(job_log_file, "tool_result", tool="mark_read_outlook", status=status)
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    summary = f"Outlook mark-read {status.lower()}: {sender}"
-                    notify_desktop("Pulse — Mark Read", summary)
-                    write_job_notification("mark_read_outlook", summary)
+            elif job_type == "teams_send":
+                recipient = job.get("chat_name") or job.get("recipient") or ""
+                _write_job_log(job_log_file, "tool_start", tool="teams_send", target=recipient)
+                try:
+                    result = await asyncio.wait_for(
+                        _execute_teams_send(job), timeout=_BROWSER_JOB_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
+                ok = result.get("success")
+                status = "Sent" if ok else "Failed"
+                detail = result.get("detail", "")
+                _write_job_log(job_log_file, "tool_result", tool="teams_send", status=status, detail=detail)
+                log.info(f"  Teams {status}: {detail}")
+                if "_file" in job:
+                    mark_task_completed(job)
+                summary = f"Teams reply {status.lower()}: {recipient}" + (f" — {detail}" if not ok else "")
+                notify_desktop("Pulse — Teams Reply", summary)
+                write_job_notification("teams_send", summary)
+                if not ok:
+                    raise RuntimeError(f"Teams send failed: {detail}")
 
-                elif job_type == "housekeeping":
-                    from core.housekeeping import run_housekeeping
-                    result = run_housekeeping(config)
-                    total = sum(result.values())
-                    if "_file" in job:
-                        mark_task_completed(job)
-                    summary = f"Housekeeping: cleaned {total} items"
-                    log.info(f"  {summary}")
-                    write_job_notification("housekeeping", summary)
+            elif job_type == "email_reply":
+                query = job.get("search_query", "")
+                _write_job_log(job_log_file, "tool_start", tool="email_reply", target=query)
+                try:
+                    result = await asyncio.wait_for(
+                        _execute_email_reply(job), timeout=_BROWSER_JOB_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    result = {"success": False, "detail": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
+                ok = result.get("success")
+                status = "Sent" if ok else "Failed"
+                detail = result.get("detail", "")
+                _write_job_log(job_log_file, "tool_result", tool="email_reply", status=status, detail=detail)
+                log.info(f"  Email reply {status}: {detail}")
+                if "_file" in job:
+                    mark_task_completed(job)
+                summary = f"Email reply {status.lower()}: {query}" + (f" — {detail}" if not ok else "")
+                notify_desktop("Pulse — Email Reply", summary)
+                write_job_notification("email_reply", summary)
+                if not ok:
+                    raise RuntimeError(f"Email reply failed: {detail}")
 
-                else:
-                    log.warning(f"  Unknown job type: {job_type}")
+            elif job_type == "inbox_sweep":
+                full = job.get("full_sweep", False)
+                _write_job_log(job_log_file, "tool_start", tool="inbox_sweep", full_sweep=full)
+                try:
+                    result = await asyncio.wait_for(
+                        _execute_inbox_sweep(config, full_sweep=full),
+                        timeout=_BROWSER_JOB_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    result = {"success": False, "summary": f"Timed out after {_BROWSER_JOB_TIMEOUT}s"}
+                summary = result.get("summary", "Sweep complete")
+                _write_job_log(job_log_file, "tool_result", tool="inbox_sweep", summary=summary)
+                log.info(f"  {summary}")
+                if "_file" in job:
+                    mark_task_completed(job)
+                notify_desktop("Pulse — Inbox Sweep", summary)
+                write_job_notification("inbox_sweep", summary)
+
+            elif job_type == "mark_read_teams":
+                chat_name = job.get("chat_name", "")
+                _write_job_log(job_log_file, "tool_start", tool="mark_read_teams", target=chat_name)
+                try:
+                    from collectors.teams_marker import mark_teams_chats_read
+                    result = await asyncio.wait_for(
+                        mark_teams_chats_read([chat_name]),
+                        timeout=_BROWSER_JOB_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    result = {"success": False, "marked": 0, "details": ["Timed out"]}
+                ok = result.get("marked", 0) > 0
+                status = "Done" if ok else "Failed"
+                _write_job_log(job_log_file, "tool_result", tool="mark_read_teams", status=status)
+                if "_file" in job:
+                    mark_task_completed(job)
+                summary = f"Teams mark-read {status.lower()}: {chat_name}"
+                notify_desktop("Pulse — Mark Read", summary)
+                write_job_notification("mark_read_teams", summary)
+
+            elif job_type == "mark_read_outlook":
+                sender = job.get("sender", "")
+                _write_job_log(job_log_file, "tool_start", tool="mark_read_outlook", target=sender)
+                try:
+                    from collectors.outlook_marker import mark_outlook_emails_read
+                    result = await asyncio.wait_for(
+                        mark_outlook_emails_read([{
+                            "conv_id": job.get("conv_id", ""),
+                            "sender": sender,
+                            "subject": job.get("subject", ""),
+                        }]),
+                        timeout=_BROWSER_JOB_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    result = {"success": False, "marked": 0, "details": ["Timed out"]}
+                ok = result.get("marked", 0) > 0
+                status = "Done" if ok else "Failed"
+                _write_job_log(job_log_file, "tool_result", tool="mark_read_outlook", status=status)
+                if "_file" in job:
+                    mark_task_completed(job)
+                summary = f"Outlook mark-read {status.lower()}: {sender}"
+                notify_desktop("Pulse — Mark Read", summary)
+                write_job_notification("mark_read_outlook", summary)
+
+            elif job_type == "housekeeping":
+                from core.housekeeping import run_housekeeping
+                result = run_housekeeping(config)
+                total = sum(result.values())
+                if "_file" in job:
+                    mark_task_completed(job)
+                summary = f"Housekeeping: cleaned {total} items"
+                log.info(f"  {summary}")
+                write_job_notification("housekeeping", summary)
+
+            else:
+                log.warning(f"  Unknown job type: {job_type}")
 
             # Record success
             append_job_event(job_id, job_type, "completed", job_name, log_file=job_log_file)
@@ -431,8 +534,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     _requeue_with_delay(job, retry_count=retry_count)
                     log.warning(f"  Proxy 502 — requeued {job_name} (attempt {retry_count}, retry in 5 min)")
             else:
-                log.exception(f"  Job failed: {job_name} — {e}")
-                # Notify user of failure via TUI and desktop toast
+                log.exception(f"  {tag} Job failed: {job_name} — {e}")
                 try:
                     write_job_notification(job_type, f"FAILED: {str(e)[:100]}")
                 except Exception:
@@ -441,16 +543,13 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
                     notify_desktop("Pulse — Job Failed", f"{job_name}: {str(e)[:80]}")
                 except Exception:
                     pass
-                # Reset schedule so it retries instead of waiting until next day
                 schedule_id = job.get("_schedule_id")
                 if schedule_id:
                     from core.scheduler import reset_run
                     reset_run(schedule_id)
 
         finally:
-            current_job["type"] = None
-            current_job["started"] = None
-            current_job["job_id"] = None
+            active_workers.pop(worker_id, None)
             job_queue.task_done()
             if job_file:
                 enqueued_files = getattr(job_queue, "_enqueued_files", None)
@@ -459,7 +558,71 @@ async def job_worker(client, config: dict, job_queue: asyncio.Queue):
             from daemon.sync import sync_to_onedrive
             sync_to_onedrive(config)
 
-        log.info(f"=== Job done: [{job_type}] {job_name} ===")
+        log.info(f"=== {tag} Job done: [{job_type}] {job_name} ===")
+
+
+# ---------------------------------------------------------------------------
+# Knowledge init — runs Phase 0+1, then fans out Phase 2 as individual jobs
+# ---------------------------------------------------------------------------
+
+# Track outstanding knowledge-project jobs for completion notification
+_knowledge_batch_remaining = 0
+_knowledge_batch_total = 0
+_knowledge_batch_lock = asyncio.Lock()
+
+
+async def _run_knowledge_init(
+    client, config: dict, job_queue: asyncio.PriorityQueue, job_log_file: str | None,
+):
+    """Run knowledge Phase 0 (transcripts) + Phase 1 (archive), then queue
+    individual knowledge-project jobs for Phase 2.
+
+    This replaces the old monolithic ``run_knowledge_pipeline()`` call.
+    Phase 2 projects are queued at low priority so triage/digest can
+    interleave naturally via the priority queue.
+    """
+    global _knowledge_batch_remaining, _knowledge_batch_total
+    from sdk.runner import run_knowledge_init_phases, prepare_knowledge_projects
+
+    log.info("=== Knowledge init: Phase 0 + 1 ===")
+
+    # Phase 0 + 1
+    await run_knowledge_init_phases(client, config, job_log_file=job_log_file)
+
+    # Phase 2: queue individual project enrichments
+    project_jobs = prepare_knowledge_projects(config)
+    if not project_jobs:
+        log.info("  No active projects to enrich. Knowledge init done.")
+        notify_desktop("Pulse — Knowledge", "Knowledge mining complete (no projects).")
+        write_job_notification("knowledge", "Knowledge mining complete (no projects).")
+        return
+
+    async with _knowledge_batch_lock:
+        _knowledge_batch_total = len(project_jobs)
+        _knowledge_batch_remaining = len(project_jobs)
+
+    log.info(f"  Queuing {len(project_jobs)} knowledge-project jobs...")
+    for pj in project_jobs:
+        enqueue_job(job_queue, pj, config)
+
+    log.info("  Knowledge init done — project enrichments queued.")
+
+
+def _knowledge_project_done(job: dict):
+    """Track completion of individual knowledge-project jobs.
+
+    When the last project finishes, send the completion notification.
+    Uses a simple counter — no lock needed (single asyncio thread).
+    """
+    global _knowledge_batch_remaining
+    _knowledge_batch_remaining = max(0, _knowledge_batch_remaining - 1)
+    remaining = _knowledge_batch_remaining
+    total = _knowledge_batch_total
+
+    if remaining == 0 and total > 0:
+        log.info(f"=== Knowledge pipeline complete — all {total} projects enriched ===")
+        notify_desktop("Pulse — Knowledge", "Knowledge mining complete.")
+        write_job_notification("knowledge", "Knowledge mining complete.")
 
 
 async def _execute_teams_send(job: dict) -> dict:
@@ -475,7 +638,12 @@ async def _execute_teams_send(job: dict) -> dict:
 
     if chat_name:
         log.info(f"  Sending Teams reply to chat: {chat_name}")
-        return await reply_to_chat(chat_name, message)
+        result = await reply_to_chat(chat_name, message)
+        if not result.get("success") and "not found in sidebar" in result.get("detail", ""):
+            # Chat not visible in sidebar — fall back to new-chat search flow
+            log.info(f"  Chat not in sidebar — falling back to new-chat with: {chat_name}")
+            result = await send_teams_message(chat_name, message)
+        return result
     elif recipient:
         log.info(f"  Sending Teams message to: {recipient}")
         return await send_teams_message(recipient, message)

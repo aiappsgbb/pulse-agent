@@ -12,16 +12,32 @@ from core.constants import PULSE_HOME, JOBS_DIR
 from core.logging import log
 
 
-# Shared state — worker writes, status writer reads.  Same asyncio loop, no lock needed.
+# Shared state — workers write, status writer reads.  Same asyncio loop, no lock needed.
+# Maps worker_id -> {"type": str, "started": str, "job_id": str}
+active_workers: dict[int, dict] = {}
+
+# Legacy alias — some code still reads current_job["type"].
+# Returns the first active worker's info, or empty dict.
 current_job: dict = {"type": None, "started": None}
 
 
+def _sync_current_job():
+    """Keep legacy ``current_job`` dict in sync with ``active_workers``."""
+    if active_workers:
+        first = next(iter(active_workers.values()))
+        current_job["type"] = first.get("type")
+        current_job["started"] = first.get("started")
+    else:
+        current_job["type"] = None
+        current_job["started"] = None
+
+
 async def write_daemon_status_loop(
-    job_queue: asyncio.Queue,
+    job_queue,
     boot_time: datetime,
     shutdown_event: asyncio.Event,
 ) -> None:
-    """Write .daemon-status.json every 60s for TUI status bar."""
+    """Write .daemon-status.json every 10s for TUI status bar."""
     status_file = PULSE_HOME / ".daemon-status.json"
 
     def _count_pending_files() -> int:
@@ -35,8 +51,8 @@ async def write_daemon_status_loop(
             return 0
 
     def _write_status():
+        _sync_current_job()
         uptime_s = int((datetime.now() - boot_time).total_seconds())
-        # Count both in-memory queue AND pending files on disk
         in_memory = job_queue.qsize()
         on_disk = _count_pending_files()
         status = {
@@ -44,11 +60,21 @@ async def write_daemon_status_loop(
             "uptime_s": uptime_s,
             "queue_size": in_memory + on_disk,
             "updated_at": datetime.now().isoformat(),
+            "max_workers": getattr(job_queue, "_max_workers", 2),
         }
-        # Include current job info if one is running
-        if current_job["type"]:
-            status["current_job"] = current_job["type"]
-            status["current_job_started"] = current_job["started"]
+        # Show all active workers
+        workers = []
+        for wid, info in sorted(active_workers.items()):
+            workers.append({
+                "worker_id": wid,
+                "job_type": info.get("type"),
+                "started": info.get("started"),
+            })
+        if workers:
+            status["active_workers"] = workers
+            # Legacy fields — first active worker
+            status["current_job"] = workers[0]["job_type"]
+            status["current_job_started"] = workers[0]["started"]
         status_file.write_text(json.dumps(status), encoding="utf-8")
 
     # Write immediately so TUI sees "online" right away

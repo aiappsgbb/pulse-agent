@@ -1198,19 +1198,16 @@ async def _pre_process_knowledge(config: dict) -> dict:
     }
 
 
-async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None = None):
-    """Run the full knowledge mining pipeline: archive once, then enrich per-project.
+async def run_knowledge_init_phases(client, config: dict, job_log_file: str | None = None):
+    """Run knowledge Phase 0 (transcripts + compression) and Phase 1 (archive).
 
-    This replaces the old monolithic knowledge session. Architecture:
-    1. One archive session: fetch emails/Teams via WorkIQ, discover new projects
-    2. N enrichment sessions: one per active/blocked project
-    Each project gets a focused session with just its context — the agent uses
-    WorkIQ and search_local_files to determine what's worth updating.
+    Called by the worker's ``_run_knowledge_init``.  Phase 2 (per-project
+    enrichment) is handled separately — the worker queues individual
+    ``knowledge-project`` jobs via ``prepare_knowledge_projects()``.
     """
-    log.info("=== Knowledge pipeline start ===")
+    log.info("=== Knowledge init: Phase 0 + 1 ===")
 
     def _log_pipeline(entry_type: str, **kwargs):
-        """Write an entry to the per-job activity log (if configured)."""
         if not job_log_file:
             return
         try:
@@ -1221,8 +1218,6 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
             pass
 
     # Phase 0: Collect fresh transcripts + compress
-    # Knowledge needs fresh data to mine — transcripts, emails, Teams messages.
-    # Transcript collection runs here (not in digest) so overnight runs have fresh content.
     from collectors.transcripts.compressor import compress_existing_transcripts
     from collectors.transcripts import run_transcript_collection
     from core.browser import ensure_browser
@@ -1281,47 +1276,97 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
         log.warning(f"  Archive phase failed: {e} (continuing to enrichment)")
         _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}")
 
-    # Phase 2: Per-project enrichment — reload projects (archive may have created new ones)
+    log.info("  Knowledge init (Phase 0+1) complete.")
+
+
+def prepare_knowledge_projects(config: dict) -> list[dict]:
+    """Build a list of ``knowledge-project`` job dicts for Phase 2.
+
+    Returns one job per active/blocked project.  Each job carries the
+    context the worker needs to run a single enrichment session.
+    Called synchronously — no SDK session needed.
+    """
     projects = _load_projects()
     if not projects:
-        log.info("  No projects to enrich. Pipeline done.")
-        return
+        return []
 
-    # Only process active/blocked projects — completed/on-hold don't need enrichment
     active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
     if not active:
-        log.info(f"  {len(projects)} projects loaded but none are active/blocked. Skipping enrichment.")
-        return
+        log.info(f"  {len(projects)} projects loaded but none are active/blocked.")
+        return []
 
     recent_artifacts = _list_recent_artifacts(days=2)
 
-    # CRM enrichment availability for per-project enrichment
-    from sdk.agents import is_msx_available, msx_install_info
+    from sdk.agents import is_msx_available
     msx_available = is_msx_available()
-    if msx_available:
-        info = msx_install_info()
-        log.info(f"  CRM tools available for per-project sync (node: {info['has_node']}, az: {info['has_az_cli']})")
-    else:
-        log.info("  CRM plugin not installed — per-project CRM sync will be skipped")
 
-    # Determine lookback window for per-project context
     state = load_json_state(KNOWLEDGE_STATE_FILE, {})
     last_run = state.get("last_run")
     lookback_window = f"since {last_run}" if last_run else "48 hours"
 
-    log.info(f"  Phase 2: Enriching {len(active)} active projects:")
-    _log_pipeline("message", preview=f"Phase 2: Enriching {len(active)} active projects...")
+    # Update last_run now (before enrichment starts)
+    save_json_state(KNOWLEDGE_STATE_FILE, {"last_run": datetime.now().isoformat()})
+
+    jobs = []
+    for project in active:
+        pid = project.get("_file", "").replace(".yaml", "")
+        pname = project.get("project", pid)
+        project_copy = {k: v for k, v in project.items() if k != "_file"}
+        context = {
+            "project_id": pid,
+            "project_name": pname,
+            "project_yaml": yaml.dump(project_copy, default_flow_style=False, allow_unicode=True),
+            "recent_artifacts": recent_artifacts,
+            "lookback_window": lookback_window,
+            "msx_available": msx_available,
+        }
+        jobs.append({
+            "type": "knowledge-project",
+            "_context": context,
+            "_knowledge_batch_size": len(active),
+        })
+
+    log.info(f"  Prepared {len(jobs)} knowledge-project jobs for Phase 2")
     for p in active:
         pid = p.get("_file", "").replace(".yaml", "")
         log.info(f"    - {p.get('project', pid)}")
 
+    return jobs
+
+
+# Keep the monolithic pipeline for --once / --mode knowledge CLI usage
+async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None = None):
+    """Run the full knowledge pipeline sequentially (CLI / --once mode).
+
+    For the daemon, knowledge is split: ``_run_knowledge_init`` in worker.py
+    runs Phase 0+1, then queues individual ``knowledge-project`` jobs.
+    This function preserves the old sequential behaviour for CLI usage.
+    """
+    await run_knowledge_init_phases(client, config, job_log_file=job_log_file)
+
+    projects = _load_projects()
+    active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
+    if not active:
+        log.info("  No projects to enrich. Pipeline done.")
+        return
+
+    recent_artifacts = _list_recent_artifacts(days=2)
+    from sdk.agents import is_msx_available, msx_install_info
+    msx_available = is_msx_available()
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"  CRM tools available (node: {info['has_node']}, az: {info['has_az_cli']})")
+
+    state = load_json_state(KNOWLEDGE_STATE_FILE, {})
+    last_run = state.get("last_run")
+    lookback_window = f"since {last_run}" if last_run else "48 hours"
+
+    log.info(f"  Phase 2: Enriching {len(active)} active projects...")
     enriched = 0
     for project in active:
         pid = project.get("_file", "").replace(".yaml", "")
         pname = project.get("project", pid)
         log.info(f"  Enriching: {pname} ({pid})...")
-
-        # Build per-project context
         project_copy = {k: v for k, v in project.items() if k != "_file"}
         project_context = {
             "project_id": pid,
@@ -1331,20 +1376,16 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
             "lookback_window": lookback_window,
             "msx_available": msx_available,
         }
-
         try:
             await asyncio.wait_for(
                 run_job(client, config, "knowledge-project", context=project_context, job_log_file=job_log_file),
-                timeout=600,  # 10 min per project
+                timeout=600,
             )
             enriched += 1
             log.info(f"    Done: {pname}")
         except asyncio.TimeoutError:
             log.warning(f"    Timeout enriching {pname} (10 min cap)")
-            _log_pipeline("error", preview=f"Timeout enriching {pname}")
         except Exception as e:
             log.warning(f"    Failed enriching {pname}: {e}")
-            _log_pipeline("error", preview=f"Failed enriching {pname}: {str(e)[:200]}")
 
     log.info(f"=== Knowledge pipeline done — enriched {enriched}/{len(active)} projects ===")
-    _log_pipeline("message", preview=f"Knowledge pipeline done — enriched {enriched}/{len(active)} projects")

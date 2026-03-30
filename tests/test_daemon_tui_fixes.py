@@ -221,8 +221,9 @@ class TestJobFailureNotifications:
         notifications = []
         original_write = MagicMock(side_effect=lambda jt, s: notifications.append((jt, s)))
 
-        job_queue = asyncio.Queue()
-        job_queue.put_nowait({"type": "digest", "_source": "test"})
+        from daemon.worker import enqueue_job
+        job_queue = asyncio.PriorityQueue()
+        enqueue_job(job_queue, {"type": "digest", "_source": "test"})
 
         mock_client = MagicMock()
         mock_config = {"user": {"name": "Test"}}
@@ -231,7 +232,7 @@ class TestJobFailureNotifications:
              patch("daemon.worker.notify_desktop"), \
              patch("daemon.worker.append_job_event"), \
              patch("daemon.worker.log"), \
-             patch("daemon.tasks.current_job", {"type": None, "started": None, "job_id": None}), \
+             patch("daemon.tasks.active_workers", {}), \
              patch("daemon.worker.LOGS_DIR", Path("/tmp/test-logs")), \
              patch("sdk.runner.run_job", AsyncMock(side_effect=RuntimeError("test boom"))):
 

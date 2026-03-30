@@ -412,6 +412,47 @@ class TestReplyJobWorkerCompat:
         mock_send.assert_called_once_with("Bob Wilson", "Hello Bob")
 
     @pytest.mark.asyncio
+    async def test_teams_send_sidebar_fallback_to_new_chat(self, tmp_dir):
+        """When reply_to_chat can't find chat in sidebar, falls back to send_teams_message."""
+        from daemon.worker import _execute_teams_send
+
+        job = {
+            "type": "teams_send",
+            "message": "Hello Esther",
+            "chat_name": "Esther Dediashvili",
+        }
+        with (
+            patch("collectors.teams_sender.reply_to_chat", new_callable=AsyncMock) as mock_reply,
+            patch("collectors.teams_sender.send_teams_message", new_callable=AsyncMock) as mock_send,
+        ):
+            # Sidebar lookup fails
+            mock_reply.return_value = {"success": False, "detail": "Chat 'Esther Dediashvili' not found in sidebar"}
+            # Fallback new-chat search succeeds
+            mock_send.return_value = {"success": True, "detail": "Message sent to Esther Dediashvili"}
+            result = await _execute_teams_send(job)
+
+        assert result["success"] is True
+        mock_reply.assert_called_once_with("Esther Dediashvili", "Hello Esther")
+        mock_send.assert_called_once_with("Esther Dediashvili", "Hello Esther")
+
+    @pytest.mark.asyncio
+    async def test_teams_send_sidebar_fallback_not_triggered_on_other_errors(self):
+        """Fallback only triggers for 'not found in sidebar', not other failures."""
+        from daemon.worker import _execute_teams_send
+
+        job = {
+            "type": "teams_send",
+            "message": "Hello",
+            "chat_name": "Alice",
+        }
+        with patch("collectors.teams_sender.reply_to_chat", new_callable=AsyncMock) as mock_reply:
+            mock_reply.return_value = {"success": False, "detail": "Could not find compose box"}
+            result = await _execute_teams_send(job)
+
+        assert result["success"] is False
+        assert "compose box" in result["detail"]
+
+    @pytest.mark.asyncio
     async def test_teams_send_no_target_fails_gracefully(self):
         """Worker returns failure when neither chat_name nor recipient is set."""
         from daemon.worker import _execute_teams_send

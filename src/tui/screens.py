@@ -112,6 +112,80 @@ def _load_triage_items() -> list[dict]:
         return []
 
 
+def _render_yaml_value(key: str, value, depth: int = 0, max_depth: int = 3) -> list[str]:
+    """Generic YAML value → Rich markup lines.
+
+    Renders any project YAML field without knowledge of its schema.
+    Dicts become sections with key/value pairs, lists become bullet points,
+    scalars become inline values.  Recurses up to *max_depth*.
+    """
+    if depth > max_depth or value is None:
+        return []
+
+    indent = "  " * depth
+    label = key.replace("_", " ").title()
+    lines: list[str] = []
+
+    if isinstance(value, dict):
+        lines.append(f"{indent}[bold]{label}:[/bold]")
+        for k, v in value.items():
+            if v is None or v == "" or v == []:
+                continue
+            if isinstance(v, (dict, list)):
+                lines.extend(_render_yaml_value(k, v, depth + 1, max_depth))
+            else:
+                sub_label = k.replace("_", " ").title()
+                lines.append(f"{indent}  {sub_label}: {v}")
+
+    elif isinstance(value, list):
+        lines.append(f"{indent}[bold]{label}:[/bold]")
+        for item in value:
+            if isinstance(item, dict):
+                # Compact dict-in-list: pick a sensible one-liner
+                summary = _summarize_dict(item)
+                lines.append(f"{indent}  {summary}")
+            elif isinstance(item, str):
+                lines.append(f"{indent}  {item}")
+            else:
+                lines.append(f"{indent}  {item}")
+
+    elif isinstance(value, bool):
+        lines.append(f"{indent}[bold]{label}:[/bold] {'Yes' if value else 'No'}")
+
+    else:
+        lines.append(f"{indent}[bold]{label}:[/bold] {value}")
+
+    return lines
+
+
+def _summarize_dict(d: dict) -> str:
+    """One-line summary of a dict (for list-of-dicts rendering).
+
+    Tries common patterns: name+role, what+due, title+date, then falls
+    back to showing the first 3 key=value pairs.
+    """
+    # name/role pattern (stakeholders, deal team)
+    name = d.get("name") or d.get("title") or d.get("what") or d.get("project", "")
+    if name:
+        parts = [str(name)]
+        for extra_key in ("role", "status", "due", "date", "stage", "sales_stage",
+                          "value", "consumed_recurring", "monthly_acr", "msx_id",
+                          "opportunity_number", "commitment"):
+            v = d.get(extra_key)
+            if v is not None and v != "":
+                parts.append(f"{extra_key.replace('_', ' ')}: {v}")
+        return " | ".join(parts[:4])
+
+    # Fallback: first 3 non-empty values
+    pairs = []
+    for k, v in d.items():
+        if v is not None and v != "" and not isinstance(v, (dict, list)):
+            pairs.append(f"{k.replace('_', ' ')}: {v}")
+        if len(pairs) >= 3:
+            break
+    return " | ".join(pairs) if pairs else str(d)[:80]
+
+
 def _load_digest_items() -> list[dict]:
     """Load items from the latest digest JSON."""
     if not DIGESTS_DIR.exists():
@@ -1973,6 +2047,9 @@ class ProjectsPane(Widget):
 
     # -- Detail rendering --
 
+    # Keys rendered in the header — excluded from the generic section walk.
+    _HEADER_KEYS = {"project", "status", "risk_level", "involvement", "summary", "_file", "_id"}
+
     def _show_detail(self, project: dict) -> None:
         detail = self.query_one(".detail-container Static", Static)
 
@@ -1989,94 +2066,28 @@ class ProjectsPane(Widget):
             "[dim]Actions: U=status  I=involvement  C=done  R=research  D=digest  N=note[/dim]",
         ]
 
-        # Commitments — hard overdue first, then soft overdue, then open
-        commitments = project.get("commitments", [])
-        if commitments:
-            hard_overdue = [c for c in commitments
-                           if c.get("status", "").lower() == "overdue"
-                           and c.get("due_confidence", "explicit").lower() == "explicit"]
-            soft_overdue = [c for c in commitments
-                           if c.get("status", "").lower() == "overdue"
-                           and c.get("due_confidence", "explicit").lower() != "explicit"]
-            upcoming = [c for c in commitments if c.get("status", "").lower() == "open"]
-            done = [c for c in commitments if c.get("status", "").lower() in ("done", "cancelled")]
-
-            if hard_overdue:
-                lines += ["", "[bold red]Overdue commitments:[/bold red]"]
-                for c in hard_overdue:
-                    what = c.get("what", "?")
-                    due = c.get("due", "")
-                    who = c.get("who", "")
-                    to = c.get("to", "")
-                    line = f"  [red][OVERDUE][/red] {what}"
-                    if due:
-                        line += f"  (due: {due})"
-                    if who:
-                        line += f"  — {who}"
-                    if to:
-                        line += f" to {to}"
-                    lines.append(line)
-
-            if soft_overdue:
-                lines += ["", "[dim yellow]Soft due (inferred deadlines):[/dim yellow]"]
-                for c in soft_overdue:
-                    what = c.get("what", "?")
-                    due = c.get("due", "")
-                    line = f"  [dim yellow][SOFT DUE][/dim yellow] {what}"
-                    if due:
-                        line += f"  (est: {due})"
-                    lines.append(line)
-
-            if upcoming:
-                lines += ["", "[bold yellow]Open commitments:[/bold yellow]"]
-                for c in upcoming:
-                    what = c.get("what", "?")
-                    due = c.get("due", "")
-                    who = c.get("who", "")
-                    color = "yellow"
-                    line = f"  [{color}][OPEN][/{color}] {what}"
-                    if due:
-                        line += f"  (due: {due})"
-                    if who:
-                        line += f"  — {who}"
-                    lines.append(line)
-
-            if done:
-                lines += ["", "[dim]Completed/cancelled:[/dim]"]
-                for c in done[:3]:  # Show max 3
-                    what = c.get("what", "?")
-                    lines.append(f"  [dim][{c.get('status', '?').upper()}] {what}[/dim]")
-
-        # Linked inbox items (digest items referencing this project)
+        # Linked inbox items (needs special lookup, not in YAML)
         project_id = project.get("_id", "")
         if project_id:
             linked = self._get_linked_items(project_id)
             if linked:
                 lines += ["", f"[bold cyan]Linked inbox items ({len(linked)}):[/bold cyan]"]
-                for item in linked[:5]:  # Show max 5
+                for item in linked[:5]:
                     p_color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
                     title = item.get("title", "?")[:50]
                     lines.append(f"  [{p_color}][{item.get('priority', '?').upper()}][/{p_color}] {title}")
 
-        # Stakeholders
-        stakeholders = project.get("stakeholders", [])
-        if stakeholders:
-            lines += ["", "[bold]Stakeholders:[/bold]"]
-            for s in stakeholders:
-                name = s.get("name", "?")
-                role = s.get("role", "")
-                lines.append(f"  {name}" + (f" ({role})" if role else ""))
-
-        # Next meeting + key dates
-        next_mtg = project.get("next_meeting", "")
-        if next_mtg:
-            lines += ["", f"Next meeting: [cyan]{next_mtg}[/cyan]"]
-
-        key_dates = project.get("key_dates", [])
-        if key_dates:
-            lines += ["", "[bold]Key dates:[/bold]"]
-            for kd in key_dates[:5]:
-                lines.append(f"  {kd.get('date', '?')} — {kd.get('event', '?')}")
+        # Generic: render every remaining YAML key
+        for key in project:
+            if key in self._HEADER_KEYS or key.startswith("_"):
+                continue
+            value = project[key]
+            if value is None or value == "" or value == []:
+                continue
+            rendered = _render_yaml_value(key, value)
+            if rendered:
+                lines.append("")
+                lines.extend(rendered)
 
         detail.update("\n".join(lines))
 

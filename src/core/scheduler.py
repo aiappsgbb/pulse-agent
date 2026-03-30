@@ -291,7 +291,7 @@ def reset_run(schedule_id: str):
 
 async def scheduler_loop(
     config: dict,
-    job_queue: asyncio.Queue,
+    job_queue,
     shutdown_event: asyncio.Event,
     check_interval: int = 60,
 ):
@@ -299,8 +299,12 @@ async def scheduler_loop(
 
     When a schedule is due, enqueues the job and marks it as run.
     Also pulls new job files from OneDrive each tick (inter-agent requests, etc.).
+
+    ``job_queue`` is an ``asyncio.PriorityQueue`` — jobs are enqueued via
+    ``enqueue_job()`` from ``daemon.worker`` so they respect priority ordering.
     """
     from daemon.sync import sync_jobs_from_onedrive
+    from daemon.worker import enqueue_job
     from tui.ipc import cleanup_orphaned_jobs
 
     log.info(f"Scheduler started (checking every {check_interval}s)")
@@ -333,7 +337,7 @@ async def scheduler_loop(
                         "_source": f"schedule:{schedule['id']}",
                         "_schedule_id": schedule["id"],
                     }
-                    job_queue.put_nowait(job)
+                    enqueue_job(job_queue, job, config)
                     # Mark as run immediately to prevent re-fire while job runs.
                     # On failure, the worker resets last_run to None for retry.
                     mark_run(schedule["id"])

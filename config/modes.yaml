@@ -3,8 +3,21 @@
 #
 # default_mcp_servers: inherited by all non-standalone modes unless overridden.
 # Unconfigured servers (e.g. dataverse without a URL) are skipped gracefully.
+#
+# max_workers: how many concurrent job workers the daemon spawns (default 2).
+# Each worker runs its own SDK session — triage and knowledge can run simultaneously.
+#
+# job_priorities: override default job priority (lower = higher priority).
+# Jobs with equal priority are processed FIFO.
 
 default_mcp_servers: [workiq, dataverse]
+
+# -- Loaded by standing-instructions.yaml (or overridden there) --
+# max_workers: 2
+# job_priorities:
+#   monitor: 1
+#   digest: 3
+#   knowledge-project: 8
 
 monitor:
   model_key: triage
