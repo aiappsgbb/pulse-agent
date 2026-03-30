@@ -475,7 +475,7 @@ def _build_projects_block(projects: list[dict]) -> str:
 
         # Surface CRM pipeline data when present (optional — absent for non-CRM users)
         msx = project.get("msx", {})
-        if msx:
+        if msx and isinstance(msx, dict):
             opp = msx.get("opportunity_name", msx.get("opportunity_id", ""))
             stage = msx.get("stage", "?")
             revenue = msx.get("revenue", "?")
@@ -877,9 +877,10 @@ async def _pre_process_monitor(config: dict) -> dict:
     else:
         calendar_block = format_calendar_for_prompt(cal_events)
 
-    # MSX availability check (optional enrichment for triage context)
+    # CRM enrichment availability check (optional)
     from sdk.agents import is_msx_available
     msx_available = is_msx_available()
+    log.info(f"  CRM tools: {'available' if msx_available else 'not installed (skipping)'}")
 
     return {
         "teams_inbox": formatted,
@@ -984,19 +985,20 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     else:
         log.info("  No project files found")
 
-    # Phase 1g: MSX availability check (optional enrichment)
-    from sdk.agents import is_msx_available
+    # Phase 1g: CRM enrichment availability check (optional)
+    from sdk.agents import is_msx_available, msx_install_info
     msx_available = is_msx_available()
     msx_gap_block = ""
     if msx_available:
-        log.info("\nPhase 1g: MSX-MCP available — building gap analysis...")
+        info = msx_install_info()
+        log.info(f"\nPhase 1g: CRM tools available (plugin: {info['path']}, node: {info['has_node']}, az: {info['has_az_cli']})")
         msx_gap_block = _build_msx_gap_block(projects)
         if msx_gap_block:
-            log.info("  Found projects without MSX links")
+            log.info("  Found projects without CRM links")
         else:
-            log.info("  All active projects linked to MSX (or no projects)")
+            log.info("  All active projects linked to CRM (or no projects)")
     else:
-        log.info("\nPhase 1g: MSX-MCP not installed — skipping MSX enrichment")
+        log.info("\nPhase 1g: CRM plugin not installed — skipping CRM enrichment")
 
     # Build content block
     by_type: dict[str, list[dict]] = {}
@@ -1175,9 +1177,14 @@ async def _pre_process_knowledge(config: dict) -> dict:
     else:
         outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
 
-    # MSX availability check (optional enrichment for knowledge mining)
-    from sdk.agents import is_msx_available
+    # CRM enrichment availability check (optional)
+    from sdk.agents import is_msx_available, msx_install_info
     msx_available = is_msx_available()
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"  CRM tools available (plugin: {info['path']}, node: {info['has_node']}, az: {info['has_az_cli']})")
+    else:
+        log.info("  CRM plugin not installed — CRM enrichment will be skipped")
 
     return {
         "projects_block": projects_block,
@@ -1288,9 +1295,14 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
 
     recent_artifacts = _list_recent_artifacts(days=2)
 
-    # MSX availability for per-project enrichment
-    from sdk.agents import is_msx_available
+    # CRM enrichment availability for per-project enrichment
+    from sdk.agents import is_msx_available, msx_install_info
     msx_available = is_msx_available()
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"  CRM tools available for per-project sync (node: {info['has_node']}, az: {info['has_az_cli']})")
+    else:
+        log.info("  CRM plugin not installed — per-project CRM sync will be skipped")
 
     # Determine lookback window for per-project context
     state = load_json_state(KNOWLEDGE_STATE_FILE, {})

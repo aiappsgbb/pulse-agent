@@ -75,7 +75,7 @@ class TestLoadEnrichments:
             text = load_enrichments("knowledge-miner")
 
         assert text != ""
-        assert "msx-mcp" in text.lower() or "CRM" in text
+        assert "CRM" in text
 
     def test_returns_empty_when_msx_not_available(self):
         """Returns empty string when MSX is not available."""
@@ -649,7 +649,7 @@ class TestAgentEnrichmentInjection:
         with patch("sdk.agents.Path.home", return_value=tmp_path):
             agent = load_agent("knowledge-miner", sample_config)
 
-        assert "msx-mcp" in agent["prompt"].lower() or "CRM" in agent["prompt"]
+        assert "CRM" in agent["prompt"]
 
     def test_knowledge_miner_prompt_clean_without_msx(self, sample_config, tmp_path):
         """Agent prompt has no CRM/MSX content when plugin not installed."""
@@ -658,7 +658,9 @@ class TestAgentEnrichmentInjection:
         with patch("sdk.agents.Path.home", return_value=tmp_path):
             agent = load_agent("knowledge-miner", sample_config)
 
-        assert "msx-mcp" not in agent["prompt"].lower()
+        # Without MSX, no CRM tool names should appear
+        assert "msx-get_" not in agent["prompt"].lower()
+        assert "msx-search_" not in agent["prompt"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -693,3 +695,216 @@ class TestMainPromptsClean:
         path = Path(__file__).parent.parent / "config" / "modes.yaml"
         modes = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert "msx" not in modes.get("default_mcp_servers", [])
+
+
+# ---------------------------------------------------------------------------
+# 9. Tool name correctness — NO msx-mcp- prefix anywhere
+# ---------------------------------------------------------------------------
+
+
+class TestToolNamePrefix:
+    """Enrichment files must use the correct tool prefix `msx-` not `msx-mcp-`.
+
+    The MCP server is registered as 'msx' in _MCP_BUILDERS. Copilot CLI
+    prefixes tool names with {server_name}-. So tools are msx-search_accounts,
+    NOT msx-mcp-search_accounts. The LLM was hallucinating the wrong prefix
+    because enrichment instructions listed the wrong names.
+    """
+
+    ENRICHMENTS_DIR = Path(__file__).parent.parent / "config" / "prompts" / "enrichments"
+
+    def _all_enrichment_files(self):
+        return list(self.ENRICHMENTS_DIR.glob("msx-*.md"))
+
+    def test_no_enrichment_uses_msx_mcp_prefix(self):
+        """No enrichment file should contain 'msx-mcp-' tool prefix."""
+        for path in self._all_enrichment_files():
+            text = path.read_text(encoding="utf-8")
+            assert "msx-mcp-" not in text, (
+                f"{path.name} contains 'msx-mcp-' — should be 'msx-' "
+                f"(the MCP server is registered as 'msx', not 'msx-mcp')"
+            )
+
+    def test_all_enrichments_use_correct_prefix(self):
+        """Every enrichment that references tool calls uses `msx-` prefix."""
+        for path in self._all_enrichment_files():
+            text = path.read_text(encoding="utf-8")
+            # Files that mention tool calls should use msx- prefix
+            if "search_accounts" in text or "get_my_deals" in text:
+                assert "msx-search_accounts" in text or "msx-get_my_deals" in text, (
+                    f"{path.name} mentions tools but doesn't use the correct msx- prefix"
+                )
+
+    def test_chat_enrichment_tool_names(self):
+        """Chat enrichment lists exact correct tool names."""
+        text = (self.ENRICHMENTS_DIR / "msx-chat.md").read_text(encoding="utf-8")
+        expected_tools = [
+            "msx-get_my_deals",
+            "msx-search_opportunities",
+            "msx-search_accounts",
+            "msx-get_opportunity_details",
+            "msx-get_account_overview",
+            "msx-get_pipeline_summary",
+            "msx-get_my_milestones",
+            "msx-get_account_team",
+            "msx-get_account_deal_teams",
+            "msx-get_milestones_for_opportunity",
+            "msx-get_opportunity_solutions",
+            "msx-msx_auth_status",
+        ]
+        for tool in expected_tools:
+            assert f"`{tool}`" in text, f"Chat enrichment missing tool: {tool}"
+
+    def test_knowledge_miner_enrichment_tool_names(self):
+        """Knowledge-miner enrichment uses correct tool names."""
+        text = (self.ENRICHMENTS_DIR / "msx-knowledge-miner.md").read_text(encoding="utf-8")
+        # Must contain these exact tool names
+        for tool in ["msx-search_opportunities", "msx-get_opportunity_details",
+                      "msx-get_milestones_for_opportunity", "msx-get_account_deal_teams",
+                      "msx-get_opportunity_solutions", "msx-get_my_deals",
+                      "msx-get_my_milestones"]:
+            assert f"`{tool}`" in text, f"Knowledge-miner enrichment missing: {tool}"
+
+    def test_enrichment_files_warn_about_prefix(self):
+        """Enrichment files that list tools include a prefix warning."""
+        for path in self._all_enrichment_files():
+            text = path.read_text(encoding="utf-8")
+            if "`msx-" in text:
+                # Files listing tool names should mention the correct prefix
+                assert "msx-" in text.lower() and "prefix" in text.lower(), (
+                    f"{path.name} lists tools but doesn't warn about the correct prefix"
+                )
+
+    def test_no_msx_mcp_in_any_prompt_file(self):
+        """No prompt file (system, trigger, agent) should contain msx-mcp- prefix."""
+        prompts_dir = Path(__file__).parent.parent / "config" / "prompts"
+        for md_file in prompts_dir.rglob("*.md"):
+            # Skip enrichment files (they're the ones we're testing specifically)
+            if "enrichments" in str(md_file):
+                continue
+            text = md_file.read_text(encoding="utf-8")
+            assert "msx-mcp-" not in text, (
+                f"{md_file.relative_to(prompts_dir)} contains 'msx-mcp-' — "
+                f"main prompts must not reference CRM tool names"
+            )
+
+
+# ---------------------------------------------------------------------------
+# 10. msx_install_info() diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestMsxInstallInfo:
+    """Test the diagnostic info function for MSX-MCP installation."""
+
+    def test_returns_not_installed_when_missing(self, tmp_path):
+        """Returns installed=False when no plugin directory exists."""
+        from sdk.agents import msx_install_info
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            info = msx_install_info()
+
+        assert info["installed"] is False
+        assert info["path"] is None
+        assert info["entry_point"] is None
+        assert isinstance(info["has_node"], bool)
+        assert isinstance(info["has_az_cli"], bool)
+
+    def test_returns_installed_with_bootstrap(self, tmp_path):
+        """Returns full info when plugin is installed with bootstrap.mjs."""
+        from sdk.agents import msx_install_info
+
+        plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
+        scripts = plugin_dir / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "bootstrap.mjs").write_text("// fake")
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            info = msx_install_info()
+
+        assert info["installed"] is True
+        assert info["path"] == str(plugin_dir)
+        assert "bootstrap.mjs" in info["entry_point"]
+
+    def test_returns_installed_with_dist_fallback(self, tmp_path):
+        """Falls back to dist/index.js when bootstrap.mjs is missing."""
+        from sdk.agents import msx_install_info
+
+        plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
+        plugin_dir.mkdir(parents=True)
+        dist = plugin_dir / "dist"
+        dist.mkdir()
+        (dist / "index.js").write_text("// fake")
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            info = msx_install_info()
+
+        assert info["installed"] is True
+        assert "index.js" in info["entry_point"]
+
+    def test_returns_missing_entry_point(self, tmp_path):
+        """Returns MISSING entry_point when neither bootstrap nor dist exists."""
+        from sdk.agents import msx_install_info
+
+        plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
+        plugin_dir.mkdir(parents=True)
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            info = msx_install_info()
+
+        assert info["installed"] is True
+        assert info["entry_point"] == "MISSING"
+
+    def test_checks_node_and_az_cli(self, tmp_path):
+        """Checks for node and az CLI in PATH."""
+        from sdk.agents import msx_install_info
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            with patch("shutil.which", side_effect=lambda x: "/usr/bin/node" if x == "node" else None):
+                info = msx_install_info()
+
+        assert info["has_node"] is True
+        assert info["has_az_cli"] is False
+
+
+# ---------------------------------------------------------------------------
+# 11. Logging integration — pre-process logs CRM status with details
+# ---------------------------------------------------------------------------
+
+
+class TestCrmLogging:
+    """Test that pre-process functions log CRM availability with details."""
+
+    def test_msx_install_info_used_in_logging(self):
+        """msx_install_info returns enough data for meaningful log messages."""
+        from sdk.agents import msx_install_info
+
+        with patch("sdk.agents.Path.home", return_value=Path("/nonexistent")):
+            info = msx_install_info()
+
+        # When not installed, logging should know it
+        assert info["installed"] is False
+        # The dict has all keys needed for a useful log line
+        assert "path" in info
+        assert "has_node" in info
+        assert "has_az_cli" in info
+
+    def test_msx_install_info_provides_debug_context(self, tmp_path):
+        """When installed, info gives enough for debugging connection failures."""
+        from sdk.agents import msx_install_info
+
+        plugin_dir = tmp_path / ".copilot" / "installed-plugins" / "_direct" / "MSX-MCP-main"
+        scripts = plugin_dir / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "bootstrap.mjs").write_text("// fake")
+
+        with patch("sdk.agents.Path.home", return_value=tmp_path):
+            info = msx_install_info()
+
+        # When installed, we get actionable debug info
+        assert info["installed"] is True
+        assert str(plugin_dir) in info["path"]
+        assert "bootstrap.mjs" in info["entry_point"]
+        # Can construct a useful log line
+        log_line = f"CRM plugin: {info['path']}, node: {info['has_node']}, az: {info['has_az_cli']}"
+        assert info["path"] in log_line

@@ -58,6 +58,34 @@ def is_msx_available() -> bool:
     return False
 
 
+def msx_install_info() -> dict:
+    """Return diagnostic info about MSX-MCP installation.
+
+    Used for logging when MSX tool calls fail — tells you WHERE the plugin
+    is installed, what entry point it uses, and whether auth deps exist.
+    Returns dict with: installed, path, entry_point, has_node, has_az_cli.
+    """
+    import shutil
+    info = {"installed": False, "path": None, "entry_point": None,
+            "has_node": shutil.which("node") is not None,
+            "has_az_cli": shutil.which("az") is not None}
+
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        plugin_dir = Path.home() / ".copilot" / "installed-plugins" / subdir
+        if plugin_dir.exists():
+            info["installed"] = True
+            info["path"] = str(plugin_dir)
+            bootstrap = plugin_dir / "scripts" / "bootstrap.mjs"
+            if bootstrap.exists():
+                info["entry_point"] = str(bootstrap)
+            else:
+                dist = plugin_dir / "dist" / "index.js"
+                info["entry_point"] = str(dist) if dist.exists() else "MISSING"
+            break
+
+    return info
+
+
 def msx_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig | None:
     """MSX-MCP config — Dataverse/CRM tools for MSX pipeline data.
 
