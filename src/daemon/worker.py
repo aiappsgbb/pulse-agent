@@ -312,6 +312,20 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
 
         append_job_event(job_id, job_type, "running", job_name, log_file=job_log_file)
 
+        # Browser-based jobs must serialize — Teams SPA won't load if
+        # another tab is already navigating it in the same Edge instance.
+        _BROWSER_JOB_TYPES = {
+            "teams_send", "email_reply", "inbox_sweep",
+            "mark_read_teams", "mark_read_outlook",
+            "monitor",  # pre_process scans Teams/Outlook/Calendar via browser
+        }
+        browser_lock = None
+        if job_type in _BROWSER_JOB_TYPES:
+            from core.browser import get_browser_use_lock
+            browser_lock = get_browser_use_lock()
+            await browser_lock.acquire()
+            log.info(f"  {tag} Browser lock acquired for {job_type}")
+
         try:
             if job_type == "research":
                 context = {"task": job}
@@ -549,6 +563,8 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
                     reset_run(schedule_id)
 
         finally:
+            if browser_lock and browser_lock.locked():
+                browser_lock.release()
             active_workers.pop(worker_id, None)
             job_queue.task_done()
             if job_file:
