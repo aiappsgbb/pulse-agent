@@ -374,11 +374,8 @@ def run_health_check(config: dict | None = None) -> list[HealthCheck]:
 
 def _check_msx_mcp_plugin() -> bool:
     """Check if MSX-MCP plugin is installed in Copilot CLI."""
-    home = Path.home() / ".copilot" / "installed-plugins"
-    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
-        if (home / subdir).exists():
-            return True
-    return False
+    from sdk.agents import is_msx_available
+    return is_msx_available()
 
 
 def _check_gh_auth() -> HealthCheck:

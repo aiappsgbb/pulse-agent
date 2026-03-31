@@ -251,11 +251,12 @@ async def _cli_main(args):
         from sdk.runner import run_job
         from daemon.sync import sync_jobs_from_onedrive, sync_to_onedrive
 
-        job_queue = asyncio.Queue()
-        job_queue.put_nowait({"type": "monitor", "_source": "cli"})
+        from daemon.worker import enqueue_job, dequeue_job
+        job_queue = asyncio.PriorityQueue()
+        enqueue_job(job_queue, {"type": "monitor", "_source": "cli"}, config)
         sync_jobs_from_onedrive(config, job_queue)
         while not job_queue.empty():
-            job = job_queue.get_nowait()
+            _pri, _seq, job = job_queue.get_nowait()
             job_type = job.get("type", "unknown")
             job_name = job.get("task", job_type)
             log.info(f"Running: [{job_type}] {job_name}")
@@ -484,7 +485,14 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     bridge_task = asyncio.create_task(_bridge_shutdown())
 
     boot_time = datetime.now()
-    job_queue = asyncio.Queue()
+
+    # Concurrent worker pool — N workers pulling from one PriorityQueue.
+    # max_workers is config-driven (default 2): triage + knowledge can run
+    # simultaneously on separate SDK sessions.
+    max_workers = config.get("max_workers", 2)
+    job_queue = asyncio.PriorityQueue()
+    # Stash max_workers on the queue so status writer can display it
+    job_queue._max_workers = max_workers  # type: ignore[attr-defined]
 
     # Clean up orphaned "running" jobs from previous daemon instance
     from tui.ipc import cleanup_orphaned_jobs
@@ -501,7 +509,13 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     from daemon.worker import job_worker
     from daemon.tasks import write_daemon_status_loop, poll_tui_chat_requests
 
-    worker_task = asyncio.create_task(job_worker(client, config, job_queue))
+    # Spawn N worker coroutines — each pulls from the same PriorityQueue
+    worker_tasks = []
+    for i in range(max_workers):
+        t = asyncio.create_task(job_worker(client, config, job_queue, worker_id=i))
+        worker_tasks.append(t)
+    log.info(f"Spawned {max_workers} worker(s)")
+
     scheduler_task = asyncio.create_task(scheduler_loop(config, job_queue, aio_shutdown))
     status_task = asyncio.create_task(write_daemon_status_loop(job_queue, boot_time, aio_shutdown))
     chat_poll_task = asyncio.create_task(poll_tui_chat_requests(client, config, aio_shutdown))
@@ -512,7 +526,8 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     await aio_shutdown.wait()
 
     # Cleanup
-    for t in (bridge_task, scheduler_task, worker_task, status_task, chat_poll_task):
+    all_tasks = [bridge_task, scheduler_task, status_task, chat_poll_task] + worker_tasks
+    for t in all_tasks:
         t.cancel()
 
     from daemon.worker import destroy_chat_session

@@ -61,7 +61,7 @@ def load_config() -> dict:
     else:
         config_path = CONFIG_DIR / "standing-instructions.yaml"
 
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if not config or not isinstance(config, dict):

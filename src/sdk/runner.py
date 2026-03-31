@@ -198,6 +198,8 @@ def _build_trigger_prompt(mode: str, mode_cfg: dict, config: dict, context: dict
 
 def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
     """Build the variable dict for trigger prompt interpolation."""
+    from sdk.prompts import load_enrichments
+
     variables = {}
     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -251,6 +253,10 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         # Collection warnings (transcript failures, stale data)
         variables["collection_warnings"] = context.get("collection_warnings", "")
 
+        # CRM pipeline enrichment (optional — loaded from enrichment files when available)
+        variables["msx_block"] = context.get("msx_gap_block", "")
+        variables["msx_instructions"] = load_enrichments("trigger-digest")
+
     elif mode == "intel":
         variables["date"] = date_str
         articles = context.get("articles", [])
@@ -286,6 +292,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["calendar_block"] = context.get("calendar_block", "Calendar scan unavailable.")
         variables["dismissed_block"] = _build_dismissed_block()
 
+        # CRM enrichment context (optional — loaded from enrichment files)
+        variables["msx_context"] = load_enrichments("trigger-monitor")
+
     elif mode == "knowledge-archive":
         variables["date"] = date_str
         variables["lookback_window"] = context.get("lookback_window", "48 hours")
@@ -294,6 +303,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["teams_inbox_block"] = context.get("teams_inbox_block", "Teams inbox scan unavailable.")
         variables["outlook_inbox_block"] = context.get("outlook_inbox_block", "Outlook inbox scan unavailable.")
 
+        # CRM enrichment (optional — loaded from enrichment files)
+        variables["msx_instructions"] = load_enrichments("trigger-knowledge-archive")
+
     elif mode == "knowledge-project":
         variables["date"] = date_str
         variables["lookback_window"] = context.get("lookback_window", "48 hours")
@@ -301,6 +313,9 @@ def _build_trigger_variables(mode: str, config: dict, context: dict) -> dict:
         variables["project_name"] = context.get("project_name", "Unknown Project")
         variables["project_yaml"] = context.get("project_yaml", "# No project data")
         variables["recent_artifacts"] = context.get("recent_artifacts", "No recent artifacts found.")
+
+        # CRM enrichment (optional — loaded from enrichment files)
+        variables["msx_instructions"] = load_enrichments("trigger-knowledge-project")
 
     elif mode == "research":
         task = context.get("task", {})
@@ -388,12 +403,18 @@ def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) 
             except (ValueError, TypeError):
                 continue
             days_overdue = (today - due_date).days
+            confidence = (c.get("due_confidence") or "explicit").lower()
             if days_overdue > max_overdue_days:
-                c["status"] = "cancelled"
-                c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
+                if confidence == "inferred":
+                    # Inferred dates just get quietly cancelled — never alarmed
+                    c["status"] = "cancelled"
+                    c["cancelled_reason"] = f"Auto-cancelled: inferred deadline {days_overdue}d past"
+                else:
+                    c["status"] = "cancelled"
+                    c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
                 changed = True
                 total_cancelled += 1
-                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue)")
+                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue, confidence={confidence})")
 
         if changed:
             data["updated_at"] = datetime.now().isoformat()
@@ -422,13 +443,15 @@ def _build_projects_block(projects: list[dict]) -> str:
         name = project.get("project", project.get("_file", "unnamed"))
         status = project.get("status", "active")
         risk = project.get("risk_level", "unknown")
+        involvement = project.get("involvement", "observer")
         pid = project.get("_file", "").replace(".yaml", "")
-        lines.append(f"### {name} (status: {status}, risk: {risk}, file: {pid})")
+        lines.append(f"### {name} (involvement: {involvement}, status: {status}, risk: {risk}, file: {pid})")
 
         stakeholders = project.get("stakeholders", [])
         if stakeholders:
             contacts = ", ".join(
-                f"{s.get('name', '?')} ({s.get('role', '?')})" if s.get("role") else s.get("name", "?")
+                (f"{s.get('name', '?')} ({s.get('role', '?')})" if s.get("role") else s.get("name", "?"))
+                if isinstance(s, dict) else str(s)
                 for s in stakeholders
             )
             lines.append(f"  Stakeholders: {contacts}")
@@ -451,6 +474,56 @@ def _build_projects_block(projects: list[dict]) -> str:
         if next_mtg:
             lines.append(f"  Next meeting: {next_mtg}")
 
+        # Surface CRM pipeline data when present (optional — absent for non-CRM users)
+        msx = project.get("msx", {})
+        if msx and isinstance(msx, dict):
+            opp = msx.get("opportunity_name", msx.get("opportunity_id", ""))
+            stage = msx.get("stage", "?")
+            revenue = msx.get("revenue", "?")
+            close = msx.get("close_date", "")
+            in_team = msx.get("in_deal_team")
+            solution_area = msx.get("solution_area", "")
+            deal_type = msx.get("deal_type", "")
+
+            msx_line = f"  CRM: {opp} | Stage: {stage} | Revenue: {revenue}"
+            if solution_area:
+                msx_line += f" | {solution_area}"
+            if deal_type:
+                msx_line += f" | {deal_type}"
+            if close:
+                msx_line += f" | Close: {close}"
+            if in_team is False:
+                msx_line += " | !! NOT in deal team"
+            lines.append(msx_line)
+
+            # Deal team members
+            deal_team = msx.get("deal_team", [])
+            if deal_team:
+                team_str = ", ".join(
+                    f"{m.get('name', '?')} ({m.get('role', '?')})"
+                    if isinstance(m, dict) else str(m)
+                    for m in deal_team[:6]
+                )
+                lines.append(f"  Deal team: {team_str}")
+
+            # Active milestones (show up to 4 most relevant)
+            milestones = msx.get("milestones", [])
+            if milestones and isinstance(milestones, list):
+                lines.append("  Milestones:")
+                for ms in milestones[:4]:
+                    if not isinstance(ms, dict):
+                        continue
+                    ms_name = ms.get("name", "?")
+                    ms_status = ms.get("status", "?")
+                    ms_date = ms.get("date", "")
+                    ms_acr = ms.get("monthly_acr", "")
+                    ms_line = f"    - [{ms_status}] {ms_name}"
+                    if ms_date:
+                        ms_line += f" (due: {ms_date})"
+                    if ms_acr:
+                        ms_line += f" — ACR: {ms_acr}"
+                    lines.append(ms_line)
+
         lines.append("")
 
     if other:
@@ -460,28 +533,63 @@ def _build_projects_block(projects: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _build_msx_gap_block(projects: list[dict]) -> str:
+    """Identify active projects without CRM opportunity links for gap detection.
+
+    Returns a prompt block highlighting projects that may be missing from the
+    CRM pipeline, or an empty string if all projects are linked (or no projects
+    exist). Only called when CRM tools are available.
+    """
+    active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
+    if not active:
+        return ""
+
+    linked = [p for p in active if isinstance(p.get("msx"), dict) and p["msx"].get("opportunity_id")]
+    unlinked = [p for p in active if not (isinstance(p.get("msx"), dict) and p["msx"].get("opportunity_id"))]
+
+    if not unlinked:
+        return ""  # All projects have MSX links — no gaps
+
+    lines = [
+        "\n## Part E — CRM Pipeline Gap Analysis\n",
+        f"{len(linked)} of {len(active)} active projects are linked to CRM opportunities.",
+        "The following projects have NO CRM opportunity link — search for matches:\n",
+    ]
+    for p in unlinked:
+        name = p.get("project", p.get("_file", "?"))
+        pid = p.get("_file", "").replace(".yaml", "")
+        lines.append(f"- **{name}** (file: {pid}) — search CRM for this customer")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _extract_commitments_summary(projects: list[dict]) -> str:
     """Build a global commitment summary across all projects.
 
     Highlights overdue and approaching-deadline commitments.
+    Only treats commitments with explicit due dates as truly overdue.
     """
     if not projects:
         return ""
 
     today = datetime.now().date()
-    overdue = []
+    hard_overdue = []
+    soft_overdue = []
     upcoming = []
     open_count = 0
 
     for project in projects:
         project_name = project.get("project", project.get("_file", "?"))
         for c in project.get("commitments", []):
+            if not isinstance(c, dict):
+                continue
             if c.get("status") == "done":
                 continue
             open_count += 1
             what = c.get("what", "?")
             to = c.get("to", "?")
             due_str = c.get("due", "")
+            confidence = (c.get("due_confidence") or "explicit").lower()
 
             try:
                 due_date = datetime.strptime(str(due_str), "%Y-%m-%d").date()
@@ -492,28 +600,37 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
             entry = f"- **{what}** (to: {to}, project: {project_name}, due: {due_str})"
 
             if days_until is not None and days_until < 0:
-                entry += f" -- **{abs(days_until)} days OVERDUE**"
-                overdue.append(entry)
+                if confidence == "explicit":
+                    entry += f" -- **{abs(days_until)} days OVERDUE**"
+                    hard_overdue.append(entry)
+                else:
+                    entry += f" -- inferred deadline {abs(days_until)}d past (soft due)"
+                    soft_overdue.append(entry)
             elif days_until is not None and days_until <= 3:
                 entry += f" -- due in {days_until} day(s)"
                 upcoming.append(entry)
 
-    if not overdue and not upcoming:
+    if not hard_overdue and not soft_overdue and not upcoming:
         if open_count:
             return f"({open_count} open commitment(s), none overdue or due soon.)\n"
         return ""
 
     lines = ["## Commitment Status\n"]
-    if overdue:
-        lines.append(f"**OVERDUE ({len(overdue)}):**")
-        lines.extend(overdue)
+    if hard_overdue:
+        lines.append(f"**OVERDUE ({len(hard_overdue)}):**")
+        lines.extend(hard_overdue)
+        lines.append("")
+    if soft_overdue:
+        lines.append(f"**Soft due — inferred deadlines ({len(soft_overdue)}):**")
+        lines.extend(soft_overdue)
         lines.append("")
     if upcoming:
         lines.append(f"**Due soon ({len(upcoming)}):**")
         lines.extend(upcoming)
         lines.append("")
-    if open_count > len(overdue) + len(upcoming):
-        remaining = open_count - len(overdue) - len(upcoming)
+    total_flagged = len(hard_overdue) + len(soft_overdue) + len(upcoming)
+    if open_count > total_flagged:
+        remaining = open_count - total_flagged
         lines.append(f"({remaining} other open commitment(s) with no imminent deadline.)\n")
 
     return "\n".join(lines)
@@ -558,6 +675,8 @@ def _build_carry_forward(prev: dict | None) -> str:
     stale_count = 0
 
     for item in prev["items"]:
+        if not isinstance(item, dict):
+            continue
         item_date_str = item.get("date", "")
         try:
             item_date = datetime.strptime(item_date_str, "%Y-%m-%d").date()
@@ -639,6 +758,9 @@ def _validate_digest_json(date_str: str):
     items = data["items"]
     issues = []
     for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            issues.append(f"  item[{i}]: expected dict, got {type(item).__name__}")
+            continue
         missing = REQUIRED_ITEM_FIELDS - set(item.keys())
         if missing:
             issues.append(f"  item[{i}] ({item.get('id', '?')}): missing {missing}")
@@ -766,10 +888,16 @@ async def _pre_process_monitor(config: dict) -> dict:
     else:
         calendar_block = format_calendar_for_prompt(cal_events)
 
+    # CRM enrichment availability check (optional)
+    from sdk.agents import is_msx_available
+    msx_available = is_msx_available()
+    log.info(f"  CRM tools: {'available' if msx_available else 'not installed (skipping)'}")
+
     return {
         "teams_inbox": formatted,
         "outlook_inbox_block": outlook_block,
         "calendar_block": calendar_block,
+        "msx_available": msx_available,
     }
 
 
@@ -868,6 +996,21 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     else:
         log.info("  No project files found")
 
+    # Phase 1g: CRM enrichment availability check (optional)
+    from sdk.agents import is_msx_available, msx_install_info
+    msx_available = is_msx_available()
+    msx_gap_block = ""
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"\nPhase 1g: CRM tools available (plugin: {info['path']}, node: {info['has_node']}, az: {info['has_az_cli']})")
+        msx_gap_block = _build_msx_gap_block(projects)
+        if msx_gap_block:
+            log.info("  Found projects without CRM links")
+        else:
+            log.info("  All active projects linked to CRM (or no projects)")
+    else:
+        log.info("\nPhase 1g: CRM plugin not installed — skipping CRM enrichment")
+
     # Build content block
     by_type: dict[str, list[dict]] = {}
     for item in items:
@@ -918,6 +1061,8 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         "calendar_block": calendar_block,
         "projects_block": projects_block,
         "commitments_summary": commitments_summary,
+        "msx_available": msx_available,
+        "msx_gap_block": msx_gap_block,
     }
 
 
@@ -1043,6 +1188,15 @@ async def _pre_process_knowledge(config: dict) -> dict:
     else:
         outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
 
+    # CRM enrichment availability check (optional)
+    from sdk.agents import is_msx_available, msx_install_info
+    msx_available = is_msx_available()
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"  CRM tools available (plugin: {info['path']}, node: {info['has_node']}, az: {info['has_az_cli']})")
+    else:
+        log.info("  CRM plugin not installed — CRM enrichment will be skipped")
+
     return {
         "projects_block": projects_block,
         "commitments_summary": commitments_summary,
@@ -1051,22 +1205,20 @@ async def _pre_process_knowledge(config: dict) -> dict:
         "lookback_note": lookback_note,
         "teams_inbox_block": teams_inbox_block,
         "outlook_inbox_block": outlook_block,
+        "msx_available": msx_available,
     }
 
 
-async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None = None):
-    """Run the full knowledge mining pipeline: archive once, then enrich per-project.
+async def run_knowledge_init_phases(client, config: dict, job_log_file: str | None = None):
+    """Run knowledge Phase 0 (transcripts + compression) and Phase 1 (archive).
 
-    This replaces the old monolithic knowledge session. Architecture:
-    1. One archive session: fetch emails/Teams via WorkIQ, discover new projects
-    2. N enrichment sessions: one per active/blocked project
-    Each project gets a focused session with just its context — the agent uses
-    WorkIQ and search_local_files to determine what's worth updating.
+    Called by the worker's ``_run_knowledge_init``.  Phase 2 (per-project
+    enrichment) is handled separately — the worker queues individual
+    ``knowledge-project`` jobs via ``prepare_knowledge_projects()``.
     """
-    log.info("=== Knowledge pipeline start ===")
+    log.info("=== Knowledge init: Phase 0 + 1 ===")
 
     def _log_pipeline(entry_type: str, **kwargs):
-        """Write an entry to the per-job activity log (if configured)."""
         if not job_log_file:
             return
         try:
@@ -1077,8 +1229,6 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
             pass
 
     # Phase 0: Collect fresh transcripts + compress
-    # Knowledge needs fresh data to mine — transcripts, emails, Teams messages.
-    # Transcript collection runs here (not in digest) so overnight runs have fresh content.
     from collectors.transcripts.compressor import compress_existing_transcripts
     from collectors.transcripts import run_transcript_collection
     from core.browser import ensure_browser
@@ -1134,41 +1284,102 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
         log.warning("  Archive phase timed out after 5 minutes (continuing to enrichment)")
         _log_pipeline("error", preview="Archive phase timed out after 5 minutes")
     except Exception as e:
-        log.warning(f"  Archive phase failed: {e} (continuing to enrichment)")
-        _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}")
+        import traceback
+        tb = traceback.format_exc()
+        log.warning(f"  Archive phase failed: {e}\n{tb}")
+        _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}\n{tb[-500:]}")
 
-    # Phase 2: Per-project enrichment — reload projects (archive may have created new ones)
+    log.info("  Knowledge init (Phase 0+1) complete.")
+
+
+def prepare_knowledge_projects(config: dict) -> list[dict]:
+    """Build a list of ``knowledge-project`` job dicts for Phase 2.
+
+    Returns one job per active/blocked project.  Each job carries the
+    context the worker needs to run a single enrichment session.
+    Called synchronously — no SDK session needed.
+    """
     projects = _load_projects()
     if not projects:
-        log.info("  No projects to enrich. Pipeline done.")
-        return
+        return []
 
-    # Only process active/blocked projects — completed/on-hold don't need enrichment
     active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
     if not active:
-        log.info(f"  {len(projects)} projects loaded but none are active/blocked. Skipping enrichment.")
-        return
+        log.info(f"  {len(projects)} projects loaded but none are active/blocked.")
+        return []
 
     recent_artifacts = _list_recent_artifacts(days=2)
 
-    # Determine lookback window for per-project context
+    from sdk.agents import is_msx_available
+    msx_available = is_msx_available()
+
     state = load_json_state(KNOWLEDGE_STATE_FILE, {})
     last_run = state.get("last_run")
     lookback_window = f"since {last_run}" if last_run else "48 hours"
 
-    log.info(f"  Phase 2: Enriching {len(active)} active projects:")
-    _log_pipeline("message", preview=f"Phase 2: Enriching {len(active)} active projects...")
+    # Update last_run now (before enrichment starts)
+    save_json_state(KNOWLEDGE_STATE_FILE, {"last_run": datetime.now().isoformat()})
+
+    jobs = []
+    for project in active:
+        pid = project.get("_file", "").replace(".yaml", "")
+        pname = project.get("project", pid)
+        project_copy = {k: v for k, v in project.items() if k != "_file"}
+        context = {
+            "project_id": pid,
+            "project_name": pname,
+            "project_yaml": yaml.dump(project_copy, default_flow_style=False, allow_unicode=True),
+            "recent_artifacts": recent_artifacts,
+            "lookback_window": lookback_window,
+            "msx_available": msx_available,
+        }
+        jobs.append({
+            "type": "knowledge-project",
+            "_context": context,
+            "_knowledge_batch_size": len(active),
+        })
+
+    log.info(f"  Prepared {len(jobs)} knowledge-project jobs for Phase 2")
     for p in active:
         pid = p.get("_file", "").replace(".yaml", "")
         log.info(f"    - {p.get('project', pid)}")
 
+    return jobs
+
+
+# Keep the monolithic pipeline for --once / --mode knowledge CLI usage
+async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None = None):
+    """Run the full knowledge pipeline sequentially (CLI / --once mode).
+
+    For the daemon, knowledge is split: ``_run_knowledge_init`` in worker.py
+    runs Phase 0+1, then queues individual ``knowledge-project`` jobs.
+    This function preserves the old sequential behaviour for CLI usage.
+    """
+    await run_knowledge_init_phases(client, config, job_log_file=job_log_file)
+
+    projects = _load_projects()
+    active = [p for p in projects if p.get("status") in ("active", "blocked", None)]
+    if not active:
+        log.info("  No projects to enrich. Pipeline done.")
+        return
+
+    recent_artifacts = _list_recent_artifacts(days=2)
+    from sdk.agents import is_msx_available, msx_install_info
+    msx_available = is_msx_available()
+    if msx_available:
+        info = msx_install_info()
+        log.info(f"  CRM tools available (node: {info['has_node']}, az: {info['has_az_cli']})")
+
+    state = load_json_state(KNOWLEDGE_STATE_FILE, {})
+    last_run = state.get("last_run")
+    lookback_window = f"since {last_run}" if last_run else "48 hours"
+
+    log.info(f"  Phase 2: Enriching {len(active)} active projects...")
     enriched = 0
     for project in active:
         pid = project.get("_file", "").replace(".yaml", "")
         pname = project.get("project", pid)
         log.info(f"  Enriching: {pname} ({pid})...")
-
-        # Build per-project context
         project_copy = {k: v for k, v in project.items() if k != "_file"}
         project_context = {
             "project_id": pid,
@@ -1176,21 +1387,18 @@ async def run_knowledge_pipeline(client, config: dict, job_log_file: str | None 
             "project_yaml": yaml.dump(project_copy, default_flow_style=False, allow_unicode=True),
             "recent_artifacts": recent_artifacts,
             "lookback_window": lookback_window,
+            "msx_available": msx_available,
         }
-
         try:
             await asyncio.wait_for(
                 run_job(client, config, "knowledge-project", context=project_context, job_log_file=job_log_file),
-                timeout=600,  # 10 min per project
+                timeout=600,
             )
             enriched += 1
             log.info(f"    Done: {pname}")
         except asyncio.TimeoutError:
             log.warning(f"    Timeout enriching {pname} (10 min cap)")
-            _log_pipeline("error", preview=f"Timeout enriching {pname}")
         except Exception as e:
             log.warning(f"    Failed enriching {pname}: {e}")
-            _log_pipeline("error", preview=f"Failed enriching {pname}: {str(e)[:200]}")
 
     log.info(f"=== Knowledge pipeline done — enriched {enriched}/{len(active)} projects ===")
-    _log_pipeline("message", preview=f"Knowledge pipeline done — enriched {enriched}/{len(active)} projects")

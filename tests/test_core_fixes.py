@@ -218,7 +218,7 @@ class TestSchedulerCleanupLogging:
         from core.scheduler import scheduler_loop
 
         shutdown = asyncio.Event()
-        queue = asyncio.Queue()
+        queue = asyncio.PriorityQueue()
 
         def mock_sync(config, q):
             pass
@@ -252,7 +252,7 @@ class TestSchedulerCleanupLogging:
         from core.scheduler import scheduler_loop
 
         shutdown = asyncio.Event()
-        queue = asyncio.Queue()
+        queue = asyncio.PriorityQueue()
 
         call_count = 0
 

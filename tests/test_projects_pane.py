@@ -21,19 +21,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 class TestSortProjects:
     """Test _sort_projects with various modes."""
 
-    def _make_project(self, name, status="active", risk="medium", overdue=0, next_meeting="", commitments=None):
+    def _make_project(self, name, status="active", risk="medium", overdue=0,
+                       next_meeting="", commitments=None, involvement="lead"):
         p = {
             "_id": name.lower().replace(" ", "-"),
             "project": name,
             "status": status,
             "risk_level": risk,
+            "involvement": involvement,
             "commitments": commitments or [],
         }
         if next_meeting:
             p["next_meeting"] = next_meeting
-        # Add overdue commitments
+        # Add overdue commitments (explicit confidence by default)
         for _ in range(overdue):
-            p["commitments"].append({"what": "task", "status": "overdue"})
+            p["commitments"].append({"what": "task", "status": "overdue", "due_confidence": "explicit"})
         return p
 
     def test_urgency_sort_overdue_first(self):
@@ -464,3 +466,187 @@ class TestCommitmentCompletion:
             data = yaml.safe_load((tmp_dir / "proj.yaml").read_text(encoding="utf-8"))
             assert data["status"] == "blocked"
             assert data["updated_at"] == "2026-03-03T12:00:00"
+
+
+# ---------------------------------------------------------------------------
+# Involvement-based sorting
+# ---------------------------------------------------------------------------
+
+
+class TestInvolvementSorting:
+    """Test relevance sort mode and involvement helpers."""
+
+    def _make_project(self, name, involvement="lead", risk="medium", overdue=0, status="active"):
+        p = {
+            "_id": name.lower().replace(" ", "-"),
+            "project": name,
+            "status": status,
+            "risk_level": risk,
+            "involvement": involvement,
+            "commitments": [],
+        }
+        for _ in range(overdue):
+            p["commitments"].append({"what": "task", "status": "overdue", "due_confidence": "explicit"})
+        return p
+
+    def test_relevance_sort_involvement_first(self):
+        from tui.screens import _sort_projects
+        projects = [
+            self._make_project("Observer Proj", involvement="observer"),
+            self._make_project("Lead Proj", involvement="lead"),
+            self._make_project("Contrib Proj", involvement="contributor"),
+        ]
+        result = _sort_projects(projects, "relevance")
+        assert result[0]["project"] == "Lead Proj"
+        assert result[1]["project"] == "Contrib Proj"
+        assert result[2]["project"] == "Observer Proj"
+
+    def test_relevance_sort_risk_tiebreaker_within_involvement(self):
+        from tui.screens import _sort_projects
+        projects = [
+            self._make_project("Low", involvement="lead", risk="low"),
+            self._make_project("Critical", involvement="lead", risk="critical"),
+            self._make_project("High", involvement="lead", risk="high"),
+        ]
+        result = _sort_projects(projects, "relevance")
+        assert result[0]["project"] == "Critical"
+        assert result[1]["project"] == "High"
+        assert result[2]["project"] == "Low"
+
+    def test_relevance_sort_observer_always_last(self):
+        """Observer projects sort after lead/contributor regardless of risk."""
+        from tui.screens import _sort_projects
+        projects = [
+            self._make_project("Observer Critical", involvement="observer", risk="critical", overdue=5),
+            self._make_project("Lead Low", involvement="lead", risk="low"),
+        ]
+        result = _sort_projects(projects, "relevance")
+        assert result[0]["project"] == "Lead Low"
+        assert result[1]["project"] == "Observer Critical"
+
+    def test_involvement_rank_default_to_observer(self):
+        from tui.screens import _involvement_rank
+        assert _involvement_rank({}) == 2  # observer
+        assert _involvement_rank({"involvement": "lead"}) == 0
+        assert _involvement_rank({"involvement": "contributor"}) == 1
+        assert _involvement_rank({"involvement": "observer"}) == 2
+        assert _involvement_rank({"involvement": "unknown"}) == 2
+
+    def test_relevance_in_sort_modes(self):
+        from tui.screens import PROJECT_SORT_MODES, PROJECT_SORT_LABELS
+        assert "relevance" in PROJECT_SORT_MODES
+        assert "relevance" in PROJECT_SORT_LABELS
+
+
+# ---------------------------------------------------------------------------
+# Due confidence and overdue counts
+# ---------------------------------------------------------------------------
+
+
+class TestDueConfidence:
+    """Test that due_confidence affects overdue counting."""
+
+    def test_overdue_count_explicit_only(self):
+        from tui.screens import _overdue_count
+        p = {"commitments": [
+            {"what": "a", "status": "overdue", "due_confidence": "explicit"},
+            {"what": "b", "status": "overdue", "due_confidence": "inferred"},
+            {"what": "c", "status": "overdue"},  # missing = defaults to explicit
+        ]}
+        assert _overdue_count(p) == 2  # a + c (missing defaults to explicit)
+
+    def test_soft_overdue_count(self):
+        from tui.screens import _soft_overdue_count
+        p = {"commitments": [
+            {"what": "a", "status": "overdue", "due_confidence": "explicit"},
+            {"what": "b", "status": "overdue", "due_confidence": "inferred"},
+            {"what": "c", "status": "overdue"},  # missing = explicit
+        ]}
+        assert _soft_overdue_count(p) == 1  # only b
+
+    def test_overdue_count_ignores_non_overdue(self):
+        from tui.screens import _overdue_count, _soft_overdue_count
+        p = {"commitments": [
+            {"what": "a", "status": "open", "due_confidence": "explicit"},
+            {"what": "b", "status": "done", "due_confidence": "inferred"},
+        ]}
+        assert _overdue_count(p) == 0
+        assert _soft_overdue_count(p) == 0
+
+    def test_urgency_sort_uses_explicit_overdue_only(self):
+        """Urgency sort should not count inferred overdues."""
+        from tui.screens import _sort_projects
+        projects = [
+            {
+                "_id": "many-soft",
+                "project": "Many Soft",
+                "status": "active",
+                "risk_level": "medium",
+                "involvement": "lead",
+                "commitments": [
+                    {"what": "a", "status": "overdue", "due_confidence": "inferred"},
+                    {"what": "b", "status": "overdue", "due_confidence": "inferred"},
+                    {"what": "c", "status": "overdue", "due_confidence": "inferred"},
+                ],
+            },
+            {
+                "_id": "one-hard",
+                "project": "One Hard",
+                "status": "active",
+                "risk_level": "medium",
+                "involvement": "lead",
+                "commitments": [
+                    {"what": "x", "status": "overdue", "due_confidence": "explicit"},
+                ],
+            },
+        ]
+        result = _sort_projects(projects, "urgency")
+        # One Hard has 1 explicit overdue; Many Soft has 0 explicit overdue
+        assert result[0]["project"] == "One Hard"
+        assert result[1]["project"] == "Many Soft"
+
+
+# ---------------------------------------------------------------------------
+# InvolvementModal
+# ---------------------------------------------------------------------------
+
+
+class TestInvolvementModal:
+    def test_instantiation(self):
+        from tui.screens import InvolvementModal
+        project = {"project": "Test", "involvement": "observer"}
+        modal = InvolvementModal(project)
+        assert modal._project["involvement"] == "observer"
+
+    def test_valid_involvement_values(self):
+        valid = ("lead", "contributor", "observer")
+        for v in valid:
+            assert v in ("lead", "contributor", "observer")
+
+
+# ---------------------------------------------------------------------------
+# Involvement persistence
+# ---------------------------------------------------------------------------
+
+
+class TestInvolvementPersistence:
+    def test_save_involvement(self, tmp_dir):
+        with patch("tui.screens.PROJECTS_DIR", tmp_dir):
+            from tui.screens import _save_project_yaml
+            project = {
+                "_id": "test",
+                "project": "Test",
+                "status": "active",
+                "involvement": "observer",
+            }
+            assert _save_project_yaml("test", project)
+            data = yaml.safe_load((tmp_dir / "test.yaml").read_text(encoding="utf-8"))
+            assert data["involvement"] == "observer"
+
+    def test_update_involvement(self, tmp_dir):
+        with patch("tui.screens.PROJECTS_DIR", tmp_dir):
+            from tui.screens import _save_project_yaml
+            _save_project_yaml("p1", {"_id": "p1", "project": "P1", "involvement": "observer"})
+            _save_project_yaml("p1", {"_id": "p1", "project": "P1", "involvement": "lead"})
+            data = yaml.safe_load((tmp_dir / "p1.yaml").read_text(encoding="utf-8"))
+            assert data["involvement"] == "lead"

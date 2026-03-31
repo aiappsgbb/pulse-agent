@@ -100,20 +100,29 @@ def build_config_from_answers(answers: dict, template: dict | None = None) -> di
 
 
 def write_config(config_dict: dict, dest: Path | None = None) -> Path:
-    """Write the config dict as clean YAML.
+    """Write the config dict as clean YAML (atomic via temp + rename).
 
     Creates parent directories if needed.  Returns the path written to.
     """
+    import os
+
     if dest is None:
         dest = PULSE_HOME / "standing-instructions.yaml"
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(dest, "w", encoding="utf-8") as f:
-        yaml.dump(
-            config_dict,
-            f,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-        )
+    tmp_path = dest.with_suffix(".yaml.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            yaml.dump(
+                config_dict,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+        os.replace(tmp_path, dest)
+    except BaseException:
+        # Clean up partial temp file on any failure
+        tmp_path.unlink(missing_ok=True)
+        raise
     return dest

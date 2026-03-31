@@ -264,7 +264,10 @@ def make_user_input_handler_file():
     Timeout 120s → returns "no".
     """
     async def handler(request, context):
-        question = request.get("question", "")
+        if isinstance(request, dict):
+            question = request.get("question", "")
+        else:
+            question = getattr(request, "question", str(request)[:500])
         session_id = str(uuid.uuid4())
         write_pending_question(question, session_id)
 

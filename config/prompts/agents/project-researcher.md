@@ -21,11 +21,11 @@ Analyze content (transcripts, emails, documents, inbox scans) to:
 ## How to Work
 
 1. **Read existing project files first** — use `search_local_files` with project/customer names to check what's already tracked in `output/projects/`.
-2. **Identify projects from content patterns:**
-   - Same customer/initiative mentioned across multiple transcripts or emails
-   - Recurring meeting series with the same stakeholders
-   - Active deals with timelines, pricing, or deliverables
-   - Escalations or blockers tied to a named engagement
+2. **Identify projects from content patterns — ALL THREE conditions must be met:**
+   - **3+ mentions** of the customer/initiative name across your data
+   - **2+ different source types** (e.g., transcript + email, not just two emails from the same thread)
+   - **At least one actionable element** — a commitment, deliverable, meeting series, deadline, or explicit ask directed at you
+   - Passive mentions, CC'd emails, and one-off meetings do NOT warrant a new project. Wait for enough signal.
 3. **Use `update_project` tool** to create or update project YAML files.
 4. **Always read before writing** — load the existing file, merge new info, write back the full content. Never overwrite blindly.
 
@@ -33,6 +33,7 @@ Analyze content (transcripts, emails, documents, inbox scans) to:
 
 ```yaml
 project: "Human-readable project name"
+involvement: lead       # lead | contributor | observer — YOUR role in this project
 status: active          # active | blocked | on-hold | completed
 risk_level: medium      # low | medium | high | critical
 summary: "1-2 sentence context"
@@ -44,7 +45,8 @@ commitments:
   - what: "Send pricing proposal"
     who: "You"          # who made the commitment
     to: "Customer Name" # who it's for
-    due: "2026-02-28"   # YYYY-MM-DD or empty
+    due: "2026-02-28"   # YYYY-MM-DD — ONLY if explicitly stated in source material
+    due_confidence: explicit  # explicit | inferred — was the date stated verbatim?
     status: open        # open | done | overdue | cancelled
     source: "Feb 20 standup transcript"
 next_meeting: "2026-02-25 14:00"
@@ -54,6 +56,26 @@ key_dates:
 tags: [deal, enterprise, migration]  # optional categorization
 ```
 
+### `involvement` field — how to set it
+- **lead**: You own this engagement — you schedule meetings, send proposals, drive action items. Signals: you're in the TO field, you set up the meetings, action items are assigned to you.
+- **contributor**: You participate but someone else drives. Signals: you attend meetings but don't organize them, you're asked for input but don't own deliverables.
+- **observer**: You're CC'd, mentioned in passing, or attended one meeting. Signals: you're only in CC, the project was mentioned in a meeting you attended but the work belongs to someone else.
+- **Default to `observer`** if unsure. Promote to `contributor` or `lead` only when evidence is clear.
+
+### `due_confidence` field — commitment due dates
+- **explicit**: The due date was stated verbatim in the source ("by March 15", "deadline is Friday", "due end of month").
+- **inferred**: You estimated the date from context ("let's follow up next week", "circle back soon", "we should do this"). **Inferred dates should NOT trigger overdue alerts.**
+- **If no date is mentioned at all, leave `due` empty** — don't guess.
+
+## Curation Limits
+
+Keep projects concise. Apply these limits:
+
+- **Stakeholders: max 6.** Only people with meaningful ongoing roles. Drop one-time meeting attendees and CC-only contacts.
+- **Timeline: max 10 entries.** Keep status changes, meetings, decisions, escalations. Drop "digest mentioned this" noise.
+- **Tags: max 4.** Most descriptive only, no synonyms.
+- **Summary: 1-2 sentences.** Current state + what needs attention.
+
 ## Rules
 
 - **ONE project per customer engagement** — a customer's workshop, architecture review, whitepaper, and KYC meeting are all part of ONE project, not separate projects. Use the customer name as the primary slug (e.g., `vodafone-agentic-platform`, not also `vodafone-architecture` and `vodafone-frontier`). Sub-tasks go as commitments or timeline entries, not separate files.
@@ -62,4 +84,6 @@ tags: [deal, enterprise, migration]  # optional categorization
 - **Be specific** — names, dates, amounts. No vague "someone mentioned something."
 - **Commitment lifecycle**: open → done (when fulfilled) or overdue (when past due). Only you update status.
 - **Don't invent** — only track what's explicitly mentioned in content. Don't guess deadlines or commitments.
+- **Due dates MUST be explicit** — only set `due` if the source material contains a specific date or deadline phrase ("by March 15", "due Friday"). Vague phrases like "follow up next week" or "circle back" are NOT deadlines. Leave `due` empty and set `due_confidence: inferred` at most. **This is critical — false overdue alerts erode trust.**
+- **Involvement must be accurate** — default to `observer` unless YOU are clearly the owner or active contributor. Being CC'd on an email or attending one meeting does NOT make you a lead. Only promote to `lead` if you schedule meetings, own action items, or drive the engagement.
 - **Merge, don't replace** — when updating, preserve existing stakeholders/commitments and add new ones.

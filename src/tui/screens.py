@@ -112,6 +112,80 @@ def _load_triage_items() -> list[dict]:
         return []
 
 
+def _render_yaml_value(key: str, value, depth: int = 0, max_depth: int = 3) -> list[str]:
+    """Generic YAML value → Rich markup lines.
+
+    Renders any project YAML field without knowledge of its schema.
+    Dicts become sections with key/value pairs, lists become bullet points,
+    scalars become inline values.  Recurses up to *max_depth*.
+    """
+    if depth > max_depth or value is None:
+        return []
+
+    indent = "  " * depth
+    label = key.replace("_", " ").title()
+    lines: list[str] = []
+
+    if isinstance(value, dict):
+        lines.append(f"{indent}[bold]{label}:[/bold]")
+        for k, v in value.items():
+            if v is None or v == "" or v == []:
+                continue
+            if isinstance(v, (dict, list)):
+                lines.extend(_render_yaml_value(k, v, depth + 1, max_depth))
+            else:
+                sub_label = k.replace("_", " ").title()
+                lines.append(f"{indent}  {sub_label}: {v}")
+
+    elif isinstance(value, list):
+        lines.append(f"{indent}[bold]{label}:[/bold]")
+        for item in value:
+            if isinstance(item, dict):
+                # Compact dict-in-list: pick a sensible one-liner
+                summary = _summarize_dict(item)
+                lines.append(f"{indent}  {summary}")
+            elif isinstance(item, str):
+                lines.append(f"{indent}  {item}")
+            else:
+                lines.append(f"{indent}  {item}")
+
+    elif isinstance(value, bool):
+        lines.append(f"{indent}[bold]{label}:[/bold] {'Yes' if value else 'No'}")
+
+    else:
+        lines.append(f"{indent}[bold]{label}:[/bold] {value}")
+
+    return lines
+
+
+def _summarize_dict(d: dict) -> str:
+    """One-line summary of a dict (for list-of-dicts rendering).
+
+    Tries common patterns: name+role, what+due, title+date, then falls
+    back to showing the first 3 key=value pairs.
+    """
+    # name/role pattern (stakeholders, deal team)
+    name = d.get("name") or d.get("title") or d.get("what") or d.get("project", "")
+    if name:
+        parts = [str(name)]
+        for extra_key in ("role", "status", "due", "date", "stage", "sales_stage",
+                          "value", "consumed_recurring", "monthly_acr", "msx_id",
+                          "opportunity_number", "commitment"):
+            v = d.get(extra_key)
+            if v is not None and v != "":
+                parts.append(f"{extra_key.replace('_', ' ')}: {v}")
+        return " | ".join(parts[:4])
+
+    # Fallback: first 3 non-empty values
+    pairs = []
+    for k, v in d.items():
+        if v is not None and v != "" and not isinstance(v, (dict, list)):
+            pairs.append(f"{k.replace('_', ' ')}: {v}")
+        if len(pairs) >= 3:
+            break
+    return " | ".join(pairs) if pairs else str(d)[:80]
+
+
 def _load_digest_items() -> list[dict]:
     """Load items from the latest digest JSON."""
     if not DIGESTS_DIR.exists():
@@ -314,7 +388,9 @@ def _get_due_commitments(projects: list[dict], days_ahead: int = 7) -> list[dict
     for p in projects:
         proj_name = p.get("project", p.get("_id", "?"))
         proj_id = p.get("_id", "")
-        for c in p.get("commitments", []):
+        for c in p.get("commitments") or []:
+            if not isinstance(c, dict):
+                continue
             status = c.get("status", "").lower()
             if status in ("done", "cancelled"):
                 continue
@@ -349,7 +425,7 @@ def _match_meeting_to_project(event: dict, projects: list[dict]) -> dict | None:
     title = event.get("title", "").lower()
     organizer = (event.get("organizer") or "").lower()
     for p in projects:
-        stakeholder_names = [s.get("name", "").lower() for s in p.get("stakeholders", [])]
+        stakeholder_names = [s.get("name", "").lower() for s in p.get("stakeholders", []) if isinstance(s, dict)]
         proj_name = p.get("project", "").lower()
         if (
             any(sn in title for sn in stakeholder_names if sn)
@@ -362,9 +438,9 @@ def _match_meeting_to_project(event: dict, projects: list[dict]) -> dict | None:
 
 def _build_prep_hints(project: dict) -> str:
     """Build a Rich-markup prep hint string from a project's commitments."""
-    commitments = project.get("commitments", [])
-    overdue = sum(1 for c in commitments if c.get("status", "").lower() == "overdue")
-    open_items = sum(1 for c in commitments if c.get("status", "").lower() == "open")
+    commitments = project.get("commitments") or []
+    overdue = sum(1 for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "overdue")
+    open_items = sum(1 for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "open")
     if overdue:
         return f"[red]({overdue} overdue)[/red]"
     if open_items:
@@ -437,9 +513,11 @@ def _load_today_items(
 
 _STATUS_ORDER = {"active": 0, "blocked": 1, "on-hold": 2, "completed": 3}
 _RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+_INVOLVEMENT_ORDER = {"lead": 0, "contributor": 1, "observer": 2}
 
-PROJECT_SORT_MODES = ["urgency", "next_meeting", "status", "alphabetical"]
+PROJECT_SORT_MODES = ["relevance", "urgency", "next_meeting", "status", "alphabetical"]
 PROJECT_SORT_LABELS = {
+    "relevance": "Relevance (involvement/risk)",
     "urgency": "Urgency (overdue/risk)",
     "next_meeting": "Next meeting",
     "status": "Status",
@@ -448,15 +526,46 @@ PROJECT_SORT_LABELS = {
 
 
 def _overdue_count(project: dict) -> int:
+    """Count only commitments with explicit due dates that are overdue."""
     return sum(
-        1 for c in project.get("commitments", [])
-        if c.get("status", "").lower() == "overdue"
+        1 for c in project.get("commitments") or []
+        if isinstance(c, dict)
+        and c.get("status", "").lower() == "overdue"
+        and c.get("due_confidence", "explicit").lower() == "explicit"
+    )
+
+
+def _soft_overdue_count(project: dict) -> int:
+    """Count overdue commitments with inferred due dates (soft overdues)."""
+    return sum(
+        1 for c in project.get("commitments") or []
+        if isinstance(c, dict)
+        and c.get("status", "").lower() == "overdue"
+        and c.get("due_confidence", "explicit").lower() != "explicit"
+    )
+
+
+def _involvement_rank(project: dict) -> int:
+    """Return sort rank for involvement: lead=0, contributor=1, observer=2."""
+    return _INVOLVEMENT_ORDER.get(
+        project.get("involvement", "observer").lower(), 2
     )
 
 
 def _sort_projects(projects: list[dict], mode: str) -> list[dict]:
     """Sort projects by the given mode. Returns a new list."""
-    if mode == "urgency":
+    if mode == "relevance":
+        # Involvement first (lead > contributor > observer), then risk, then
+        # explicit overdue count, then status, then alpha.  This puts YOUR
+        # projects first and pushes observer/low-risk projects to the bottom.
+        return sorted(projects, key=lambda p: (
+            _involvement_rank(p),
+            _RISK_ORDER.get(p.get("risk_level", "medium").lower(), 2),
+            -_overdue_count(p),
+            _STATUS_ORDER.get(p.get("status", "active").lower(), 0),
+            p.get("project", p.get("_id", "")).lower(),
+        ))
+    elif mode == "urgency":
         # Overdue count desc, then risk severity, then status, then alpha
         return sorted(projects, key=lambda p: (
             -_overdue_count(p),
@@ -815,6 +924,43 @@ class ProjectStatusModal(ModalScreen):
         self.dismiss(None)
 
 
+class InvolvementModal(ModalScreen):
+    """Modal for changing a project's involvement level."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, project: dict, **kwargs):
+        super().__init__(**kwargs)
+        self._project = project
+
+    def compose(self) -> ComposeResult:
+        name = self._project.get("project", "?")
+        current = self._project.get("involvement", "observer")
+        with Widget(id="status-dialog"):
+            yield Label(f"Set involvement: {name}", id="status-title")
+            yield Label(f"Current: [bold]{current}[/bold]", id="status-current")
+            yield Label("[dim]lead = you own it  |  contributor = you participate  |  observer = just CC'd[/dim]")
+            with Horizontal(id="status-buttons"):
+                for s in ("lead", "contributor", "observer"):
+                    variant = "primary" if s == current else "default"
+                    yield Button(s.capitalize(), id=f"inv-{s}", variant=variant)
+            yield Button("Cancel (Esc)", id="inv-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "inv-cancel":
+            self.dismiss(None)
+        elif bid.startswith("inv-"):
+            new_inv = bid[4:]  # strip "inv-"
+            if new_inv in ("lead", "contributor", "observer"):
+                self.dismiss(new_inv)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class CommitmentModal(ModalScreen):
     """Modal for marking commitments as done."""
 
@@ -827,8 +973,8 @@ class CommitmentModal(ModalScreen):
         self._project = project
         # Only show open/overdue commitments
         self._actionable = [
-            c for c in project.get("commitments", [])
-            if c.get("status", "").lower() in ("open", "overdue")
+            c for c in project.get("commitments") or []
+            if isinstance(c, dict) and c.get("status", "").lower() in ("open", "overdue")
         ]
 
     def compose(self) -> ComposeResult:
@@ -1492,9 +1638,9 @@ class TodayPane(Widget):
         if project:
             proj_name = project.get("project", "?")
             lines += ["", f"[bold cyan]Project: {proj_name}[/bold cyan]"]
-            commitments = project.get("commitments", [])
-            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
-            open_items = [c for c in commitments if c.get("status", "").lower() == "open"]
+            commitments = project.get("commitments") or []
+            overdue = [c for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "overdue"]
+            open_items = [c for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "open"]
             if overdue:
                 lines.append(f"[bold red]{len(overdue)} overdue commitments:[/bold red]")
                 for c in overdue[:4]:
@@ -1505,10 +1651,13 @@ class TodayPane(Widget):
                     due = c.get("due", "")
                     due_tag = f"  (due: {due})" if due else ""
                     lines.append(f"  [yellow]- {c.get('what', '?')[:45]}{due_tag}[/yellow]")
-            stakeholders = project.get("stakeholders", [])
+            stakeholders = project.get("stakeholders") or []
             if stakeholders:
                 lines += ["", "[bold]Stakeholders:[/bold]"]
                 for s in stakeholders[:5]:
+                    if not isinstance(s, dict):
+                        lines.append(f"  {s}")
+                        continue
                     role = f" ({s['role']})" if s.get("role") else ""
                     lines.append(f"  {s.get('name', '?')}{role}")
 
@@ -1681,7 +1830,7 @@ class ProjectsPane(Widget):
         super().__init__(**kwargs)
         self._projects: list[dict] = []
         self._selected_idx: int = 0
-        self._sort_mode: str = "urgency"  # default: most actionable first
+        self._sort_mode: str = "relevance"  # default: your projects first
 
     def _title_width(self) -> int:
         """Max character width for project names in list items."""
@@ -1730,12 +1879,26 @@ class ProjectsPane(Widget):
             name = p.get("project", p.get("_id", "?"))[:tw]
             status = p.get("status", "active")
             risk = p.get("risk_level", "medium")
+            involvement = p.get("involvement", "observer").lower()
             sc = self.PROJECT_STATUS_COLORS.get(status, "white")
             rc = self.RISK_COLORS.get(risk, "white")
 
+            # Involvement badge
+            if involvement == "lead":
+                inv_badge = "[bold #00CC88]lead[/bold #00CC88]"
+            elif involvement == "contributor":
+                inv_badge = "[#00D4FF]contrib[/#00D4FF]"
+            else:
+                inv_badge = "[dim]observer[/dim]"
+
             overdue = _overdue_count(p)
-            overdue_badge = f"  [bold red]({overdue} overdue)[/bold red]" if overdue else ""
-            text = f"[{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{overdue_badge}"
+            soft_overdue = _soft_overdue_count(p)
+            badges = ""
+            if overdue:
+                badges += f"  [bold red]({overdue} overdue)[/bold red]"
+            if soft_overdue:
+                badges += f"  [dim yellow]({soft_overdue} soft due)[/dim yellow]"
+            text = f"{inv_badge}  [{sc}]{status}[/{sc}]  [{rc}]{risk}[/{rc}]  {name}{badges}"
             lv.append(ListItem(Label(text)))
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -1763,6 +1926,30 @@ class ProjectsPane(Widget):
         self.notify(f"Sort: {label}")
 
     # -- Project actions --
+
+    def update_involvement_selected(self) -> None:
+        """Open involvement modal for selected project."""
+        project = self.get_selected_project()
+        if project:
+            self.app.push_screen(InvolvementModal(project), self._on_involvement_result)
+
+    def _on_involvement_result(self, result) -> None:
+        if result is None:
+            return
+        project = self.get_selected_project()
+        if not project:
+            return
+        project_id = project.get("_id", "")
+        if not project_id:
+            return
+        old_inv = project.get("involvement", "observer")
+        project["involvement"] = result
+        project["updated_at"] = datetime.now().isoformat()
+        if _save_project_yaml(project_id, project):
+            self.notify(f"Involvement: {old_inv} -> {result}")
+            self.load_data()
+        else:
+            self.notify("Failed to save project", severity="error")
 
     def update_status_selected(self) -> None:
         """Open status modal for selected project."""
@@ -1870,89 +2057,115 @@ class ProjectsPane(Widget):
     def _show_detail(self, project: dict) -> None:
         detail = self.query_one(".detail-container Static", Static)
 
+        involvement = project.get("involvement", "observer")
+        inv_label = {"lead": "[bold #00CC88]Lead[/bold #00CC88]",
+                     "contributor": "[#00D4FF]Contributor[/#00D4FF]",
+                     "observer": "[dim]Observer[/dim]"}.get(involvement.lower(), involvement)
         lines = [
             f"[bold]{project.get('project', '?')}[/bold]",
-            f"Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
-            "",
-            project.get("summary", ""),
-            "",
-            "[dim]Actions: U=status  C=done  R=research  D=digest  N=note[/dim]",
+            f"Role: {inv_label}  |  Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
         ]
 
-        # Commitments — overdue first, then open, highlighted
+        # MSX / CRM block (top priority when present)
+        msx = project.get("msx")
+        if isinstance(msx, dict) and msx:
+            lines += ["", "[bold magenta]CRM Pipeline[/bold magenta]"]
+            acct = msx.get("account_name", "")
+            if acct:
+                lines.append(f"  Account: {acct}")
+            stage = msx.get("stage", "")
+            if stage:
+                rev = msx.get("revenue", "")
+                rev_str = f"  |  Revenue: {rev}" if rev else ""
+                lines.append(f"  Stage: {stage}{rev_str}")
+            close = msx.get("close_date", "")
+            if close:
+                lines.append(f"  Close date: {close}")
+            in_team = msx.get("in_deal_team")
+            if in_team is not None:
+                badge = "[green]Yes[/green]" if in_team else "[red]No[/red]"
+                lines.append(f"  In deal team: {badge}")
+            # Milestones — show at-risk or upcoming only
+            milestones = msx.get("milestones") or []
+            notable = [m for m in milestones if isinstance(m, dict)
+                       and m.get("status", "").lower() in ("at-risk", "overdue", "blocked")]
+            if notable:
+                lines.append(f"  [yellow]Milestones at risk ({len(notable)}):[/yellow]")
+                for m in notable[:3]:
+                    lines.append(f"    {m.get('name', '?')} — {m.get('status', '?')} (due {m.get('date', '?')})")
+            notes = msx.get("notes", "")
+            if notes:
+                lines.append(f"  [dim]{notes[:120]}[/dim]")
+
+        # Summary
+        summary = project.get("summary", "")
+        if summary:
+            lines += ["", summary]
+
+        # Key dates (upcoming/critical deadlines)
+        key_dates = project.get("key_dates", [])
+        if key_dates:
+            lines += ["", "[bold yellow]Key Dates[/bold yellow]"]
+            for kd in key_dates[:5]:
+                if isinstance(kd, dict):
+                    urgency = kd.get("urgency", "")
+                    color = "bold red" if urgency == "critical" else "yellow"
+                    lines.append(f"  [{color}]{kd.get('date', '?')}[/{color}] — {kd.get('event', '?')}")
+
+        # Commitments (open + overdue only)
         commitments = project.get("commitments", [])
-        if commitments:
-            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
-            upcoming = [c for c in commitments if c.get("status", "").lower() == "open"]
-            done = [c for c in commitments if c.get("status", "").lower() in ("done", "cancelled")]
+        actionable = [c for c in commitments if isinstance(c, dict)
+                      and c.get("status", "").lower() in ("open", "overdue")]
+        if actionable:
+            lines += ["", "[bold]Commitments[/bold]"]
+            for c in actionable[:6]:
+                status = c.get("status", "open").lower()
+                color = "bold red" if status == "overdue" else "yellow"
+                due = c.get("due", "")
+                due_str = f"  (due: {due})" if due else ""
+                lines.append(f"  [{color}]{c.get('what', '?')[:60]}{due_str}[/{color}]")
 
-            if overdue:
-                lines += ["", "[bold red]Overdue commitments:[/bold red]"]
-                for c in overdue:
-                    what = c.get("what", "?")
-                    due = c.get("due", "")
-                    who = c.get("who", "")
-                    to = c.get("to", "")
-                    line = f"  [red][OVERDUE][/red] {what}"
-                    if due:
-                        line += f"  (due: {due})"
-                    if who:
-                        line += f"  — {who}"
-                    if to:
-                        line += f" to {to}"
-                    lines.append(line)
-
-            if upcoming:
-                lines += ["", "[bold yellow]Open commitments:[/bold yellow]"]
-                for c in upcoming:
-                    what = c.get("what", "?")
-                    due = c.get("due", "")
-                    who = c.get("who", "")
-                    color = "yellow"
-                    line = f"  [{color}][OPEN][/{color}] {what}"
-                    if due:
-                        line += f"  (due: {due})"
-                    if who:
-                        line += f"  — {who}"
-                    lines.append(line)
-
-            if done:
-                lines += ["", "[dim]Completed/cancelled:[/dim]"]
-                for c in done[:3]:  # Show max 3
-                    what = c.get("what", "?")
-                    lines.append(f"  [dim][{c.get('status', '?').upper()}] {what}[/dim]")
-
-        # Linked inbox items (digest items referencing this project)
+        # Linked inbox items
         project_id = project.get("_id", "")
         if project_id:
             linked = self._get_linked_items(project_id)
             if linked:
-                lines += ["", f"[bold cyan]Linked inbox items ({len(linked)}):[/bold cyan]"]
-                for item in linked[:5]:  # Show max 5
+                lines += ["", f"[bold cyan]Inbox ({len(linked)})[/bold cyan]"]
+                for item in linked[:5]:
                     p_color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
-                    title = item.get("title", "?")[:50]
-                    lines.append(f"  [{p_color}][{item.get('priority', '?').upper()}][/{p_color}] {title}")
+                    title = item.get("title", "?")[:55]
+                    lines.append(f"  [{p_color}]{title}[/{p_color}]")
 
-        # Stakeholders
+        # Stakeholders (top 5, compact)
         stakeholders = project.get("stakeholders", [])
         if stakeholders:
-            lines += ["", "[bold]Stakeholders:[/bold]"]
-            for s in stakeholders:
-                name = s.get("name", "?")
-                role = s.get("role", "")
-                lines.append(f"  {name}" + (f" ({role})" if role else ""))
+            lines += ["", "[bold]Stakeholders[/bold]"]
+            for s in stakeholders[:5]:
+                if isinstance(s, dict):
+                    role = s.get("role", "")
+                    org = s.get("org", "")
+                    suffix = f" — {role}" if role else ""
+                    if org:
+                        suffix += f" ({org})"
+                    lines.append(f"  {s.get('name', '?')}{suffix}")
+            if len(stakeholders) > 5:
+                lines.append(f"  [dim]+{len(stakeholders) - 5} more[/dim]")
 
-        # Next meeting + key dates
+        # Recent timeline (last 5 entries, no source paths)
+        timeline = project.get("timeline", [])
+        if timeline:
+            recent = timeline[-5:]
+            lines += ["", "[bold]Recent Activity[/bold]"]
+            for t in recent:
+                if isinstance(t, dict):
+                    lines.append(f"  [dim]{t.get('date', '?')}[/dim]  {t.get('event', '?')[:80]}")
+
+        # Next meeting
         next_mtg = project.get("next_meeting", "")
         if next_mtg:
-            lines += ["", f"Next meeting: [cyan]{next_mtg}[/cyan]"]
+            lines += ["", f"[bold]Next meeting:[/bold] {next_mtg}"]
 
-        key_dates = project.get("key_dates", [])
-        if key_dates:
-            lines += ["", "[bold]Key dates:[/bold]"]
-            for kd in key_dates[:5]:
-                lines.append(f"  {kd.get('date', '?')} — {kd.get('event', '?')}")
-
+        lines += ["", "[dim]Actions: U=status  I=involvement  C=done  R=research  D=digest  N=note[/dim]"]
         detail.update("\n".join(lines))
 
     def _get_linked_items(self, project_id: str) -> list[dict]:
@@ -2335,7 +2548,7 @@ class ChatPane(Widget):
             self._wait_ticks += 1
             if self._wait_ticks == 12:
                 chat_log.write("[dim]Processing... (start daemon if stuck)[/dim]")
-            elif self._wait_ticks >= 90:  # 90s timeout
+            elif self._wait_ticks >= 600:  # 10 min timeout
                 chat_log.write("[dim red]Request timed out — is the daemon running?[/dim red]")
                 chat_log.write("")
                 self._streaming = False

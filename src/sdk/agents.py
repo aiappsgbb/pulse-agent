@@ -46,6 +46,46 @@ def workiq_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> M
     )
 
 
+def is_msx_available() -> bool:
+    """Check if MSX-MCP plugin is installed (without building full config).
+
+    Reusable lightweight check — used by pre-processing to decide whether
+    to inject MSX prompt blocks. Avoids constructing a full MCPLocalServerConfig.
+    """
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        if (Path.home() / ".copilot" / "installed-plugins" / subdir).exists():
+            return True
+    return False
+
+
+def msx_install_info() -> dict:
+    """Return diagnostic info about MSX-MCP installation.
+
+    Used for logging when MSX tool calls fail — tells you WHERE the plugin
+    is installed, what entry point it uses, and whether auth deps exist.
+    Returns dict with: installed, path, entry_point, has_node, has_az_cli.
+    """
+    import shutil
+    info = {"installed": False, "path": None, "entry_point": None,
+            "has_node": shutil.which("node") is not None,
+            "has_az_cli": shutil.which("az") is not None}
+
+    for subdir in ("_direct/MSX-MCP-main", "copilot-plugins/msx-mcp"):
+        plugin_dir = Path.home() / ".copilot" / "installed-plugins" / subdir
+        if plugin_dir.exists():
+            info["installed"] = True
+            info["path"] = str(plugin_dir)
+            bootstrap = plugin_dir / "scripts" / "bootstrap.mjs"
+            if bootstrap.exists():
+                info["entry_point"] = str(bootstrap)
+            else:
+                dist = plugin_dir / "dist" / "index.js"
+                info["entry_point"] = str(dist) if dist.exists() else "MISSING"
+            break
+
+    return info
+
+
 def msx_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig | None:
     """MSX-MCP config — Dataverse/CRM tools for MSX pipeline data.
 
@@ -154,8 +194,15 @@ def _mcp_config(name: str, config: dict, cdp_endpoint: str | None = None) -> MCP
 
 def load_agent(name: str, config: dict) -> CustomAgentConfig:
     """Load an agent definition from config/prompts/agents/{name}.md."""
+    from sdk.prompts import load_enrichments, ENRICHMENTS_DIR
+
     path = CONFIG_DIR / "prompts" / "agents" / f"{name}.md"
     front_matter, prompt = parse_front_matter(path)
+
+    # Append feature-specific enrichments (e.g., CRM missions for knowledge-miner)
+    enrichment = load_enrichments(name)
+    if enrichment:
+        prompt += "\n\n" + enrichment
 
     agent_cfg: CustomAgentConfig = {
         "name": front_matter["name"],
@@ -166,7 +213,20 @@ def load_agent(name: str, config: dict) -> CustomAgentConfig:
     }
 
     # Add MCP servers if specified (filter unconfigured ones)
-    mcp_names = front_matter.get("mcp_servers", [])
+    mcp_names = list(front_matter.get("mcp_servers", []))
+
+    # Auto-inject MCP servers from enrichments — if an enrichment file
+    # was loaded, the agent also needs the corresponding MCP server.
+    # e.g., msx-knowledge-miner.md enrichment → add 'msx' MCP server.
+    for prefix, checker_path in _ENRICHMENT_MCP_MAP:
+        enrichment_file = ENRICHMENTS_DIR / f"{prefix}-{name}.md"
+        if enrichment_file.exists() and prefix not in mcp_names:
+            module_path, func_name = checker_path.rsplit(".", 1)
+            import importlib
+            mod = importlib.import_module(module_path)
+            if getattr(mod, func_name)():
+                mcp_names.append(prefix)
+
     if mcp_names:
         mcp_cfgs = {}
         for s in mcp_names:
@@ -177,6 +237,12 @@ def load_agent(name: str, config: dict) -> CustomAgentConfig:
             agent_cfg["mcp_servers"] = mcp_cfgs
 
     return agent_cfg
+
+
+# Maps enrichment prefix → availability checker for auto-injecting MCP servers
+_ENRICHMENT_MCP_MAP: list[tuple[str, str]] = [
+    ("msx", "sdk.agents.is_msx_available"),
+]
 
 
 def load_agents(names: list[str], config: dict) -> list[CustomAgentConfig]:

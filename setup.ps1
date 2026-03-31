@@ -256,10 +256,8 @@ Write-Ok "Pulse-Team: $pulseTeam"
 Write-Step "Checking standing-instructions..."
 $siDest = Join-Path $pulseHome "standing-instructions.yaml"
 $siTemplate = Join-Path $root "config\standing-instructions.template.yaml"
-$siDefault = Join-Path $root "config\standing-instructions.yaml"
 
-# Prefer template if it exists, otherwise fall back to default
-$siSource = if (Test-Path $siTemplate) { $siTemplate } else { $siDefault }
+$siSource = $siTemplate
 
 if (-not (Test-Path $siDest)) {
     if (Test-Path $siSource) {
@@ -324,7 +322,8 @@ Write-Host "  PULSE_HOME:  $pulseHome" -ForegroundColor DarkGray
 Write-Host "  Pulse-Team:  $pulseTeam" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
-Write-Host "  1. Open Edge and sign into teams.microsoft.com (one time)" -ForegroundColor White
+Write-Host "  1. Run:  .venv\Scripts\activate && python src\pulse.py --health-check" -ForegroundColor White
+Write-Host "     (This opens Pulse's browser profile — sign into Teams there, not regular Edge)" -ForegroundColor Yellow
 Write-Host "  2. Double-click 'Start Pulse' on your Desktop" -ForegroundColor White
 Write-Host "  3. The Chat tab will walk you through final setup" -ForegroundColor White
 Write-Host ""

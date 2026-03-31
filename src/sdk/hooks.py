@@ -52,9 +52,21 @@ def make_post_tool_use_hook():
 
     def hook(input_data, context):
         try:
-            tool_name = input_data.get("toolName", "unknown")
-            tool_args = input_data.get("toolArgs")
-            tool_result = input_data.get("toolResult")
+            # SDK may pass non-dict input_data — safely extract fields
+            if isinstance(input_data, dict):
+                tool_name = input_data.get("toolName", "unknown")
+                tool_args = input_data.get("toolArgs")
+                tool_result = input_data.get("toolResult")
+            elif hasattr(input_data, "tool_name"):
+                # SDK object with attributes
+                tool_name = getattr(input_data, "tool_name", "unknown")
+                tool_args = getattr(input_data, "tool_args", None)
+                tool_result = getattr(input_data, "tool_result", None)
+            else:
+                # Fallback — log what we got for debugging
+                tool_name = "unknown"
+                tool_args = None
+                tool_result = str(input_data)[:500]
 
             # Truncate for audit log — keep it manageable but show full errors
             args_str = str(tool_args)[:500] if tool_args else ""
@@ -79,8 +91,15 @@ def make_pre_tool_use_hook():
 
     def hook(input_data, context):
         try:
-            tool_name = input_data.get("toolName", "")
-            tool_args = input_data.get("toolArgs") or {}
+            # SDK may pass non-dict input_data — safely extract fields
+            if isinstance(input_data, dict):
+                tool_name = input_data.get("toolName", "")
+                tool_args = input_data.get("toolArgs") or {}
+            elif hasattr(input_data, "tool_name"):
+                tool_name = getattr(input_data, "tool_name", "")
+                tool_args = getattr(input_data, "tool_args", None) or {}
+            else:
+                return None  # can't inspect — fail open
 
             # Guardrail: block path traversal in write_output
             if tool_name == "write_output":
@@ -115,9 +134,18 @@ def make_error_occurred_hook():
 
     def hook(input_data, context):
         try:
-            error = input_data.get("error", "Unknown error")
-            error_context = input_data.get("errorContext", "unknown")
-            recoverable = input_data.get("recoverable", False)
+            if isinstance(input_data, dict):
+                error = input_data.get("error", "Unknown error")
+                error_context = input_data.get("errorContext", "unknown")
+                recoverable = input_data.get("recoverable", False)
+            elif hasattr(input_data, "error"):
+                error = getattr(input_data, "error", "Unknown error")
+                error_context = getattr(input_data, "error_context", getattr(input_data, "errorContext", "unknown"))
+                recoverable = getattr(input_data, "recoverable", False)
+            else:
+                error = str(input_data)[:500]
+                error_context = "unknown"
+                recoverable = False
 
             _write_audit_entry({
                 "timestamp": datetime.now().isoformat(),
@@ -150,7 +178,15 @@ def make_session_end_hook(mode: str, start_time: float):
 
     def hook(input_data, context):
         try:
-            reason = input_data.get("reason", "unknown")
+            if isinstance(input_data, dict):
+                reason = input_data.get("reason", "unknown")
+                error = input_data.get("error")
+            elif hasattr(input_data, "reason"):
+                reason = getattr(input_data, "reason", "unknown")
+                error = getattr(input_data, "error", None)
+            else:
+                reason = "unknown"
+                error = None
             duration = time.time() - start_time
 
             entry = {
@@ -162,7 +198,6 @@ def make_session_end_hook(mode: str, start_time: float):
                 "session_id": _ctx_session_id(context),
             }
 
-            error = input_data.get("error")
             if error:
                 entry["error"] = str(error)[:500]
 

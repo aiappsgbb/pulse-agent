@@ -430,10 +430,11 @@ async def _type_and_send(page, message: str, target: str) -> dict:
 
     await page.wait_for_timeout(300)
 
-    # Clear compose box via direct DOM manipulation.
+    # Clear compose box via DOM manipulation.
     # Ctrl+A/Backspace is unreliable with CKEditor — it may not clear drafts
-    # that Teams auto-saved server-side. Direct innerHTML/textContent reset
-    # bypasses CKEditor's event handlers entirely.
+    # that Teams auto-saved server-side.
+    # NOTE: Teams enforces Trusted Types CSP — innerHTML is blocked.
+    # Use replaceChildren() + textContent instead.
     cleared = await page.evaluate("""
     () => {
         const selectors = [
@@ -445,8 +446,7 @@ async def _type_and_send(page, message: str, target: str) -> dict:
         for (const sel of selectors) {
             const el = document.querySelector(sel);
             if (el) {
-                // Clear both innerHTML and textContent to handle all CKEditor states
-                el.innerHTML = '';
+                el.replaceChildren();
                 el.textContent = '';
                 el.focus();
                 return true;
@@ -504,7 +504,7 @@ async def _type_and_send(page, message: str, target: str) -> dict:
             ];
             for (const sel of selectors) {
                 const el = document.querySelector(sel);
-                if (el) { el.innerHTML = ''; el.textContent = ''; el.focus(); return; }
+                if (el) { el.replaceChildren(); el.textContent = ''; el.focus(); return; }
             }
         }
         """)

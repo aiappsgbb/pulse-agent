@@ -43,6 +43,19 @@ DAEMON_PROFILE = "pulse-daemon-profile"
 # Idle timeout: browser shuts down after this many seconds without a new_page() call
 BROWSER_IDLE_TIMEOUT = 120  # 2 minutes
 
+# Browser usage lock — serializes browser-based jobs so two workers
+# don't navigate the same Edge instance to Teams simultaneously.
+# Teams SPA detects concurrent sessions and refuses to load.
+_browser_use_lock: asyncio.Lock | None = None
+
+
+def get_browser_use_lock() -> asyncio.Lock:
+    """Get the browser usage lock (created lazily like _manager_lock)."""
+    global _browser_use_lock
+    if _browser_use_lock is None:
+        _browser_use_lock = asyncio.Lock()
+    return _browser_use_lock
+
 
 def get_browser_manager() -> "BrowserManager | None":
     """Get the shared browser manager, or None if not started."""

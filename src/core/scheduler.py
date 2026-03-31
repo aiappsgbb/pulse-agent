@@ -47,8 +47,14 @@ def is_office_hours(config: dict) -> bool:
 
     start = office.get("start", "08:00")
     end = office.get("end", "18:00")
-    start_h, start_m = map(int, start.split(":"))
-    end_h, end_m = map(int, end.split(":"))
+    try:
+        start_parts = str(start).split(":")
+        end_parts = str(end).split(":")
+        start_h, start_m = int(start_parts[0]), int(start_parts[1]) if len(start_parts) > 1 else 0
+        end_h, end_m = int(end_parts[0]), int(end_parts[1]) if len(end_parts) > 1 else 0
+    except (ValueError, IndexError):
+        log.warning(f"  Malformed office hours (start={start!r}, end={end!r}) — defaulting to always-on")
+        return True
 
     now_mins = now.hour * 60 + now.minute
     return (start_h * 60 + start_m) <= now_mins < (end_h * 60 + end_m)
@@ -291,7 +297,7 @@ def reset_run(schedule_id: str):
 
 async def scheduler_loop(
     config: dict,
-    job_queue: asyncio.Queue,
+    job_queue,
     shutdown_event: asyncio.Event,
     check_interval: int = 60,
 ):
@@ -299,8 +305,12 @@ async def scheduler_loop(
 
     When a schedule is due, enqueues the job and marks it as run.
     Also pulls new job files from OneDrive each tick (inter-agent requests, etc.).
+
+    ``job_queue`` is an ``asyncio.PriorityQueue`` — jobs are enqueued via
+    ``enqueue_job()`` from ``daemon.worker`` so they respect priority ordering.
     """
     from daemon.sync import sync_jobs_from_onedrive
+    from daemon.worker import enqueue_job
     from tui.ipc import cleanup_orphaned_jobs
 
     log.info(f"Scheduler started (checking every {check_interval}s)")
@@ -333,7 +343,7 @@ async def scheduler_loop(
                         "_source": f"schedule:{schedule['id']}",
                         "_schedule_id": schedule["id"],
                     }
-                    job_queue.put_nowait(job)
+                    enqueue_job(job_queue, job, config)
                     # Mark as run immediately to prevent re-fire while job runs.
                     # On failure, the worker resets last_run to None for retry.
                     mark_run(schedule["id"])
