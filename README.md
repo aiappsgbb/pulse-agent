@@ -77,11 +77,11 @@ Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel)
 
 ### Option A: AI-assisted setup (recommended)
 
-Open **GitHub Copilot Chat** or any AI coding assistant and paste this:
+Open **GitHub Copilot Chat** or any AI coding assistant in the repo folder and paste this:
 
-> Follow the instructions at https://github.com/aiappsgbb/pulse-agent/blob/main/SETUP.md to set up Pulse Agent on my machine.
+> Follow the instructions in SETUP.md to set up Pulse Agent on my machine.
 
-Your AI will clone the repo, install all prerequisites, set up the environment, and verify everything works. No manual steps -- it handles Python, Node.js, GitHub CLI, WorkIQ, everything.
+Your AI will run the installer, install all prerequisites, set up the environment, and verify everything works. No manual steps -- it handles Python, Node.js, GitHub CLI, WorkIQ, everything.
 
 ### Option B: Double-click installer
 
@@ -96,7 +96,7 @@ Double-click **`install.bat`**. The installer automatically:
 
 ### After install
 
-1. Open Edge and sign into [teams.microsoft.com](https://teams.microsoft.com) (one time, for transcript/inbox scanning)
+1. Run `python src/pulse.py --health-check` -- this opens Pulse's dedicated browser profile for you to sign into Teams (do NOT use your regular Edge -- Pulse won't see that auth)
 2. Double-click **"Start Pulse"** on your Desktop
 3. On first run, the Chat tab walks you through personalization -- name, role, priorities, team members
 

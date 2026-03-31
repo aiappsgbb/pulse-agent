@@ -49,9 +49,46 @@ cd pulse-agent
 
 ---
 
-## Phase 2: Run the Automated Installer
+## Phase 2: GitHub CLI Authentication
 
-Run the installer — it handles Python, Node.js, GitHub CLI, WorkIQ, virtual environment, Playwright, data directories, config template, and Desktop shortcut automatically:
+Do this BEFORE running the installer — the installer needs an authenticated `gh` to install the Copilot CLI extension. Without this, the installer will warn and the user has to re-run it.
+
+Check if GitHub CLI is installed and authenticated:
+
+```powershell
+gh auth status
+```
+
+If `gh` is not found, install it first:
+
+```powershell
+winget install GitHub.cli --accept-source-agreements --accept-package-agreements
+```
+
+If not authenticated, start login:
+
+```powershell
+gh auth login
+```
+
+**Tell the user**: "A browser window will open — sign in with your GitHub account that has Copilot access. For Microsoft employees, this is typically your @microsoft-linked GitHub account. I'll wait."
+
+The `gh auth login` prompts will appear in the terminal. Select:
+1. **Account type**: GitHub.com
+2. **Preferred protocol**: HTTPS
+3. **Authenticate**: Login with a web browser
+
+Verify auth succeeded:
+
+```powershell
+gh auth status
+```
+
+---
+
+## Phase 3: Run the Automated Installer
+
+Now run the installer — it handles Python, Node.js, WorkIQ, Copilot CLI extension, virtual environment, Playwright, data directories, config template, and Desktop shortcut:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
@@ -62,47 +99,21 @@ Check the output. The script reports OK/WARN/FAIL for each step. Common outcomes
 | Output | Meaning | Action needed? |
 |--------|---------|----------------|
 | All green `OK` | Everything installed | No |
-| Yellow `WARN: GitHub CLI not authenticated` | Expected — we'll handle it next | No |
 | Yellow `WARN: WorkIQ installed but not on PATH` | PATH needs refresh | Close and reopen terminal |
 | Red `FAIL: Python install failed` | Rare — install manually from python.org | Yes |
+| `npm install -g` permission error | npm global install needs admin | Run terminal as Administrator and re-run `npm install -g @microsoft/workiq` |
 
 If setup.ps1 reports any FAIL, troubleshoot that specific step before continuing.
 
----
-
-## Phase 3: GitHub CLI Authentication
-
-This is the one interactive step — the user must complete a browser sign-in. Run the commands yourself and explain what's happening.
-
-Check auth status and start login if needed:
-
-```powershell
-gh auth status
-# If not authenticated:
-gh auth login
-```
-
-**Tell the user**: "A browser window will open — sign in with your GitHub account and approve. I'll wait."
-
-The `gh auth login` prompts will appear in the terminal. Select:
-1. **Account type**: GitHub.com
-2. **Preferred protocol**: HTTPS
-3. **Authenticate**: Login with a web browser
-
-After auth succeeds, install the Copilot CLI extension:
-
-```powershell
-gh extension install github/gh-copilot
-gh auth status
-```
+**Important**: The installer detects OneDrive for Business via the `OneDriveCommercial` environment variable (set automatically by the OneDrive sync client). If this isn't set, OneDrive for Business isn't syncing — the user must open OneDrive settings and sign in with their work account first, then restart the terminal.
 
 ---
 
 ## Phase 4: Browser Authentication
 
-**This is the most important step that people get wrong.** Pulse uses a dedicated Edge profile (separate from the user's normal Edge). Signing into Teams in the regular browser does NOT work.
+**This is the most important step that people get wrong.** Pulse uses a dedicated Edge browser profile (separate from the user's normal Edge). Signing into Teams in the user's regular browser does NOT work — Pulse won't see that auth.
 
-**Tell the user**: "I'm going to open a special browser window. Sign into Microsoft Teams with your work account, then close the window. This is a one-time step."
+**Tell the user**: "I'm going to run a health check that opens a special Pulse browser window. Sign into Microsoft Teams with your work account when it opens, then close the window. This is a one-time step."
 
 Activate the venv and run the health check — it detects missing auth and opens the browser automatically:
 
@@ -113,7 +124,7 @@ python src/pulse.py --health-check
 
 The health check will:
 1. Validate all installed components
-2. Detect missing Teams auth in Pulse's browser profile
+2. Detect missing Teams auth in Pulse's dedicated browser profile
 3. Ask: "Open browser to sign in now? [Y/n]" — accept
 4. Open a visible Edge window → user signs into Teams → closes window
 5. Verify auth succeeded
@@ -138,7 +149,9 @@ Pulse can integrate with CRM/pipeline data (deals, accounts, milestones) via a C
 copilot plugin install mcaps-microsoft/MSX-MCP
 ```
 
-This requires access to the `mcaps-microsoft` GitHub organization (Microsoft employees only). After install, authenticate with Azure CLI and verify:
+This requires access to the `mcaps-microsoft` GitHub organization (Microsoft employees only). The `copilot` command is a standalone binary installed by `gh copilot` — if it's not found, run `gh copilot` once to trigger the download, then retry.
+
+After install, authenticate with Azure CLI and verify:
 
 ```powershell
 az login
@@ -173,7 +186,7 @@ All checks should pass. The key ones:
 | CRM plugin | Optional | Pipeline/deal queries |
 | Config: user identity | No (next step) | Onboarding will set this |
 
-If any check fails, fix it before moving on. Run the test suite for extra confidence:
+If any required check fails, fix it before moving on. Run the test suite for extra confidence:
 
 ```powershell
 python -m pytest tests/ -q --tb=line
@@ -182,6 +195,8 @@ python -m pytest tests/ -q --tb=line
 ---
 
 ## Phase 7: First Run + Onboarding
+
+**Prerequisite**: GitHub CLI auth and Copilot CLI extension must be working (Phase 6 health check passed). Onboarding uses the Copilot SDK — if auth is broken, the chat conversation won't work.
 
 Launch Pulse with the setup flag — this starts the TUI and the onboarding conversation automatically:
 
@@ -233,10 +248,6 @@ Open a terminal in the repo folder and tell your AI assistant:
 
 The assistant will handle `git pull`, `pip install`, and `--health-check` automatically.
 
-### New in This Update: CRM Plugin Support
-
-Pulse now auto-detects Copilot CLI CRM plugins. Microsoft staff can install MSX-MCP (`copilot plugin install mcaps-microsoft/MSX-MCP`). External users with a compatible plugin can install per their internal docs. No config changes needed — just restart Pulse.
-
 ### Manual
 
 ```powershell
@@ -271,8 +282,10 @@ Data in PULSE_HOME is untouched — only code updates.
 | Python not on PATH | Close and reopen terminal |
 | `npm install -g` permission error | Run terminal as Administrator |
 | `gh auth login` fails | Ensure GitHub account has Copilot access |
+| `copilot` command not found | Run `gh copilot` once to download the Copilot CLI binary |
 | `playwright install msedge` fails | Update Edge: `edge://settings/help` |
 | Tests fail with import errors | Activate venv: `.venv\Scripts\activate` |
-| `OneDriveCommercial` not set | Open OneDrive settings, sign in with work account |
+| `OneDriveCommercial` not set | Open OneDrive settings, sign in with work account, restart terminal |
 | Transcript collection finds nothing | Re-run `--health-check` to verify browser auth |
 | "Browser launch failed" errors | Kill orphan Edge: `taskkill /F /IM msedge.exe` then retry |
+| Browser signed in but Pulse can't see auth | You signed into regular Edge, not Pulse's profile. Run `--health-check` to open the correct browser |
