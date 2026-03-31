@@ -181,13 +181,33 @@ Look for recurring names, companies, or initiatives across:
 
 **Before creating a new project, ALWAYS search `output/projects/` for the customer/company name.** If ANY file exists for that customer, update the existing file instead. One project file per customer engagement — sub-tasks, workshops, reviews, and meetings go as commitments or timeline entries, not separate files.
 
-If you find a customer/initiative mentioned 2+ times across different sources with no project file, create one with:
+**Discovery threshold — ALL THREE conditions must be met:**
+1. **3+ mentions** of the customer/initiative name across your data
+2. **2+ different source types** (e.g., transcript + email, not just two emails from the same thread)
+3. **At least one actionable element** — a commitment, deliverable, meeting series, deadline, or explicit ask directed at you. Passive mentions ("we discussed Contoso in the standup") do NOT count.
+
+If a customer is mentioned but doesn't meet the threshold, **do not create a project file**. Wait until there's enough signal. One-off meetings, CC'd emails, and passing references are NOT projects.
+
+When the threshold IS met, create with:
 - `involvement:` — assess from content (default to `observer` if unclear; only `lead` if you clearly own it)
 - `status: active`
 - `last_verified:` today's date
 - Initial timeline entries from the sources where you found it
 - Watch queries set for the key names/terms
 - `summary:` explaining how you discovered it
+
+## Curation Limits
+
+Project files must stay concise and scannable. Apply these hard limits when calling `update_project`:
+
+- **Stakeholders: max 6.** Only people with meaningful, ongoing roles (PM, lead, account owner, key technical contact). Drop one-time meeting attendees, people who were just CC'd, and Microsoft internal staff who attended a single session. If someone hasn't interacted in 30+ days, consider dropping them entirely rather than flagging.
+- **Related artifacts: max 6.** Keep only primary sources — the original email, the transcript, the key digest. Drop monitoring report variants (`.json` + `.md` of the same report), duplicate digest mentions, and intermediate triage reports. One artifact per distinct event, not per file format.
+- **Timeline: max 10 entries.** Consolidate repeated mentions into one entry (e.g., "Digest flagged X on Mar 26" + "Digest flagged X again on Mar 27" → single entry "Transcript request flagged in digests Mar 26-27, still outstanding"). Drop entries that just say "digest mentioned this" — that's noise, not a timeline event. Keep: status changes, meetings, decisions, escalations, deliveries.
+- **Tags: max 4.** Pick the most descriptive. Don't stack synonyms (e.g., `urgent` + `high-risk` + `critical-deadline` + `overdue-commitments` → just `critical-deadline`).
+- **Watch queries: max 3.** One per major search axis (customer name, key person, key topic). Not every stakeholder needs their own watch query.
+- **Summary: 1-2 sentences max.** Current state + what needs attention. Not a history recap.
+
+When updating a project that exceeds these limits, **prune to fit** — don't just append. Old monitoring report artifacts, redundant timeline entries, and inactive stakeholders should be dropped to make room for current information.
 
 ## Rules
 
@@ -198,7 +218,7 @@ If you find a customer/initiative mentioned 2+ times across different sources wi
 - **Be specific** — names, dates, amounts. No vague "someone mentioned something."
 - **Don't invent** — only persist what's explicitly mentioned in content or returned by WorkIQ.
 - **Dedup** — check if an email/message is already archived before saving. Search for sender name + key subject words.
-- **Timeline is append-only** — never remove timeline entries. Only add new ones. Use `[UPDATED]`, `[STALE]`, `[INFO]` prefixes for reconciliation entries.
+- **Timeline is append-only within a run, but prune across runs** — don't remove entries you just added. But when a project exceeds the 10-entry limit, drop the oldest low-value entries (digest mentions, repeated flags) to make room.
 - **Watch queries should be specific** — company names, people names, product names. Not generic like "project update."
 - **ONE project per customer engagement** — never create a second file for the same customer. Workshops, architecture reviews, whitepaper reviews, sub-meetings are commitments/timeline entries, not separate projects. The `update_project` tool will block duplicate slugs — take the hint and use the existing file.
 - **Project IDs** must be lowercase-hyphenated slugs: `hsbc-cloud-migration`, `contoso-renewal`

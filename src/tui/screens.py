@@ -2047,9 +2047,6 @@ class ProjectsPane(Widget):
 
     # -- Detail rendering --
 
-    # Keys rendered in the header — excluded from the generic section walk.
-    _HEADER_KEYS = {"project", "status", "risk_level", "involvement", "summary", "_file", "_id"}
-
     def _show_detail(self, project: dict) -> None:
         detail = self.query_one(".detail-container Static", Static)
 
@@ -2060,35 +2057,108 @@ class ProjectsPane(Widget):
         lines = [
             f"[bold]{project.get('project', '?')}[/bold]",
             f"Role: {inv_label}  |  Status: {project.get('status', '?')}  |  Risk: {project.get('risk_level', '?')}",
-            "",
-            project.get("summary", ""),
-            "",
-            "[dim]Actions: U=status  I=involvement  C=done  R=research  D=digest  N=note[/dim]",
         ]
 
-        # Linked inbox items (needs special lookup, not in YAML)
+        # MSX / CRM block (top priority when present)
+        msx = project.get("msx")
+        if isinstance(msx, dict) and msx:
+            lines += ["", "[bold magenta]CRM Pipeline[/bold magenta]"]
+            acct = msx.get("account_name", "")
+            if acct:
+                lines.append(f"  Account: {acct}")
+            stage = msx.get("stage", "")
+            if stage:
+                rev = msx.get("revenue", "")
+                rev_str = f"  |  Revenue: {rev}" if rev else ""
+                lines.append(f"  Stage: {stage}{rev_str}")
+            close = msx.get("close_date", "")
+            if close:
+                lines.append(f"  Close date: {close}")
+            in_team = msx.get("in_deal_team")
+            if in_team is not None:
+                badge = "[green]Yes[/green]" if in_team else "[red]No[/red]"
+                lines.append(f"  In deal team: {badge}")
+            # Milestones — show at-risk or upcoming only
+            milestones = msx.get("milestones", [])
+            notable = [m for m in milestones if isinstance(m, dict)
+                       and m.get("status", "").lower() in ("at-risk", "overdue", "blocked")]
+            if notable:
+                lines.append(f"  [yellow]Milestones at risk ({len(notable)}):[/yellow]")
+                for m in notable[:3]:
+                    lines.append(f"    {m.get('name', '?')} — {m.get('status', '?')} (due {m.get('date', '?')})")
+            notes = msx.get("notes", "")
+            if notes:
+                lines.append(f"  [dim]{notes[:120]}[/dim]")
+
+        # Summary
+        summary = project.get("summary", "")
+        if summary:
+            lines += ["", summary]
+
+        # Key dates (upcoming/critical deadlines)
+        key_dates = project.get("key_dates", [])
+        if key_dates:
+            lines += ["", "[bold yellow]Key Dates[/bold yellow]"]
+            for kd in key_dates[:5]:
+                if isinstance(kd, dict):
+                    urgency = kd.get("urgency", "")
+                    color = "bold red" if urgency == "critical" else "yellow"
+                    lines.append(f"  [{color}]{kd.get('date', '?')}[/{color}] — {kd.get('event', '?')}")
+
+        # Commitments (open + overdue only)
+        commitments = project.get("commitments", [])
+        actionable = [c for c in commitments if isinstance(c, dict)
+                      and c.get("status", "").lower() in ("open", "overdue")]
+        if actionable:
+            lines += ["", "[bold]Commitments[/bold]"]
+            for c in actionable[:6]:
+                status = c.get("status", "open").lower()
+                color = "bold red" if status == "overdue" else "yellow"
+                due = c.get("due", "")
+                due_str = f"  (due: {due})" if due else ""
+                lines.append(f"  [{color}]{c.get('what', '?')[:60]}{due_str}[/{color}]")
+
+        # Linked inbox items
         project_id = project.get("_id", "")
         if project_id:
             linked = self._get_linked_items(project_id)
             if linked:
-                lines += ["", f"[bold cyan]Linked inbox items ({len(linked)}):[/bold cyan]"]
+                lines += ["", f"[bold cyan]Inbox ({len(linked)})[/bold cyan]"]
                 for item in linked[:5]:
                     p_color = PRIORITY_COLORS.get(item.get("priority", "").lower(), "white")
-                    title = item.get("title", "?")[:50]
-                    lines.append(f"  [{p_color}][{item.get('priority', '?').upper()}][/{p_color}] {title}")
+                    title = item.get("title", "?")[:55]
+                    lines.append(f"  [{p_color}]{title}[/{p_color}]")
 
-        # Generic: render every remaining YAML key
-        for key in project:
-            if key in self._HEADER_KEYS or key.startswith("_"):
-                continue
-            value = project[key]
-            if value is None or value == "" or value == []:
-                continue
-            rendered = _render_yaml_value(key, value)
-            if rendered:
-                lines.append("")
-                lines.extend(rendered)
+        # Stakeholders (top 5, compact)
+        stakeholders = project.get("stakeholders", [])
+        if stakeholders:
+            lines += ["", "[bold]Stakeholders[/bold]"]
+            for s in stakeholders[:5]:
+                if isinstance(s, dict):
+                    role = s.get("role", "")
+                    org = s.get("org", "")
+                    suffix = f" — {role}" if role else ""
+                    if org:
+                        suffix += f" ({org})"
+                    lines.append(f"  {s.get('name', '?')}{suffix}")
+            if len(stakeholders) > 5:
+                lines.append(f"  [dim]+{len(stakeholders) - 5} more[/dim]")
 
+        # Recent timeline (last 5 entries, no source paths)
+        timeline = project.get("timeline", [])
+        if timeline:
+            recent = timeline[-5:]
+            lines += ["", "[bold]Recent Activity[/bold]"]
+            for t in recent:
+                if isinstance(t, dict):
+                    lines.append(f"  [dim]{t.get('date', '?')}[/dim]  {t.get('event', '?')[:80]}")
+
+        # Next meeting
+        next_mtg = project.get("next_meeting", "")
+        if next_mtg:
+            lines += ["", f"[bold]Next meeting:[/bold] {next_mtg}"]
+
+        lines += ["", "[dim]Actions: U=status  I=involvement  C=done  R=research  D=digest  N=note[/dim]"]
         detail.update("\n".join(lines))
 
     def _get_linked_items(self, project_id: str) -> list[dict]:

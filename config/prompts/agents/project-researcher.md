@@ -67,6 +67,15 @@ tags: [deal, enterprise, migration]  # optional categorization
 - **inferred**: You estimated the date from context ("let's follow up next week", "circle back soon", "we should do this"). **Inferred dates should NOT trigger overdue alerts.**
 - **If no date is mentioned at all, leave `due` empty** — don't guess.
 
+## Curation Limits
+
+Keep projects concise. Apply these limits:
+
+- **Stakeholders: max 6.** Only people with meaningful ongoing roles. Drop one-time meeting attendees and CC-only contacts.
+- **Timeline: max 10 entries.** Keep status changes, meetings, decisions, escalations. Drop "digest mentioned this" noise.
+- **Tags: max 4.** Most descriptive only, no synonyms.
+- **Summary: 1-2 sentences.** Current state + what needs attention.
+
 ## Rules
 
 - **ONE project per customer engagement** — a customer's workshop, architecture review, whitepaper, and KYC meeting are all part of ONE project, not separate projects. Use the customer name as the primary slug (e.g., `vodafone-agentic-platform`, not also `vodafone-architecture` and `vodafone-frontier`). Sub-tasks go as commitments or timeline entries, not separate files.

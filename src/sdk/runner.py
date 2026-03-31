@@ -450,7 +450,8 @@ def _build_projects_block(projects: list[dict]) -> str:
         stakeholders = project.get("stakeholders", [])
         if stakeholders:
             contacts = ", ".join(
-                f"{s.get('name', '?')} ({s.get('role', '?')})" if s.get("role") else s.get("name", "?")
+                (f"{s.get('name', '?')} ({s.get('role', '?')})" if s.get("role") else s.get("name", "?"))
+                if isinstance(s, dict) else str(s)
                 for s in stakeholders
             )
             lines.append(f"  Stakeholders: {contacts}")
@@ -500,15 +501,18 @@ def _build_projects_block(projects: list[dict]) -> str:
             if deal_team:
                 team_str = ", ".join(
                     f"{m.get('name', '?')} ({m.get('role', '?')})"
+                    if isinstance(m, dict) else str(m)
                     for m in deal_team[:6]
                 )
                 lines.append(f"  Deal team: {team_str}")
 
             # Active milestones (show up to 4 most relevant)
             milestones = msx.get("milestones", [])
-            if milestones:
+            if milestones and isinstance(milestones, list):
                 lines.append("  Milestones:")
                 for ms in milestones[:4]:
+                    if not isinstance(ms, dict):
+                        continue
                     ms_name = ms.get("name", "?")
                     ms_status = ms.get("status", "?")
                     ms_date = ms.get("date", "")
@@ -577,6 +581,8 @@ def _extract_commitments_summary(projects: list[dict]) -> str:
     for project in projects:
         project_name = project.get("project", project.get("_file", "?"))
         for c in project.get("commitments", []):
+            if not isinstance(c, dict):
+                continue
             if c.get("status") == "done":
                 continue
             open_count += 1
@@ -669,6 +675,8 @@ def _build_carry_forward(prev: dict | None) -> str:
     stale_count = 0
 
     for item in prev["items"]:
+        if not isinstance(item, dict):
+            continue
         item_date_str = item.get("date", "")
         try:
             item_date = datetime.strptime(item_date_str, "%Y-%m-%d").date()
@@ -750,6 +758,9 @@ def _validate_digest_json(date_str: str):
     items = data["items"]
     issues = []
     for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            issues.append(f"  item[{i}]: expected dict, got {type(item).__name__}")
+            continue
         missing = REQUIRED_ITEM_FIELDS - set(item.keys())
         if missing:
             issues.append(f"  item[{i}] ({item.get('id', '?')}): missing {missing}")
