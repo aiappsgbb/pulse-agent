@@ -6,6 +6,7 @@ Extracted from main.py so they can be imported by the unified entry point
 
 import asyncio
 import json
+import time
 from datetime import datetime
 
 from core.constants import PULSE_HOME, JOBS_DIR
@@ -144,14 +145,28 @@ async def _handle_chat_request(client, config: dict, prompt: str, request_id: st
     clear_chat_stream()
 
     _delta_written = False
+    _last_activity = time.monotonic()
 
     def _tui_delta(text: str) -> None:
-        nonlocal _delta_written
+        nonlocal _delta_written, _last_activity
         _delta_written = True
+        _last_activity = time.monotonic()
         write_chat_delta(text, request_id)
 
     def _tui_status(text: str) -> None:
+        nonlocal _last_activity
+        _last_activity = time.monotonic()
         write_chat_status(text, request_id)
+
+    # Heartbeat: write periodic status so TUI knows daemon is alive during
+    # long LLM thinking pauses (before first tool call / between tool calls).
+    async def _heartbeat():
+        while True:
+            await asyncio.sleep(15)
+            if time.monotonic() - _last_activity > 15:
+                write_chat_status("Thinking...", request_id)
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
 
     try:
         result = await run_chat_query(client, config, prompt, on_delta=_tui_delta, on_status=_tui_status)
@@ -163,6 +178,7 @@ async def _handle_chat_request(client, config: dict, prompt: str, request_id: st
         log.error(f"  Chat fast-lane error: {e}")
         write_chat_delta(f"Error: {e}\n", request_id)
     finally:
+        heartbeat_task.cancel()
         finish_chat_stream(request_id)
 
     # Process any browser actions the agent queued
