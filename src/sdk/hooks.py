@@ -52,9 +52,21 @@ def make_post_tool_use_hook():
 
     def hook(input_data, context):
         try:
-            tool_name = input_data.get("toolName", "unknown")
-            tool_args = input_data.get("toolArgs")
-            tool_result = input_data.get("toolResult")
+            # SDK may pass non-dict input_data — safely extract fields
+            if isinstance(input_data, dict):
+                tool_name = input_data.get("toolName", "unknown")
+                tool_args = input_data.get("toolArgs")
+                tool_result = input_data.get("toolResult")
+            elif hasattr(input_data, "tool_name"):
+                # SDK object with attributes
+                tool_name = getattr(input_data, "tool_name", "unknown")
+                tool_args = getattr(input_data, "tool_args", None)
+                tool_result = getattr(input_data, "tool_result", None)
+            else:
+                # Fallback — log what we got for debugging
+                tool_name = "unknown"
+                tool_args = None
+                tool_result = str(input_data)[:500]
 
             # Truncate for audit log — keep it manageable but show full errors
             args_str = str(tool_args)[:500] if tool_args else ""
@@ -79,8 +91,15 @@ def make_pre_tool_use_hook():
 
     def hook(input_data, context):
         try:
-            tool_name = input_data.get("toolName", "")
-            tool_args = input_data.get("toolArgs") or {}
+            # SDK may pass non-dict input_data — safely extract fields
+            if isinstance(input_data, dict):
+                tool_name = input_data.get("toolName", "")
+                tool_args = input_data.get("toolArgs") or {}
+            elif hasattr(input_data, "tool_name"):
+                tool_name = getattr(input_data, "tool_name", "")
+                tool_args = getattr(input_data, "tool_args", None) or {}
+            else:
+                return None  # can't inspect — fail open
 
             # Guardrail: block path traversal in write_output
             if tool_name == "write_output":

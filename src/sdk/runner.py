@@ -1284,8 +1284,10 @@ async def run_knowledge_init_phases(client, config: dict, job_log_file: str | No
         log.warning("  Archive phase timed out after 5 minutes (continuing to enrichment)")
         _log_pipeline("error", preview="Archive phase timed out after 5 minutes")
     except Exception as e:
-        log.warning(f"  Archive phase failed: {e} (continuing to enrichment)")
-        _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}")
+        import traceback
+        tb = traceback.format_exc()
+        log.warning(f"  Archive phase failed: {e}\n{tb}")
+        _log_pipeline("error", preview=f"Archive phase failed: {str(e)[:200]}\n{tb[-500:]}")
 
     log.info("  Knowledge init (Phase 0+1) complete.")
 
