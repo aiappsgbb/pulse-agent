@@ -2548,7 +2548,7 @@ class ChatPane(Widget):
             self._wait_ticks += 1
             if self._wait_ticks == 12:
                 chat_log.write("[dim]Processing... (start daemon if stuck)[/dim]")
-            elif self._wait_ticks >= 90:  # 90s timeout
+            elif self._wait_ticks >= 600:  # 10 min timeout
                 chat_log.write("[dim red]Request timed out — is the daemon running?[/dim red]")
                 chat_log.write("")
                 self._streaming = False
