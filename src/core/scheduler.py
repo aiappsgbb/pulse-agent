@@ -47,8 +47,14 @@ def is_office_hours(config: dict) -> bool:
 
     start = office.get("start", "08:00")
     end = office.get("end", "18:00")
-    start_h, start_m = map(int, start.split(":"))
-    end_h, end_m = map(int, end.split(":"))
+    try:
+        start_parts = str(start).split(":")
+        end_parts = str(end).split(":")
+        start_h, start_m = int(start_parts[0]), int(start_parts[1]) if len(start_parts) > 1 else 0
+        end_h, end_m = int(end_parts[0]), int(end_parts[1]) if len(end_parts) > 1 else 0
+    except (ValueError, IndexError):
+        log.warning(f"  Malformed office hours (start={start!r}, end={end!r}) — defaulting to always-on")
+        return True
 
     now_mins = now.hour * 60 + now.minute
     return (start_h * 60 + start_m) <= now_mins < (end_h * 60 + end_m)

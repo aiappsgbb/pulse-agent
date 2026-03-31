@@ -42,25 +42,17 @@ For each active project WITH an `msx.opportunity_id` (including newly linked one
 
 ### Mission C: Deal Portfolio Discovery
 
-Discover deals you're on the team for but DON'T have project files:
+Link CRM deals to existing projects and flag untracked deals — but do NOT auto-create projects for every deal.
 
 1. Call `msx-get_my_deals` — get ALL opportunities where you're on the deal team
 2. For each deal returned, check if a project file already exists:
-   - Search `output/projects/` for the account/customer name
    - If a project exists AND already has `msx.opportunity_id` matching — skip (already linked)
    - If a project exists but NO `msx:` block — link it (add `msx:` block with full data)
-   - If NO project file exists — create a new one
-3. For newly discovered deals, create a project file with:
-   - `involvement: observer` (default -- you're on the deal team but may not be actively driving)
-   - `status: active`
-   - `summary:` generated from opportunity name + stage + solution area
-   - Full `msx:` block with all available data (call `msx-get_opportunity_details` + `msx-get_milestones_for_opportunity` for each)
-   - `tags: [crm-discovered]` to mark these as CRM-originated
-   - `watch_queries:` with the account name and opportunity name
-4. Also call `msx-get_my_milestones` to find stale milestones across all your deals -- add timeline entries to relevant projects: `"[CRM] milestone {number} is stale ({days} days without update)"`
-5. If `get_my_deals` fails, skip this mission entirely
+   - If NO project file exists — **do NOT auto-create**. Instead, log the untracked deal to a discovery summary in the run output. Only create a project file if the deal also meets the standard discovery threshold (3+ mentions across 2+ source types with an actionable element). CRM presence alone is not enough.
+3. Also call `msx-get_my_milestones` to find stale milestones across all your deals — add timeline entries to relevant projects that already exist: `"[CRM] milestone {number} is stale ({days} days without update)"`
+4. If `get_my_deals` fails, skip this mission entirely
 
-**This mission ensures you have visibility of your entire CRM portfolio**, not just engagements that happen to generate meetings or emails.
+**Why not auto-create?** Deal teams often include dozens of people. Being listed on a deal team doesn't mean you're actively working it. Auto-creating projects for every CRM deal floods the project list with observer-level entries that never get updated. Projects should be created from real activity (meetings, emails, commitments), not CRM roster membership.
 
 ### Extended MSX Block Schema
 

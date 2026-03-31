@@ -392,7 +392,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
                                 _execute_inbox_sweep(config, full_sweep=False),
                                 timeout=_BROWSER_JOB_TIMEOUT,
                             )
-                            summary = sweep_result.get("summary", "Sweep done")
+                            summary = sweep_result.get("summary", "Sweep done") if isinstance(sweep_result, dict) else "Sweep done"
                             log.info(f"  Auto-sweep: {summary}")
                         except Exception as e:
                             log.warning(f"  Auto-sweep failed: {e}")
@@ -406,7 +406,7 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
             elif job_type == "agent_response":
                 from_name = job.get("from", "Unknown")
                 original_task = job.get("original_task", "")
-                log.info(f"  Agent response from {from_name} (req: {job.get('request_id', '?')[:8]})")
+                log.info(f"  Agent response from {from_name} (req: {str(job.get('request_id') or '?')[:8]})")
                 if "_file" in job:
                     mark_task_completed(job)
                 notify_desktop(
@@ -571,8 +571,11 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
                 enqueued_files = getattr(job_queue, "_enqueued_files", None)
                 if isinstance(enqueued_files, set):
                     enqueued_files.discard(job_file)
-            from daemon.sync import sync_to_onedrive
-            sync_to_onedrive(config)
+            try:
+                from daemon.sync import sync_to_onedrive
+                sync_to_onedrive(config)
+            except Exception as e:
+                log.warning(f"  Post-job sync failed: {e}")
 
         log.info(f"=== {tag} Job done: [{job_type}] {job_name} ===")
 

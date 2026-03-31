@@ -158,8 +158,11 @@ After mining, review ALL projects for stale or unverified information.
 - Project with `status: active` but `last_verified` older than 7 days → search WorkIQ: "What's the latest on {project name}?" If no activity found, add timeline entry: `"[STALE] No activity detected in 7+ days — status unverified"`
 - Project with `status: active` but zero artifacts or timeline entries from the last 14 days → consider changing status to `on-hold` with timeline entry explaining why
 
+**Auto-archive stale observer projects:**
+- Project with `involvement: observer`, `status: active`, and no activity (no timeline entries, no inbox mentions, no WorkIQ hits) in the last 14 days → change status to `completed` with timeline entry: `"[AUTO-ARCHIVED] No activity in 14+ days and involvement is observer"`. These were likely one-off mentions that didn't warrant a project in the first place. Observer projects should prove they're worth tracking — if they go silent, archive them.
+
 **Stakeholder staleness:**
-- Stakeholder with `last_interaction` older than 14 days → flag in timeline: `"[INFO] No interaction with {name} in 14+ days"`
+- Stakeholder with `last_interaction` older than 14 days and project has >4 stakeholders → remove them to stay within the 6-stakeholder limit. Only flag `[INFO]` in timeline if they were a key contact.
 
 ### Mission 4: Proactive Watch Queries
 

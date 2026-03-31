@@ -21,11 +21,11 @@ Analyze content (transcripts, emails, documents, inbox scans) to:
 ## How to Work
 
 1. **Read existing project files first** — use `search_local_files` with project/customer names to check what's already tracked in `output/projects/`.
-2. **Identify projects from content patterns:**
-   - Same customer/initiative mentioned across multiple transcripts or emails
-   - Recurring meeting series with the same stakeholders
-   - Active deals with timelines, pricing, or deliverables
-   - Escalations or blockers tied to a named engagement
+2. **Identify projects from content patterns — ALL THREE conditions must be met:**
+   - **3+ mentions** of the customer/initiative name across your data
+   - **2+ different source types** (e.g., transcript + email, not just two emails from the same thread)
+   - **At least one actionable element** — a commitment, deliverable, meeting series, deadline, or explicit ask directed at you
+   - Passive mentions, CC'd emails, and one-off meetings do NOT warrant a new project. Wait for enough signal.
 3. **Use `update_project` tool** to create or update project YAML files.
 4. **Always read before writing** — load the existing file, merge new info, write back the full content. Never overwrite blindly.
 

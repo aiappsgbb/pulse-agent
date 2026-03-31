@@ -544,8 +544,8 @@ def _build_msx_gap_block(projects: list[dict]) -> str:
     if not active:
         return ""
 
-    linked = [p for p in active if p.get("msx", {}).get("opportunity_id")]
-    unlinked = [p for p in active if not p.get("msx", {}).get("opportunity_id")]
+    linked = [p for p in active if isinstance(p.get("msx"), dict) and p["msx"].get("opportunity_id")]
+    unlinked = [p for p in active if not (isinstance(p.get("msx"), dict) and p["msx"].get("opportunity_id"))]
 
     if not unlinked:
         return ""  # All projects have MSX links — no gaps

@@ -388,7 +388,9 @@ def _get_due_commitments(projects: list[dict], days_ahead: int = 7) -> list[dict
     for p in projects:
         proj_name = p.get("project", p.get("_id", "?"))
         proj_id = p.get("_id", "")
-        for c in p.get("commitments", []):
+        for c in p.get("commitments") or []:
+            if not isinstance(c, dict):
+                continue
             status = c.get("status", "").lower()
             if status in ("done", "cancelled"):
                 continue
@@ -423,7 +425,7 @@ def _match_meeting_to_project(event: dict, projects: list[dict]) -> dict | None:
     title = event.get("title", "").lower()
     organizer = (event.get("organizer") or "").lower()
     for p in projects:
-        stakeholder_names = [s.get("name", "").lower() for s in p.get("stakeholders", [])]
+        stakeholder_names = [s.get("name", "").lower() for s in p.get("stakeholders", []) if isinstance(s, dict)]
         proj_name = p.get("project", "").lower()
         if (
             any(sn in title for sn in stakeholder_names if sn)
@@ -436,9 +438,9 @@ def _match_meeting_to_project(event: dict, projects: list[dict]) -> dict | None:
 
 def _build_prep_hints(project: dict) -> str:
     """Build a Rich-markup prep hint string from a project's commitments."""
-    commitments = project.get("commitments", [])
-    overdue = sum(1 for c in commitments if c.get("status", "").lower() == "overdue")
-    open_items = sum(1 for c in commitments if c.get("status", "").lower() == "open")
+    commitments = project.get("commitments") or []
+    overdue = sum(1 for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "overdue")
+    open_items = sum(1 for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "open")
     if overdue:
         return f"[red]({overdue} overdue)[/red]"
     if open_items:
@@ -526,8 +528,9 @@ PROJECT_SORT_LABELS = {
 def _overdue_count(project: dict) -> int:
     """Count only commitments with explicit due dates that are overdue."""
     return sum(
-        1 for c in project.get("commitments", [])
-        if c.get("status", "").lower() == "overdue"
+        1 for c in project.get("commitments") or []
+        if isinstance(c, dict)
+        and c.get("status", "").lower() == "overdue"
         and c.get("due_confidence", "explicit").lower() == "explicit"
     )
 
@@ -535,8 +538,9 @@ def _overdue_count(project: dict) -> int:
 def _soft_overdue_count(project: dict) -> int:
     """Count overdue commitments with inferred due dates (soft overdues)."""
     return sum(
-        1 for c in project.get("commitments", [])
-        if c.get("status", "").lower() == "overdue"
+        1 for c in project.get("commitments") or []
+        if isinstance(c, dict)
+        and c.get("status", "").lower() == "overdue"
         and c.get("due_confidence", "explicit").lower() != "explicit"
     )
 
@@ -969,8 +973,8 @@ class CommitmentModal(ModalScreen):
         self._project = project
         # Only show open/overdue commitments
         self._actionable = [
-            c for c in project.get("commitments", [])
-            if c.get("status", "").lower() in ("open", "overdue")
+            c for c in project.get("commitments") or []
+            if isinstance(c, dict) and c.get("status", "").lower() in ("open", "overdue")
         ]
 
     def compose(self) -> ComposeResult:
@@ -1634,9 +1638,9 @@ class TodayPane(Widget):
         if project:
             proj_name = project.get("project", "?")
             lines += ["", f"[bold cyan]Project: {proj_name}[/bold cyan]"]
-            commitments = project.get("commitments", [])
-            overdue = [c for c in commitments if c.get("status", "").lower() == "overdue"]
-            open_items = [c for c in commitments if c.get("status", "").lower() == "open"]
+            commitments = project.get("commitments") or []
+            overdue = [c for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "overdue"]
+            open_items = [c for c in commitments if isinstance(c, dict) and c.get("status", "").lower() == "open"]
             if overdue:
                 lines.append(f"[bold red]{len(overdue)} overdue commitments:[/bold red]")
                 for c in overdue[:4]:
@@ -1647,10 +1651,13 @@ class TodayPane(Widget):
                     due = c.get("due", "")
                     due_tag = f"  (due: {due})" if due else ""
                     lines.append(f"  [yellow]- {c.get('what', '?')[:45]}{due_tag}[/yellow]")
-            stakeholders = project.get("stakeholders", [])
+            stakeholders = project.get("stakeholders") or []
             if stakeholders:
                 lines += ["", "[bold]Stakeholders:[/bold]"]
                 for s in stakeholders[:5]:
+                    if not isinstance(s, dict):
+                        lines.append(f"  {s}")
+                        continue
                     role = f" ({s['role']})" if s.get("role") else ""
                     lines.append(f"  {s.get('name', '?')}{role}")
 
@@ -2079,7 +2086,7 @@ class ProjectsPane(Widget):
                 badge = "[green]Yes[/green]" if in_team else "[red]No[/red]"
                 lines.append(f"  In deal team: {badge}")
             # Milestones — show at-risk or upcoming only
-            milestones = msx.get("milestones", [])
+            milestones = msx.get("milestones") or []
             notable = [m for m in milestones if isinstance(m, dict)
                        and m.get("status", "").lower() in ("at-risk", "overdue", "blocked")]
             if notable:

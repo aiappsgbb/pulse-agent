@@ -41,7 +41,7 @@ You have 8 meetings a day and retain 20% of what's said. You're CC'd on 50 email
 
 **Multi-agent collaboration.** 20+ team agents communicate autonomously via OneDrive. *"Ask Esther what context she has on the Vodafone deal"* -- her agent searches her transcripts and projects, and sends the answer back within 60 seconds. No infrastructure, no APIs -- just file-based messaging across OneDrive.
 
-**Project memory.** Auto-discovered per-engagement context with commitment tracking. Stakeholders, deadlines, risk levels. Overdue items surface automatically in your Today view.
+**Project memory.** Auto-discovered per-engagement context with commitment tracking. Projects are only created when a customer has 3+ mentions across 2+ source types with an actionable element -- not from every meeting or CC. Stale observer projects auto-archive after 14 days. CRM deals link to existing projects but don't auto-create new ones. The result: a clean list of projects you're actually working on.
 
 **Intel.** RSS feeds filtered for your topics and competitors. Product launches, pricing changes, regulatory moves -- curated, not a firehose.
 
@@ -202,6 +202,21 @@ Everything runs as a single Python daemon with three concurrent tasks: **schedul
 | Knowledge Mining | `--mode knowledge` | Overnight pipeline: archive emails/Teams, discover projects, enrich per-engagement memory |
 
 Run any mode standalone: `python src/pulse.py --mode digest --once`
+
+### Project Lifecycle
+
+Projects are the core unit of context in Pulse. They track stakeholders, commitments, deadlines, and risk levels per customer engagement.
+
+**Discovery** — a project is only created when ALL three conditions are met:
+1. **3+ mentions** of the customer/initiative across your data
+2. **2+ different source types** (e.g., transcript + email — not two emails from the same thread)
+3. **At least one actionable element** — a commitment, deliverable, meeting series, or explicit ask directed at you
+
+One-off meetings, CC'd emails, and passing mentions do NOT create projects. CRM deals link to existing projects but don't auto-create new ones — deal team membership alone isn't enough signal.
+
+**Curation** — projects are kept concise: max 6 stakeholders, 10 timeline entries, 6 artifacts, 4 tags. The knowledge miner prunes on each run rather than appending forever.
+
+**Auto-archive** — observer-involvement projects with no activity in 14+ days are automatically archived. If you're not actively working it and nothing is happening, it's not a project.
 
 ---
 
