@@ -134,9 +134,18 @@ def make_error_occurred_hook():
 
     def hook(input_data, context):
         try:
-            error = input_data.get("error", "Unknown error")
-            error_context = input_data.get("errorContext", "unknown")
-            recoverable = input_data.get("recoverable", False)
+            if isinstance(input_data, dict):
+                error = input_data.get("error", "Unknown error")
+                error_context = input_data.get("errorContext", "unknown")
+                recoverable = input_data.get("recoverable", False)
+            elif hasattr(input_data, "error"):
+                error = getattr(input_data, "error", "Unknown error")
+                error_context = getattr(input_data, "error_context", getattr(input_data, "errorContext", "unknown"))
+                recoverable = getattr(input_data, "recoverable", False)
+            else:
+                error = str(input_data)[:500]
+                error_context = "unknown"
+                recoverable = False
 
             _write_audit_entry({
                 "timestamp": datetime.now().isoformat(),
@@ -169,7 +178,15 @@ def make_session_end_hook(mode: str, start_time: float):
 
     def hook(input_data, context):
         try:
-            reason = input_data.get("reason", "unknown")
+            if isinstance(input_data, dict):
+                reason = input_data.get("reason", "unknown")
+                error = input_data.get("error")
+            elif hasattr(input_data, "reason"):
+                reason = getattr(input_data, "reason", "unknown")
+                error = getattr(input_data, "error", None)
+            else:
+                reason = "unknown"
+                error = None
             duration = time.time() - start_time
 
             entry = {
@@ -181,7 +198,6 @@ def make_session_end_hook(mode: str, start_time: float):
                 "session_id": _ctx_session_id(context),
             }
 
-            error = input_data.get("error")
             if error:
                 entry["error"] = str(error)[:500]
 
