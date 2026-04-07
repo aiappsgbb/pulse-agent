@@ -523,21 +523,11 @@ Tell the user:
 
 ## Upgrading
 
-To update Pulse to the latest version:
+Open the `pulse-agent` folder in **VS Code** (the same folder you installed into), then paste this into your AI chat:
 
-```
-cd <repo-root>
-git pull origin main
-```
+> Pull the latest Pulse Agent code with `git pull`, update Python dependencies with `pip install -r requirements.txt`, and run `python src/pulse.py --health-check` to verify everything still works. Activate the venv first.
 
-Activate venv and update dependencies:
-```
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt --quiet
-python src/pulse.py --health-check
-```
-
-Data in PULSE_HOME is untouched — only code updates.
+Your data in OneDrive is untouched — only the code updates.
 
 ---
 
