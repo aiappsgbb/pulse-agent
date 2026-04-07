@@ -6,6 +6,7 @@ class ProxyError(RuntimeError):
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -685,10 +686,21 @@ def _build_carry_forward(prev: dict | None) -> str:
         except (ValueError, TypeError):
             age_days = 0
 
-        if age_days > MAX_CARRY_FORWARD_DAYS:
+        if age_days >= MAX_CARRY_FORWARD_DAYS:
             stale_count += 1
             log.info(f"  Dropping stale item ({age_days}d old): {item.get('title', '?')}")
             continue
+
+        # Sanitize relative time words baked in by the LLM on the
+        # original digest day (e.g. "TODAY", "today") — they become
+        # misleading once the item is carried forward to later digests.
+        if age_days > 0:
+            for field in ("title", "source", "summary"):
+                val = item.get(field, "")
+                if isinstance(val, str) and "today" in val.lower():
+                    val = re.sub(r"\bTODAY\b", item_date_str, val)
+                    val = re.sub(r"\btoday\b", item_date_str, val, flags=re.IGNORECASE)
+                    item[field] = val
 
         item["_age_days"] = age_days
         fresh_items.append(item)
