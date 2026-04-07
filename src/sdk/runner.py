@@ -6,6 +6,7 @@ class ProxyError(RuntimeError):
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -365,18 +366,19 @@ def _load_projects() -> list[dict]:
 _STALE_OVERDUE_DAYS = 5  # Auto-cancel commitments overdue by more than this
 
 
-def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) -> int:
+def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) -> tuple[int, list[dict]]:
     """Auto-cancel commitments overdue by more than max_overdue_days.
 
     Scans all project YAML files, finds open/overdue commitments with due dates
     far enough in the past, marks them cancelled, and saves back.
-    Returns the number of commitments cancelled.
+    Returns (number_cancelled, loaded_projects) — reuse projects to avoid re-reading.
     """
     if not PROJECTS_DIR.exists():
-        return 0
+        return 0, []
 
     today = datetime.now().date()
     total_cancelled = 0
+    projects = []
 
     for path in sorted(PROJECTS_DIR.glob("*.yaml")):
         try:
@@ -387,41 +389,41 @@ def _auto_cancel_stale_commitments(max_overdue_days: int = _STALE_OVERDUE_DAYS) 
             continue
 
         commitments = data.get("commitments")
-        if not commitments or not isinstance(commitments, list):
-            continue
-
         changed = False
-        for c in commitments:
-            status = (c.get("status") or "").lower()
-            if status in ("done", "cancelled"):
-                continue
-            due_raw = c.get("due")
-            if not due_raw:
-                continue
-            try:
-                due_date = datetime.strptime(str(due_raw), "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
-            days_overdue = (today - due_date).days
-            confidence = (c.get("due_confidence") or "explicit").lower()
-            if days_overdue > max_overdue_days:
-                if confidence == "inferred":
-                    # Inferred dates just get quietly cancelled — never alarmed
-                    c["status"] = "cancelled"
-                    c["cancelled_reason"] = f"Auto-cancelled: inferred deadline {days_overdue}d past"
-                else:
-                    c["status"] = "cancelled"
-                    c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
-                changed = True
-                total_cancelled += 1
-                log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue, confidence={confidence})")
+        if commitments and isinstance(commitments, list):
+            for c in commitments:
+                status = (c.get("status") or "").lower()
+                if status in ("done", "cancelled"):
+                    continue
+                due_raw = c.get("due")
+                if not due_raw:
+                    continue
+                try:
+                    due_date = datetime.strptime(str(due_raw), "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    continue
+                days_overdue = (today - due_date).days
+                confidence = (c.get("due_confidence") or "explicit").lower()
+                if days_overdue > max_overdue_days:
+                    if confidence == "inferred":
+                        c["status"] = "cancelled"
+                        c["cancelled_reason"] = f"Auto-cancelled: inferred deadline {days_overdue}d past"
+                    else:
+                        c["status"] = "cancelled"
+                        c["cancelled_reason"] = f"Auto-cancelled: {days_overdue}d overdue (>{max_overdue_days}d limit)"
+                    changed = True
+                    total_cancelled += 1
+                    log.info(f"  Auto-cancelled: '{c.get('what', '?')}' in {path.stem} ({days_overdue}d overdue, confidence={confidence})")
 
-        if changed:
-            data["updated_at"] = datetime.now().isoformat()
-            with open(path, "w", encoding="utf-8") as f:
-                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            if changed:
+                data["updated_at"] = datetime.now().isoformat()
+                with open(path, "w", encoding="utf-8") as f:
+                    yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-    return total_cancelled
+        data["_file"] = path.name
+        projects.append(data)
+
+    return total_cancelled, projects
 
 
 def _build_projects_block(projects: list[dict]) -> str:
@@ -684,10 +686,21 @@ def _build_carry_forward(prev: dict | None) -> str:
         except (ValueError, TypeError):
             age_days = 0
 
-        if age_days > MAX_CARRY_FORWARD_DAYS:
+        if age_days >= MAX_CARRY_FORWARD_DAYS:
             stale_count += 1
             log.info(f"  Dropping stale item ({age_days}d old): {item.get('title', '?')}")
             continue
+
+        # Sanitize relative time words baked in by the LLM on the
+        # original digest day (e.g. "TODAY", "today") — they become
+        # misleading once the item is carried forward to later digests.
+        if age_days > 0:
+            for field in ("title", "source", "summary"):
+                val = item.get(field, "")
+                if isinstance(val, str) and "today" in val.lower():
+                    val = re.sub(r"\bTODAY\b", item_date_str, val)
+                    val = re.sub(r"\btoday\b", item_date_str, val, flags=re.IGNORECASE)
+                    item[field] = val
 
         item["_age_days"] = age_days
         fresh_items.append(item)
@@ -861,8 +874,13 @@ async def _pre_process_monitor(config: dict) -> dict:
 
     scan_time = datetime.now().strftime("%H:%M:%S")
 
-    log.info("Phase 0: Scanning Teams inbox for unread messages...")
-    items = await scan_teams_inbox(config)
+    log.info("Phase 0: Scanning inboxes and calendar concurrently...")
+    items, outlook_items, cal_events = await asyncio.gather(
+        scan_teams_inbox(config),
+        scan_outlook_inbox(config),
+        scan_calendar(config),
+    )
+
     if items is None:
         formatted = "**Teams inbox scan UNAVAILABLE** — browser not running."
         log.warning("  Teams inbox: UNAVAILABLE — browser not running")
@@ -873,15 +891,11 @@ async def _pre_process_monitor(config: dict) -> dict:
         formatted = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(items)}"
         log.info(f"  No unread Teams messages detected (scanned at {scan_time}).")
 
-    log.info("Phase 0b: Scanning Outlook inbox for unread emails...")
-    outlook_items = await scan_outlook_inbox(config)
     if outlook_items is None:
         outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running."
     else:
         outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
 
-    log.info("Phase 0c: Scanning calendar for upcoming events...")
-    cal_events = await scan_calendar(config)
     _persist_calendar_scan(cal_events)
     if cal_events is None:
         calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
@@ -948,9 +962,14 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
     else:
         log.info("  No new articles.")
 
-    log.info("\nPhase 1c: Scanning Teams inbox for unread messages...")
-    teams_items = await scan_teams_inbox(config)
+    log.info("\nPhase 1c-e: Scanning inboxes and calendar concurrently...")
+    teams_items, outlook_items, cal_events = await asyncio.gather(
+        scan_teams_inbox(config),
+        scan_outlook_inbox(config),
+        scan_calendar(config),
+    )
     scan_time = datetime.now().strftime("%H:%M:%S")
+
     if teams_items is None:
         teams_inbox_block = "**Teams inbox scan UNAVAILABLE** — browser not running. Cannot verify unread messages."
         log.warning("  Teams inbox: UNAVAILABLE — browser not running")
@@ -961,8 +980,6 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         teams_inbox_block = f"*(Scanned at {scan_time} — data may be 5-10 min stale by the time you read this)*\n\n{format_inbox_for_prompt(teams_items)}"
         log.info(f"  Teams inbox: no unread messages (scanned at {scan_time})")
 
-    log.info("\nPhase 1d: Scanning Outlook inbox for unread emails...")
-    outlook_items = await scan_outlook_inbox(config)
     if outlook_items is None:
         outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running. Cannot verify unread emails."
         log.warning("  Outlook inbox: UNAVAILABLE — browser not running")
@@ -973,22 +990,19 @@ async def _pre_process_digest(config: dict, client=None) -> dict:
         outlook_block = f"*(Scanned at {scan_time})*\n\n{format_outlook_for_prompt(outlook_items)}"
         log.info(f"  Outlook inbox: no unread emails (scanned at {scan_time})")
 
-    log.info("\nPhase 1e: Scanning calendar for upcoming events...")
-    cal_events = await scan_calendar(config)
     _persist_calendar_scan(cal_events)
     if cal_events is None:
         calendar_block = "**Calendar scan UNAVAILABLE** — browser not running."
         log.warning("  Calendar: UNAVAILABLE — browser not running")
     else:
         calendar_block = format_calendar_for_prompt(cal_events)
-        active_count = len([e for e in cal_events if not e.get("is_declined")])
+        active_count = sum(1 for e in cal_events if not e.get("is_declined"))
         log.info(f"  Calendar: {active_count} active events")
 
     log.info("\nPhase 1f: Loading active project files...")
-    cancelled = _auto_cancel_stale_commitments()
+    cancelled, projects = _auto_cancel_stale_commitments()
     if cancelled:
         log.info(f"  Auto-cancelled {cancelled} stale overdue commitment(s)")
-    projects = _load_projects()
     projects_block = _build_projects_block(projects)
     commitments_summary = _extract_commitments_summary(projects)
     if projects:
@@ -1174,15 +1188,17 @@ async def _pre_process_knowledge(config: dict) -> dict:
     save_json_state(KNOWLEDGE_STATE_FILE, {"last_run": datetime.now().isoformat()})
 
     # Quick inbox snapshots for cross-reference (same as monitor)
+    teams_items, outlook_items = await asyncio.gather(
+        scan_teams_inbox(config),
+        scan_outlook_inbox(config),
+    )
     scan_time = datetime.now().strftime("%H:%M:%S")
 
-    teams_items = await scan_teams_inbox(config)
     if teams_items is None:
         teams_inbox_block = "**Teams inbox scan UNAVAILABLE** — browser not running."
     else:
         teams_inbox_block = f"*(Scanned at {scan_time})*\n\n{format_inbox_for_prompt(teams_items)}"
 
-    outlook_items = await scan_outlook_inbox(config)
     if outlook_items is None:
         outlook_block = "**Outlook inbox scan UNAVAILABLE** — browser not running."
     else:

@@ -54,7 +54,7 @@ class TestCarryForwardStaleness:
         assert "Auto-dropped" in result
 
     def test_exactly_at_boundary(self):
-        """Items exactly at MAX_CARRY_FORWARD_DAYS are kept (boundary inclusive)."""
+        """Items exactly at MAX_CARRY_FORWARD_DAYS are dropped (>= boundary)."""
         from sdk.runner import _build_carry_forward, MAX_CARRY_FORWARD_DAYS
 
         boundary_date = (datetime.now() - timedelta(days=MAX_CARRY_FORWARD_DAYS)).strftime("%Y-%m-%d")
@@ -64,7 +64,8 @@ class TestCarryForwardStaleness:
             ]
         }
         result = _build_carry_forward(prev)
-        assert "boundary" in result
+        assert "Boundary item" not in result
+        assert "Auto-dropped" in result
 
     def test_one_day_past_boundary_dropped(self):
         """Items one day past boundary are dropped."""

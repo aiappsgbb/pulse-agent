@@ -21,6 +21,20 @@ from sdk.tools import dismiss_item, add_note
 CTX = {"session_id": "test-session-123"}
 
 
+class _BadDict(dict):
+    """Dict subclass that raises on .get() — used to trigger hook error paths.
+
+    Hooks check isinstance(input_data, dict) first, so a MagicMock (not a dict)
+    would skip the .get() branch entirely and never trigger the error.
+    """
+    def __init__(self, error):
+        super().__init__()
+        self._error = error
+
+    def get(self, key, default=None):
+        raise self._error
+
+
 # ---------------------------------------------------------------------------
 # Fix 1: Hooks log to stderr on failure instead of silent pass
 # ---------------------------------------------------------------------------
@@ -31,7 +45,6 @@ class TestHooksStderrLogging:
 
     def test_write_audit_entry_logs_stderr(self, tmp_dir, capsys):
         """_write_audit_entry prints to stderr when writing fails."""
-        # Force an error by patching open to raise
         with patch("sdk.hooks.LOGS_DIR", tmp_dir), \
              patch("builtins.open", side_effect=OSError("mock write error")):
             _write_audit_entry({"type": "test"})
@@ -42,9 +55,7 @@ class TestHooksStderrLogging:
     def test_post_tool_use_hook_logs_stderr(self, capsys):
         """post_tool_use hook logs to stderr when it fails internally."""
         hook = make_post_tool_use_hook()
-        # Force an error by making input_data.get raise
-        bad_input = MagicMock()
-        bad_input.get.side_effect = RuntimeError("mock failure")
+        bad_input = _BadDict(RuntimeError("mock failure"))
         hook(bad_input, CTX)
         captured = capsys.readouterr()
         assert "[AUDIT ERROR]" in captured.err
@@ -53,8 +64,7 @@ class TestHooksStderrLogging:
     def test_pre_tool_use_hook_logs_stderr(self, capsys):
         """pre_tool_use hook logs to stderr and returns None (fail-open) on error."""
         hook = make_pre_tool_use_hook()
-        bad_input = MagicMock()
-        bad_input.get.side_effect = RuntimeError("pre-tool boom")
+        bad_input = _BadDict(RuntimeError("pre-tool boom"))
         result = hook(bad_input, CTX)
         assert result is None  # fail open
         captured = capsys.readouterr()
@@ -64,8 +74,7 @@ class TestHooksStderrLogging:
     def test_error_occurred_hook_logs_stderr(self, capsys):
         """error_occurred hook logs to stderr and returns None on internal failure."""
         hook = make_error_occurred_hook()
-        bad_input = MagicMock()
-        bad_input.get.side_effect = RuntimeError("error-hook boom")
+        bad_input = _BadDict(RuntimeError("error-hook boom"))
         result = hook(bad_input, CTX)
         assert result is None
         captured = capsys.readouterr()
@@ -75,8 +84,7 @@ class TestHooksStderrLogging:
     def test_session_end_hook_logs_stderr(self, capsys):
         """session_end hook logs to stderr on internal failure."""
         hook = make_session_end_hook("test-mode", time.time())
-        bad_input = MagicMock()
-        bad_input.get.side_effect = RuntimeError("session-end boom")
+        bad_input = _BadDict(RuntimeError("session-end boom"))
         hook(bad_input, CTX)
         captured = capsys.readouterr()
         assert "[AUDIT ERROR]" in captured.err

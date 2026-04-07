@@ -203,7 +203,7 @@ You MUST produce TWO outputs using `write_output`:
       "type": "<reply_needed|action_item|review_needed|input_needed|decision_needed|escalation|intel|fyi>",
       "priority": "<urgent|high|medium|low>",
       "source": "Email from <name> | Teams: <channel/person> | Meeting: <title> | RSS: <source>",
-      "title": "<short title — max 80 chars>",
+      "title": "<short title — max 80 chars, use absolute dates not 'TODAY'/'TOMORROW'>",
       "summary": "<1-2 sentence description of what needs attention>",
       "project": "<project-id or null if not linked to a project>",
       "date": "<YYYY-MM-DD when this originated>",

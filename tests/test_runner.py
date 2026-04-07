@@ -84,6 +84,60 @@ def test_carry_forward_all_stale():
     assert "Auto-dropped" in result
 
 
+def test_carry_forward_sanitizes_today_in_old_items():
+    """Items from previous days should have 'TODAY' replaced with their actual date."""
+    from datetime import datetime, timedelta
+    old_date = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    prev = {
+        "items": [
+            {
+                "priority": "urgent",
+                "title": "Lead workshop TODAY",
+                "id": "workshop",
+                "source": "Calendar: Meeting (12:00 PM today)",
+                "summary": "You have a meeting today at noon.",
+                "date": old_date,
+            },
+        ]
+    }
+    result = _build_carry_forward(prev)
+    assert "TODAY" not in result
+    assert "today" not in result.lower() or old_date in result
+    assert old_date in result
+
+
+def test_carry_forward_keeps_today_for_same_day():
+    """Items from today should NOT have 'TODAY' sanitized."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    prev = {
+        "items": [
+            {
+                "priority": "urgent",
+                "title": "Lead workshop TODAY",
+                "id": "workshop",
+                "source": "Calendar: Meeting today",
+                "date": today_str,
+            },
+        ]
+    }
+    result = _build_carry_forward(prev)
+    assert "TODAY" in result
+
+
+def test_carry_forward_boundary_at_max_days():
+    """Items exactly at MAX_CARRY_FORWARD_DAYS should be dropped (>= not >)."""
+    from datetime import datetime, timedelta
+    boundary_date = (datetime.now() - timedelta(days=MAX_CARRY_FORWARD_DAYS)).strftime("%Y-%m-%d")
+    prev = {
+        "items": [
+            {"priority": "high", "title": "Boundary item", "id": "boundary", "source": "Email", "date": boundary_date},
+        ]
+    }
+    result = _build_carry_forward(prev)
+    assert "Boundary item" not in result
+    assert "Auto-dropped" in result
+
+
 # --- _load_previous_digest ---
 
 
@@ -455,7 +509,7 @@ def test_auto_cancel_overdue_beyond_threshold(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1
     data = yaml.safe_load((proj_dir / "acme.yaml").read_text(encoding="utf-8"))
@@ -475,7 +529,7 @@ def test_auto_cancel_skips_recent_overdue(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
     data = yaml.safe_load((proj_dir / "beta.yaml").read_text(encoding="utf-8"))
@@ -494,7 +548,7 @@ def test_auto_cancel_skips_done_and_cancelled(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
 
@@ -510,7 +564,7 @@ def test_auto_cancel_handles_overdue_status(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1
     data = yaml.safe_load((proj_dir / "delta.yaml").read_text(encoding="utf-8"))
@@ -538,7 +592,7 @@ def test_auto_cancel_multiple_projects(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1  # only the 15-day-old one
     data_a = yaml.safe_load((proj_dir / "proj-a.yaml").read_text(encoding="utf-8"))
@@ -552,7 +606,7 @@ def test_auto_cancel_multiple_projects(tmp_dir):
 def test_auto_cancel_no_projects_dir(tmp_dir):
     """Returns 0 if projects dir doesn't exist."""
     with patch("sdk.runner.PROJECTS_DIR", tmp_dir / "nonexistent"):
-        assert _auto_cancel_stale_commitments() == 0
+        assert _auto_cancel_stale_commitments() == (0, [])
 
 
 def test_auto_cancel_no_due_date(tmp_dir):
@@ -565,7 +619,7 @@ def test_auto_cancel_no_due_date(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
 

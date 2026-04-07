@@ -408,20 +408,25 @@ class TestIPCEdgeCases:
 
 
 class TestHookErrorIsolation:
-    """Hooks must never crash — verify they swallow errors silently."""
+    """Hooks must never crash — verify they swallow errors silently.
 
-    def test_post_tool_use_hook_survives_bad_input(self):
+    All tests patch LOGS_DIR to a temp directory to avoid polluting
+    the production audit log with test entries.
+    """
+
+    def test_post_tool_use_hook_survives_bad_input(self, tmp_dir):
         """post_tool_use hook doesn't crash on missing/weird fields."""
         from sdk.hooks import make_post_tool_use_hook
 
-        hook = make_post_tool_use_hook()
-        # Completely empty input
-        hook({}, None)
-        # None context
-        hook({"toolName": "test"}, None)
-        # Garbage input
-        hook({"toolName": 12345, "toolArgs": object()}, {"session_id": None})
-        # No crash = pass
+        with patch("sdk.hooks.LOGS_DIR", tmp_dir):
+            hook = make_post_tool_use_hook()
+            # Completely empty input
+            hook({}, None)
+            # None context
+            hook({"toolName": "test"}, None)
+            # Garbage input
+            hook({"toolName": 12345, "toolArgs": object()}, {"session_id": None})
+            # No crash = pass
 
     def test_pre_tool_use_hook_allows_normal_tools(self):
         """pre_tool_use hook returns None (allow) for non-write tools."""
@@ -456,44 +461,48 @@ class TestHookErrorIsolation:
             assert result is not None
             assert result["permissionDecision"] == "deny", f"Should block {bad_id}"
 
-    def test_error_hook_returns_retry_for_tool_execution(self):
+    def test_error_hook_returns_retry_for_tool_execution(self, tmp_dir):
         """error_occurred hook returns retry for recoverable tool errors."""
         from sdk.hooks import make_error_occurred_hook
 
-        hook = make_error_occurred_hook()
-        result = hook(
-            {"error": "timeout", "errorContext": "tool_execution", "recoverable": True},
-            {},
-        )
-        assert result is not None
-        assert result["errorHandling"] == "retry"
-        assert result["retryCount"] == 1
+        with patch("sdk.hooks.LOGS_DIR", tmp_dir):
+            hook = make_error_occurred_hook()
+            result = hook(
+                {"error": "timeout", "errorContext": "tool_execution", "recoverable": True},
+                {},
+            )
+            assert result is not None
+            assert result["errorHandling"] == "retry"
+            assert result["retryCount"] == 1
 
-    def test_error_hook_returns_none_for_unrecoverable(self):
+    def test_error_hook_returns_none_for_unrecoverable(self, tmp_dir):
         """error_occurred hook returns None for unrecoverable errors."""
         from sdk.hooks import make_error_occurred_hook
 
-        hook = make_error_occurred_hook()
-        result = hook(
-            {"error": "fatal", "errorContext": "session", "recoverable": False},
-            {},
-        )
-        assert result is None
+        with patch("sdk.hooks.LOGS_DIR", tmp_dir):
+            hook = make_error_occurred_hook()
+            result = hook(
+                {"error": "fatal", "errorContext": "session", "recoverable": False},
+                {},
+            )
+            assert result is None
 
-    def test_session_end_hook_logs_duration(self):
+    def test_session_end_hook_logs_duration(self, tmp_dir):
         """session_end hook doesn't crash and handles normal input."""
         from sdk.hooks import make_session_end_hook
 
-        hook = make_session_end_hook("digest", time.time() - 60.0)
-        # Should not raise
-        hook({"reason": "complete"}, {"session_id": "test-session"})
+        with patch("sdk.hooks.LOGS_DIR", tmp_dir):
+            hook = make_session_end_hook("digest", time.time() - 60.0)
+            # Should not raise
+            hook({"reason": "complete"}, {"session_id": "test-session"})
 
-    def test_session_end_hook_with_error(self):
+    def test_session_end_hook_with_error(self, tmp_dir):
         """session_end hook handles error field in input."""
         from sdk.hooks import make_session_end_hook
 
-        hook = make_session_end_hook("chat", time.time())
-        hook({"reason": "error", "error": "Something went wrong"}, {})
+        with patch("sdk.hooks.LOGS_DIR", tmp_dir):
+            hook = make_session_end_hook("chat", time.time())
+            hook({"reason": "error", "error": "Something went wrong"}, {})
 
     def test_build_hooks_returns_all_four(self):
         """build_hooks returns dict with all 4 hook keys."""

@@ -75,49 +75,38 @@ Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel)
 
 ## Quick Start
 
-### Option A: AI-assisted setup (recommended)
+**Total time:** ~10 minutes.
 
-Open **GitHub Copilot Chat** or any AI coding assistant in the repo folder and paste this:
+**1.** Create a folder where you want the code to live (e.g. `C:\Dev\pulse-agent`) and open it in **VS Code** via **File > Open Folder**.
 
-> Follow the instructions in SETUP.md to set up Pulse Agent on my machine.
+**2.** Open the AI chat panel (**Copilot Chat**, **Claude Code**, etc.) and paste:
 
-Your AI will run the installer, install all prerequisites, set up the environment, and verify everything works. No manual steps -- it handles Python, Node.js, GitHub CLI, WorkIQ, everything.
+> Install Pulse Agent on my machine from https://github.com/aiappsgbb/pulse-agent.git — follow SETUP.md step by step. Run all commands yourself — only pause when a step says USER ACTION REQUIRED.
 
-### Option B: Double-click installer
-
-Double-click **`install.bat`**. The installer automatically:
-
-- Installs Python, Node.js, and GitHub CLI via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
-- Installs the WorkIQ MCP server and Copilot CLI extension
-- Creates a Python virtual environment and installs all dependencies
-- Sets up Playwright Edge for browser automation
-- Seeds the data directory on OneDrive
-- Creates a **"Start Pulse"** shortcut on your Desktop
-
-### After install
-
-1. Run `python src/pulse.py --health-check` -- this opens Pulse's dedicated browser profile for you to sign into Teams (do NOT use your regular Edge -- Pulse won't see that auth)
-2. Double-click **"Start Pulse"** on your Desktop
-3. On first run, the Chat tab walks you through personalization -- name, role, priorities, team members
+Your AI handles everything: git, Python, Node.js, GitHub CLI, WorkIQ, Playwright, browser auth, personalization, and a desktop shortcut. Double-click **"Start Pulse"** when it finishes.
 
 <details>
-<summary>Option C: Manual install</summary>
+<summary>Alternative: double-click installer (no AI needed)</summary>
+
+If you prefer not to use an AI assistant, clone the repo manually and double-click **`install.bat`** inside it. The installer handles everything above automatically. After install, run `python src/pulse.py --health-check` to sign into Teams.
+
+</details>
+
+<details>
+<summary>Alternative: manual install</summary>
 
 **Prerequisites:** Python 3.12+, Node.js, GitHub Copilot CLI authenticated, OneDrive for Business syncing.
 
 ```bash
+git clone https://github.com/aiappsgbb/pulse-agent.git
+cd pulse-agent
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 playwright install msedge
 npm install -g @microsoft/workiq
+python src/pulse.py --health-check
 python src/pulse.py
-```
-
-Or run the setup script directly:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
 </details>

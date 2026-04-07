@@ -149,26 +149,17 @@ async def scan_outlook_inbox(config: dict) -> list[dict] | None:
     [{sender, subject, preview, time, unread, has_attachment, conv_id}, ...]
     Returns None if the browser is unavailable (distinct from [] = scanned, nothing found).
     """
-    from core.browser import ensure_browser
+    from core.browser import browser_page
 
-    browser_mgr = await ensure_browser()
-    if not browser_mgr:
-        log.warning("Outlook inbox scan skipped — no shared browser available")
-        return None
-
-    page = None
-    try:
-        page = await browser_mgr.new_page()
-        return await _do_scan(page)
-    except Exception as e:
-        log.error(f"Outlook inbox scan failed: {e}")
-        return None
-    finally:
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                pass
+    async with browser_page() as page:
+        if page is None:
+            log.warning("Outlook inbox scan skipped — no shared browser available")
+            return None
+        try:
+            return await _do_scan(page)
+        except Exception as e:
+            log.error(f"Outlook inbox scan failed: {e}")
+            return None
 
 
 async def _do_scan(page) -> list[dict]:

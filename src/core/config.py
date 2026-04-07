@@ -67,6 +67,15 @@ def load_config() -> dict:
     if not config or not isinstance(config, dict):
         raise ValueError(f"Config file is empty or invalid: {config_path}")
 
+    # Coalesce None values to empty dicts for top-level sections that
+    # downstream code chains .get() on.  YAML parses "key:" with no value
+    # as None, and dict.get("key", {}) returns None (not {}) when the key
+    # exists, which crashes chained .get() calls.
+    for key in ("mcp_servers", "digest", "monitoring", "transcripts",
+                "housekeeping", "models", "intel"):
+        if key in config and config[key] is None:
+            config[key] = {}
+
     # Expand environment variables in all string values
     config = _expand_env_vars(config)
 

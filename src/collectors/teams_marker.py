@@ -106,31 +106,18 @@ async def mark_teams_chats_read(
     Returns:
         {success: bool, marked: int, failed: int, total_unread: int, details: list[str]}
     """
-    from core.browser import ensure_browser
+    from core.browser import browser_page
 
-    browser_mgr = await ensure_browser()
-    if not browser_mgr:
-        return {
-            "success": False, "marked": 0, "failed": 0,
-            "total_unread": 0, "details": ["No shared browser available"],
-        }
-
-    page = None
-    try:
-        page = await browser_mgr.new_page()
-        return await _do_mark_read(page, chat_names)
-    except Exception as e:
-        log.error(f"Teams mark-as-read failed: {e}")
-        return {
-            "success": False, "marked": 0, "failed": 0,
-            "total_unread": 0, "details": [str(e)],
-        }
-    finally:
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                pass
+    _fail = {"success": False, "marked": 0, "failed": 0,
+             "total_unread": 0}
+    async with browser_page() as page:
+        if page is None:
+            return {**_fail, "details": ["No shared browser available"]}
+        try:
+            return await _do_mark_read(page, chat_names)
+        except Exception as e:
+            log.error(f"Teams mark-as-read failed: {e}")
+            return {**_fail, "details": [str(e)]}
 
 
 async def _do_mark_read(page, chat_names: list[str] | None) -> dict:

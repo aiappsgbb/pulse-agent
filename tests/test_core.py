@@ -125,3 +125,22 @@ def test_expand_env_vars_nested():
     result = _expand_env_vars({"key": "$_TEST_NESTED_", "list": ["$_TEST_NESTED_"]})
     assert result == {"key": "val", "list": ["val"]}
     del os.environ["_TEST_NESTED_"]
+
+
+def test_load_config_coalesces_none_to_empty_dict(tmp_path, monkeypatch):
+    """YAML 'key:' with no value parses as None.  load_config must coalesce
+    these to {} so downstream chained .get() calls don't crash."""
+    cfg = tmp_path / "si.yaml"
+    cfg.write_text(
+        "user:\n  name: test\nmcp_servers:\ndigest:\nmonitoring:\n"
+        "transcripts:\nhousekeeping:\nmodels:\nintel:\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PULSE_CONFIG", str(cfg))
+    from core.config import load_config
+    config = load_config()
+    for key in ("mcp_servers", "digest", "monitoring", "transcripts",
+                "housekeeping", "models", "intel"):
+        assert config[key] == {}, f"{key} should be {{}} not None"
+        # Chained .get() must not crash
+        config[key].get("sub_key", {}).get("nested", "ok")
