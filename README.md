@@ -75,33 +75,15 @@ Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel)
 
 ## Quick Start
 
-**Total time:** ~10 minutes. Three steps need your input (GitHub login, Teams login, personalization). Everything else is automated.
+**Total time:** ~10 minutes.
 
-### Step 1: Open a project folder
+**1.** Create a folder where you want the code to live (e.g. `C:\Dev\pulse-agent`) and open it in **VS Code** via **File > Open Folder**.
 
-Open **VS Code** (or any editor with an AI assistant). Go to **File > Open Folder** and navigate to a local folder where you keep code repos — for example `C:\Dev` or `C:\Projects`. If you don't have one, create it now.
+**2.** Open the AI chat panel (**Copilot Chat**, **Claude Code**, etc.) and paste:
 
-> **Important:** Pick a local drive, NOT a OneDrive folder. You don't want to sync all these code files to the cloud. Pulse stores its *data* on OneDrive separately — the code stays local.
+> Install Pulse Agent on my machine from https://github.com/aiappsgbb/pulse-agent.git — follow SETUP.md step by step. Run all commands yourself — only pause when a step says USER ACTION REQUIRED.
 
-### Step 2: Let your AI install everything
-
-Open your AI assistant chat (**GitHub Copilot Chat**, **Claude Code**, or similar) and paste this:
-
-> Install Pulse Agent on my machine from https://github.com/aiappsgbb/pulse-agent.git — clone the repo if needed, then follow SETUP.md step by step. Run all commands yourself — only pause when a step says USER ACTION REQUIRED.
-
-Your AI will:
-- Clone the repo (if not already cloned) and cd into it
-- Install Python, Node.js, and GitHub CLI (if missing)
-- Set up a Python virtual environment with all dependencies
-- Install Playwright Edge and the WorkIQ MCP server
-- Create the data directory on OneDrive
-- Run a health check and open a browser for you to sign into Teams
-- Walk you through personalization (name, role, priorities) via chat
-- Create a **"Start Pulse"** desktop shortcut
-
-### Step 3: Launch
-
-Double-click **"Start Pulse"** on your Desktop. That's it.
+Your AI handles everything: git, Python, Node.js, GitHub CLI, WorkIQ, Playwright, browser auth, personalization, and a desktop shortcut. Double-click **"Start Pulse"** when it finishes.
 
 <details>
 <summary>Alternative: double-click installer (no AI needed)</summary>

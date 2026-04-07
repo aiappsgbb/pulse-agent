@@ -41,6 +41,12 @@ After installing Git, the user must **close and reopen their terminal** (or VS C
 
 **Verify**: You should see `src/`, `config/`, `requirements.txt`, `SETUP.md` in the current directory.
 
+**Important — reopen VS Code in the project folder**: If the user cloned from a parent folder (e.g. `C:\Dev`), VS Code is still rooted there. Reopen it in the cloned folder so the user has proper file explorer context:
+```
+code pulse-agent
+```
+This opens a new VS Code window in the project. The user can close the old window. All remaining steps run from the repo root.
+
 **All remaining steps run from the repo root.**
 
 ---
