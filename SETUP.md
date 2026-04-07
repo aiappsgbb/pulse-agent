@@ -18,10 +18,18 @@ Pulse Agent is a local-first autonomous agent that processes meeting transcripts
 
 ## Step 0: Repository
 
-If you're in an empty folder, clone the repo. If the repo is already here, skip to Step 1.
+Check if you're already inside the repo: look for `src/`, `config/`, `requirements.txt` in the current directory.
 
+**Already in the repo?** Skip to Step 1.
+
+**In a parent folder (e.g., `C:\Dev`)?** Clone and cd into it:
 ```
 git clone https://github.com/aiappsgbb/pulse-agent.git
+cd pulse-agent
+```
+
+**In a `pulse-agent` subfolder exists but you're one level up?** Just cd into it:
+```
 cd pulse-agent
 ```
 
