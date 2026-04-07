@@ -43,12 +43,10 @@ async def write_daemon_status_loop(
 
     def _count_pending_files() -> int:
         """Count job files on disk not yet enqueued to in-memory queue."""
-        pending_dir = JOBS_DIR / "pending"
-        if not pending_dir.exists():
-            return 0
         try:
-            return sum(1 for f in pending_dir.iterdir() if f.suffix in (".yaml", ".yml"))
-        except Exception:
+            return sum(1 for f in (JOBS_DIR / "pending").iterdir()
+                       if f.suffix in (".yaml", ".yml"))
+        except (FileNotFoundError, OSError):
             return 0
 
     def _write_status():
@@ -109,16 +107,17 @@ async def poll_tui_chat_requests(
 
     while not shutdown_event.is_set():
         try:
-            if request_file.exists():
-                data = json.loads(request_file.read_text(encoding="utf-8"))
-                prompt = data.get("prompt", "")
-                request_id = data.get("request_id", "")
-                if prompt:
-                    # Delete first so we don't re-process on next poll
-                    request_file.unlink(missing_ok=True)
-                    log.info(f"TUI chat (fast-lane, id={request_id[:8]}): {prompt[:60]}...")
-                    # Process directly — no queue, no waiting
-                    await _handle_chat_request(client, config, prompt, request_id)
+            data = json.loads(request_file.read_text(encoding="utf-8"))
+            prompt = data.get("prompt", "")
+            request_id = data.get("request_id", "")
+            if prompt:
+                # Delete first so we don't re-process on next poll
+                request_file.unlink(missing_ok=True)
+                log.info(f"TUI chat (fast-lane, id={request_id[:8]}): {prompt[:60]}...")
+                # Process directly — no queue, no waiting
+                await _handle_chat_request(client, config, prompt, request_id)
+        except FileNotFoundError:
+            pass
         except Exception as e:
             log.debug(f"TUI chat poll error: {e}")
 

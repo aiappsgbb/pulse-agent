@@ -43,8 +43,9 @@ DIGEST_ACTIONS_FILE = PULSE_HOME / ".digest-actions.json"
 def read_daemon_status() -> dict:
     """Read daemon status. Returns empty dict if unavailable."""
     try:
-        if STATUS_FILE.exists():
-            return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+        return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     except Exception:
         log.debug("Failed to read daemon status", exc_info=True)
     return {}
@@ -183,10 +184,11 @@ def write_job_notification(job_type: str, summary: str) -> None:
 def read_job_notification() -> dict | None:
     """Read and delete job notification. Returns None if no notification."""
     try:
-        if JOB_NOTIFICATION_FILE.exists():
-            data = json.loads(JOB_NOTIFICATION_FILE.read_text(encoding="utf-8"))
-            JOB_NOTIFICATION_FILE.unlink(missing_ok=True)
-            return data
+        data = json.loads(JOB_NOTIFICATION_FILE.read_text(encoding="utf-8"))
+        JOB_NOTIFICATION_FILE.unlink(missing_ok=True)
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     except Exception:
         log.debug("Failed to read job notification", exc_info=True)
     return None
@@ -197,11 +199,10 @@ def read_job_notification() -> dict | None:
 # ---------------------------------------------------------------------------
 
 def read_pending_question() -> dict | None:
-    """Read .pending-question.json if it exists."""
+    """Read .pending-question.json if present."""
     try:
-        if PENDING_QUESTION_FILE.exists():
-            return json.loads(PENDING_QUESTION_FILE.read_text(encoding="utf-8"))
-    except Exception:
+        return json.loads(PENDING_QUESTION_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
         pass
     return None
 
@@ -239,11 +240,10 @@ def write_pending_question(question: str, session_id: str) -> None:
 def read_question_response(session_id: str) -> str | None:
     """Read .question-response.json for matching session_id (daemon-side)."""
     try:
-        if QUESTION_RESPONSE_FILE.exists():
-            data = json.loads(QUESTION_RESPONSE_FILE.read_text(encoding="utf-8"))
-            if data.get("session_id") == session_id:
-                return data.get("answer", "")
-    except Exception:
+        data = json.loads(QUESTION_RESPONSE_FILE.read_text(encoding="utf-8"))
+        if data.get("session_id") == session_id:
+            return data.get("answer", "")
+    except (FileNotFoundError, json.JSONDecodeError):
         pass
     return None
 
@@ -339,8 +339,9 @@ def queue_job(job_type: str, context: str = "") -> None:
 
 def _load_digest_actions() -> dict:
     try:
-        if DIGEST_ACTIONS_FILE.exists():
-            return json.loads(DIGEST_ACTIONS_FILE.read_text(encoding="utf-8"))
+        return json.loads(DIGEST_ACTIONS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     except Exception:
         log.debug("Failed to load digest actions", exc_info=True)
     return {"dismissed": [], "notes": {}}

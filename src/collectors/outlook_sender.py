@@ -144,25 +144,16 @@ async def reply_to_email(search_query: str, message: str) -> dict:
 
     Returns: {success: bool, detail: str}
     """
-    from core.browser import ensure_browser
+    from core.browser import browser_page
 
-    browser_mgr = await ensure_browser()
-    if not browser_mgr:
-        return {"success": False, "detail": "No shared browser available"}
-
-    page = None
-    try:
-        page = await browser_mgr.new_page()
-        return await _do_reply(page, search_query, message)
-    except Exception as e:
-        log.error(f"Outlook reply failed: {e}")
-        return {"success": False, "detail": str(e)}
-    finally:
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                pass
+    async with browser_page() as page:
+        if page is None:
+            return {"success": False, "detail": "No shared browser available"}
+        try:
+            return await _do_reply(page, search_query, message)
+        except Exception as e:
+            log.error(f"Outlook reply failed: {e}")
+            return {"success": False, "detail": str(e)}
 
 
 async def _do_reply(page, search_query: str, message: str) -> dict:

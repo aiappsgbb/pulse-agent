@@ -41,7 +41,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 # Track whether we installed anything that needs a PATH refresh
 $needsPathRefresh = $false
 
-# ── 1. Check winget ────────────────────────────────────────────────────────
+# -- 1. Check winget --------------------------------------------------------
 Write-Step "Checking winget (Windows Package Manager)..."
 $winget = Get-Command winget -ErrorAction SilentlyContinue
 if (-not $winget) {
@@ -52,7 +52,7 @@ if (-not $winget) {
 }
 Write-Ok "winget available"
 
-# ── 2. Install Python (if missing) ────────────────────────────────────────
+# -- 2. Install Python (if missing) ----------------------------------------
 Write-Step "Checking Python 3.12+..."
 $py = Get-Command python -ErrorAction SilentlyContinue
 $pyOk = $false
@@ -71,7 +71,7 @@ if ($py) {
 if (-not $pyOk) {
     Write-Host "   Installing Python 3.12 via winget..." -ForegroundColor Yellow
     $wingetOut = winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-String
-    # winget returns non-zero for "already installed" or "no upgrade" — check output
+    # winget returns non-zero for "already installed" or "no upgrade" -- check output
     if ($LASTEXITCODE -ne 0 -and $wingetOut -notmatch "already installed|No newer package|No available upgrade") {
         Write-Fail "Python install failed. Install manually from https://python.org (check 'Add to PATH')"
         Pop-Location; exit 1
@@ -80,7 +80,7 @@ if (-not $pyOk) {
     Write-Ok "Python 3.12 installed"
 }
 
-# ── 3. Install Node.js (if missing) ───────────────────────────────────────
+# -- 3. Install Node.js (if missing) ---------------------------------------
 Write-Step "Checking Node.js..."
 $node = Get-Command node -ErrorAction SilentlyContinue
 
@@ -100,7 +100,7 @@ if (-not $node) {
     Write-Ok "Node.js $(& node --version 2>&1)"
 }
 
-# ── 4. Install GitHub CLI (if missing) ────────────────────────────────────
+# -- 4. Install GitHub CLI (if missing) ------------------------------------
 Write-Step "Checking GitHub CLI..."
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 
@@ -119,14 +119,14 @@ if (-not $gh) {
     Write-Ok "GitHub CLI found"
 }
 
-# ── Refresh PATH after all winget installs ─────────────────────────────────
+# -- Refresh PATH after all winget installs ---------------------------------
 if ($needsPathRefresh) {
     Write-Step "Refreshing PATH..."
     Refresh-Path
     Write-Ok "PATH refreshed"
 }
 
-# ── 5. Install WorkIQ MCP server (npm) ────────────────────────────────────
+# -- 5. Install WorkIQ MCP server (npm) ------------------------------------
 Write-Step "Installing WorkIQ MCP server..."
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if ($npm) {
@@ -148,7 +148,7 @@ if ($npm) {
     Write-Warn "npm not found - skipping WorkIQ. Install Node.js and re-run setup."
 }
 
-# ── 6. Install GitHub Copilot CLI extension ────────────────────────────────
+# -- 6. Install GitHub Copilot CLI extension --------------------------------
 Write-Step "Checking GitHub Copilot CLI..."
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 if ($gh) {
@@ -164,7 +164,7 @@ if ($gh) {
         try {
             $null = & gh extension install github/gh-copilot 2>&1
         } catch {
-            # gh writes to stderr when extension already exists — not a real error
+            # gh writes to stderr when extension already exists -- not a real error
         }
         Write-Ok "Copilot CLI extension installed"
     }
@@ -173,7 +173,7 @@ if ($gh) {
     Write-Host "   Re-run install.bat after installing GitHub CLI."
 }
 
-# ── 7. Detect OneDrive for Business ───────────────────────────────────────
+# -- 7. Detect OneDrive for Business ---------------------------------------
 Write-Step "Detecting OneDrive for Business..."
 $oneDriveBiz = $env:OneDriveCommercial
 if ($oneDriveBiz -and (Test-Path $oneDriveBiz)) {
@@ -187,7 +187,7 @@ if ($oneDriveBiz -and (Test-Path $oneDriveBiz)) {
     $pulseTeam = "$env:USERPROFILE\OneDrive - Microsoft\Documents\Pulse-Team"
 }
 
-# ── 8. Create virtual environment ─────────────────────────────────────────
+# -- 8. Create virtual environment -----------------------------------------
 Write-Step "Setting up Python virtual environment..."
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
@@ -210,7 +210,7 @@ if (Test-Path $activateScript) {
     Write-Warn "Could not activate venv - continuing with system Python"
 }
 
-# ── 9. Install pip dependencies ────────────────────────────────────────────
+# -- 9. Install pip dependencies --------------------------------------------
 Write-Step "Installing Python dependencies..."
 & python -m pip install --upgrade pip --quiet 2>$null
 & python -m pip install -r requirements.txt --quiet
@@ -220,7 +220,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "All dependencies installed"
 
-# ── 10. Install Playwright Edge browser ────────────────────────────────────
+# -- 10. Install Playwright Edge browser ------------------------------------
 Write-Step "Installing Playwright Edge browser..."
 & python -m playwright install msedge 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -229,7 +229,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Ok "msedge installed"
 }
 
-# ── 11. Seed PULSE_HOME directory structure ────────────────────────────────
+# -- 11. Seed PULSE_HOME directory structure --------------------------------
 Write-Step "Seeding data directories..."
 
 $pulseDirs = @(
@@ -252,7 +252,7 @@ if (-not (Test-Path $pulseTeam)) {
 }
 Write-Ok "Pulse-Team: $pulseTeam"
 
-# ── 12. Seed standing-instructions.yaml ────────────────────────────────────
+# -- 12. Seed standing-instructions.yaml ------------------------------------
 Write-Step "Checking standing-instructions..."
 $siDest = Join-Path $pulseHome "standing-instructions.yaml"
 $siTemplate = Join-Path $root "config\standing-instructions.template.yaml"
@@ -270,7 +270,7 @@ if (-not (Test-Path $siDest)) {
     Write-Ok "standing-instructions.yaml already exists"
 }
 
-# ── 13. Create .env (only if needed for overrides) ────────────────────────
+# -- 13. Create .env (only if needed for overrides) ------------------------
 Write-Step "Checking .env file..."
 if (-not (Test-Path ".env")) {
     if (-not $oneDriveBiz) {
@@ -285,7 +285,7 @@ if (-not (Test-Path ".env")) {
     Write-Ok ".env already exists"
 }
 
-# ── 14. Create Desktop shortcut ───────────────────────────────────────────
+# -- 14. Create Desktop shortcut -------------------------------------------
 Write-Step "Creating Desktop shortcut..."
 $desktopPath = [System.Environment]::GetFolderPath("Desktop")
 $shortcutBat = Join-Path $desktopPath "Start Pulse.bat"
@@ -304,7 +304,7 @@ pause
 Set-Content -Path $shortcutBat -Value $batContent -Encoding ASCII
 Write-Ok "Created: $shortcutBat"
 
-# ── Done ──────────────────────────────────────────────────────────────────
+# -- Done ------------------------------------------------------------------
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
 Write-Host "  Setup complete!" -ForegroundColor Green
@@ -323,7 +323,7 @@ Write-Host "  Pulse-Team:  $pulseTeam" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "  1. Run:  .venv\Scripts\activate && python src\pulse.py --health-check" -ForegroundColor White
-Write-Host "     (This opens Pulse's browser profile — sign into Teams there, not regular Edge)" -ForegroundColor Yellow
+Write-Host "     (This opens Pulse's browser profile -- sign into Teams there, not regular Edge)" -ForegroundColor Yellow
 Write-Host "  2. Double-click 'Start Pulse' on your Desktop" -ForegroundColor White
 Write-Host "  3. The Chat tab will walk you through final setup" -ForegroundColor White
 Write-Host ""

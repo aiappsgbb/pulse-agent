@@ -15,6 +15,7 @@ import asyncio
 import logging
 import subprocess
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -98,6 +99,38 @@ async def ensure_browser() -> "BrowserManager | None":
         except Exception as e:
             log.warning(f"Lazy browser start failed: {e}")
             return None
+
+
+@asynccontextmanager
+async def browser_page():
+    """Acquire a browser page and release it on exit.
+
+    Yields a Page object from the shared browser. Yields None if the browser
+    is unavailable or page creation fails, so callers can handle gracefully:
+
+        async with browser_page() as page:
+            if page is None:
+                return None
+            ...
+    """
+    mgr = await ensure_browser()
+    if not mgr:
+        yield None
+        return
+
+    try:
+        page = await mgr.new_page()
+    except Exception:
+        yield None
+        return
+
+    try:
+        yield page
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
 
 
 def _default_profile_dir() -> str:

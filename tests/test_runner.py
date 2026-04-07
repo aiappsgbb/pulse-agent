@@ -455,7 +455,7 @@ def test_auto_cancel_overdue_beyond_threshold(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1
     data = yaml.safe_load((proj_dir / "acme.yaml").read_text(encoding="utf-8"))
@@ -475,7 +475,7 @@ def test_auto_cancel_skips_recent_overdue(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
     data = yaml.safe_load((proj_dir / "beta.yaml").read_text(encoding="utf-8"))
@@ -494,7 +494,7 @@ def test_auto_cancel_skips_done_and_cancelled(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
 
@@ -510,7 +510,7 @@ def test_auto_cancel_handles_overdue_status(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1
     data = yaml.safe_load((proj_dir / "delta.yaml").read_text(encoding="utf-8"))
@@ -538,7 +538,7 @@ def test_auto_cancel_multiple_projects(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 1  # only the 15-day-old one
     data_a = yaml.safe_load((proj_dir / "proj-a.yaml").read_text(encoding="utf-8"))
@@ -552,7 +552,7 @@ def test_auto_cancel_multiple_projects(tmp_dir):
 def test_auto_cancel_no_projects_dir(tmp_dir):
     """Returns 0 if projects dir doesn't exist."""
     with patch("sdk.runner.PROJECTS_DIR", tmp_dir / "nonexistent"):
-        assert _auto_cancel_stale_commitments() == 0
+        assert _auto_cancel_stale_commitments() == (0, [])
 
 
 def test_auto_cancel_no_due_date(tmp_dir):
@@ -565,7 +565,7 @@ def test_auto_cancel_no_due_date(tmp_dir):
         ],
     })
     with patch("sdk.runner.PROJECTS_DIR", proj_dir):
-        cancelled = _auto_cancel_stale_commitments(max_overdue_days=5)
+        cancelled, _ = _auto_cancel_stale_commitments(max_overdue_days=5)
 
     assert cancelled == 0
 
