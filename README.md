@@ -77,11 +77,11 @@ Queue jobs from anywhere: `Ctrl+D` (digest), `Ctrl+T` (triage), `Ctrl+I` (intel)
 
 ### Option A: AI-assisted setup (recommended)
 
-Open **GitHub Copilot Chat** or any AI coding assistant in the repo folder and paste this:
+Open **GitHub Copilot Chat** (or any AI coding assistant) and paste this:
 
-> Follow the instructions in SETUP.md to set up Pulse Agent on my machine.
+> Clone https://github.com/aiappsgbb/pulse-agent.git and follow SETUP.md to install Pulse Agent on my machine. Run all commands yourself — only pause when a step says USER ACTION REQUIRED.
 
-Your AI will run the installer, install all prerequisites, set up the environment, and verify everything works. No manual steps -- it handles Python, Node.js, GitHub CLI, WorkIQ, everything.
+That's it. Your AI will clone the repo, install all prerequisites (Python, Node.js, GitHub CLI, WorkIQ, Playwright), set up the environment, and verify everything works. Three steps need your input: GitHub login, Teams browser login, and answering personalization questions (~2 min).
 
 ### Option B: Double-click installer
 
