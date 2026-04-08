@@ -140,6 +140,8 @@ def playwright_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPL
         )
 
     # Fallback: launch own browser (CLI --once mode, no shared browser)
+    # Use --headless=new because @playwright/mcp may not forward --headless
+    # correctly to newer Edge versions (146+).
     from core.browser import _default_profile_dir
     user_data_dir = _default_profile_dir()
     return MCPLocalServerConfig(
@@ -150,6 +152,7 @@ def playwright_mcp_config(config: dict, cdp_endpoint: str | None = None) -> MCPL
             "--browser", "msedge",
             "--headless",
             "--user-data-dir", user_data_dir,
+            "--launch-options", '{"args":["--headless=new"]}',
         ],
         tools=["*"],
         timeout=120000,

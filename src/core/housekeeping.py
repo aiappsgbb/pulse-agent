@@ -14,6 +14,7 @@ Default retention (days):
   - digest state (.digest-state.json): prune entries older than 30 days
   - intel state (.intel-state.json): prune entries older than 30 days
   - digest actions (.digest-actions.json): prune expired snoozed (>1d) and archived (>30d)
+  - agent reports (knowledge-run-*, research-*, etc.): 7
 """
 
 import json
@@ -35,7 +36,20 @@ DEFAULT_RETENTION = {
     "completed_jobs": 3,
     "job_history": 30,
     "state_files": 30,
+    "agent_reports": 7,
 }
+
+# Glob patterns for agent-written reports that land in PULSE_HOME root.
+# These are produced by knowledge mining, research, and other agent sessions.
+_AGENT_REPORT_PATTERNS = [
+    "knowledge-run-*.md",
+    "knowledge-gathering-*.md",
+    "customer-engagement-summary-*.md",
+    "action-items-dashboard-*.md",
+    "project-enrichment-summary-*.md",
+    "urgent-actions-*.md",
+    "research-*.md",
+]
 
 
 def _age_days_from_stat(st_mtime: float) -> float:
@@ -263,6 +277,11 @@ def run_housekeeping(config: dict | None = None) -> dict:
     # 9. Digest actions — prune expired dismissed/archived entries
     n = _prune_digest_actions(PULSE_HOME / ".digest-actions.json")
     summary["digest_actions"] = n
+
+    # 10. Agent-written reports in PULSE_HOME root (knowledge runs, summaries, etc.)
+    for pattern in _AGENT_REPORT_PATTERNS:
+        n = _delete_old_files(PULSE_HOME, pattern, retention["agent_reports"])
+        summary[f"agent_{pattern.split('-')[0]}"] = n
 
     total = sum(summary.values())
     if total > 0:

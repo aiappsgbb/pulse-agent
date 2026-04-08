@@ -146,9 +146,9 @@ async def _get_chat_session(client, config):
 
     from sdk.tools import get_tools
     from sdk.session import build_session_config
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
 
-    mgr = get_browser_manager()
+    mgr = await ensure_browser()
     cdp_endpoint = mgr.cdp_endpoint if mgr else None
 
     session_config = build_session_config(

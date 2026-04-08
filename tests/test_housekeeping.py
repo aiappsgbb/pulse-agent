@@ -281,3 +281,41 @@ def test_default_retention_values():
     assert DEFAULT_RETENTION["logs"] == 7
     assert DEFAULT_RETENTION["job_logs"] == 3
     assert DEFAULT_RETENTION["completed_jobs"] == 3
+    assert DEFAULT_RETENTION["agent_reports"] == 7
+
+
+def test_agent_reports_cleaned_up(tmp_path, monkeypatch):
+    """Housekeeping should delete old agent-written reports from PULSE_HOME root."""
+    monkeypatch.setattr("core.housekeeping.PULSE_HOME", tmp_path)
+    monkeypatch.setattr("core.housekeeping.LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr("core.housekeeping.DIGESTS_DIR", tmp_path / "digests")
+    monkeypatch.setattr("core.housekeeping.INTEL_DIR", tmp_path / "intel")
+    monkeypatch.setattr("core.housekeeping.JOBS_DIR", tmp_path / "jobs")
+
+    # Old knowledge run files (should be deleted at 7 day default)
+    _make_old_file(tmp_path / "knowledge-run-2026-02-24-archive.md", 30)
+    _make_old_file(tmp_path / "knowledge-run-2026-03-01-archive.md", 20)
+    _make_old_file(tmp_path / "knowledge-gathering-2026-02-20.md", 40)
+    _make_old_file(tmp_path / "customer-engagement-summary-2026-03-01.md", 15)
+    _make_old_file(tmp_path / "action-items-dashboard-2026-03-05.md", 10)
+    _make_old_file(tmp_path / "project-enrichment-summary-2026-03-10.md", 10)
+    _make_old_file(tmp_path / "urgent-actions-2026-03-15.md", 10)
+    _make_old_file(tmp_path / "research-vodafone-pricing.md", 10)
+
+    # Recent files (should be kept)
+    _make_recent_file(tmp_path / "knowledge-run-2026-04-07-archive.md")
+    _make_recent_file(tmp_path / "urgent-actions-2026-04-08.md")
+
+    summary = run_housekeeping()
+
+    # Old files deleted
+    assert not (tmp_path / "knowledge-run-2026-02-24-archive.md").exists()
+    assert not (tmp_path / "knowledge-run-2026-03-01-archive.md").exists()
+    assert not (tmp_path / "knowledge-gathering-2026-02-20.md").exists()
+    assert not (tmp_path / "customer-engagement-summary-2026-03-01.md").exists()
+    assert not (tmp_path / "action-items-dashboard-2026-03-05.md").exists()
+    assert not (tmp_path / "research-vodafone-pricing.md").exists()
+
+    # Recent files kept
+    assert (tmp_path / "knowledge-run-2026-04-07-archive.md").exists()
+    assert (tmp_path / "urgent-actions-2026-04-08.md").exists()
