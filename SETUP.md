@@ -443,8 +443,14 @@ python -m pytest tests/ -q --tb=line
 
 ### **USER ACTION REQUIRED**
 
-Launch the onboarding flow. This starts the TUI with a chat conversation that asks the user about their role, preferences, and schedule:
+Launch the onboarding flow. This starts the TUI with a chat conversation that asks the user about their role, preferences, and schedule.
 
+**Make sure the venv is activated** (same as Step 6). If in doubt, re-activate:
+
+**PowerShell**: `.venv\Scripts\Activate.ps1`
+**Bash**: `source .venv/Scripts/activate`
+
+Then run:
 ```
 python src/pulse.py --setup
 ```
