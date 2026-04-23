@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+from inspect import signature
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ from core.scheduler import (
     list_schedules,
     mark_run,
     ensure_default_schedules,
+    scheduler_loop,
 )
 
 
@@ -448,3 +450,11 @@ def test_ensure_default_schedules_idempotent(tmp_dir):
         schedules = list_schedules()
 
     assert len(schedules) == 1
+
+
+# --- scheduler_loop signature ---
+
+def test_scheduler_loop_default_check_interval_is_30s():
+    """Cross-agent poll cadence depends on this. 60s was too slow for demo."""
+    sig = signature(scheduler_loop)
+    assert sig.parameters["check_interval"].default == 30
