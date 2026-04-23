@@ -165,3 +165,35 @@ async def test_handle_agent_request_no_context_writes_minimal_response(tmp_path,
     assert data["status"] == "no_context"
     assert data["project_id"] == "some-project"
     assert data.get("result", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_request_declined_preserves_reason(tmp_path, monkeypatch):
+    """declined responses include the reason field in the written YAML."""
+    from daemon.worker import _handle_agent_request
+
+    reply_to = tmp_path / "reply"
+    reply_to.mkdir()
+    job = {
+        "type": "agent_request",
+        "task": "what's the customer name?",
+        "project_id": "contoso-engagement",
+        "from": "Artur",
+        "from_alias": "artur",
+        "reply_to": str(reply_to),
+        "request_id": "test-req-declined",
+        "created_at": "2026-04-23T10:00:00",
+    }
+    config = {"user": {"name": "Beta", "alias": "beta"}}
+
+    fake_run = AsyncMock(return_value='```json\n{"status": "declined", "reason": "customer name is sensitive"}\n```')
+    monkeypatch.setattr("daemon.worker._run_guardian_session", fake_run)
+
+    await _handle_agent_request(MagicMock(), config, job)
+
+    yaml_files = list(reply_to.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    data = yaml.safe_load(yaml_files[0].read_text())
+    assert data["status"] == "declined"
+    assert data["reason"] == "customer name is sensitive"
+    assert data["project_id"] == "contoso-engagement"

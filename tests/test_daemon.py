@@ -143,6 +143,7 @@ def test_write_guardian_response_empty_reply_to_no_crash(tmp_dir, caplog):
     )
     # Nothing should be written anywhere
     assert not list(tmp_dir.glob("**/*.yaml"))
+    assert any("no reply_to" in rec.message.lower() or "cannot send" in rec.message.lower() for rec in caplog.records)
 
 
 def test_write_guardian_response_creates_missing_reply_dir(tmp_dir):

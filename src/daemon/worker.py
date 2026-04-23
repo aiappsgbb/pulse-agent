@@ -775,11 +775,13 @@ async def _run_guardian_session(client, config: dict, job: dict) -> str:
 
     tools = get_tools()
     async with agent_session(client, config, "guardian", tools=tools) as (session, handler):
-        await session.send(user_prompt)
+        await session.send({"prompt": user_prompt})
         try:
             await asyncio.wait_for(handler.done.wait(), timeout=120)
         except asyncio.TimeoutError:
             log.warning(f"  Guardian session timed out for req {str(job.get('request_id', '?'))[:8]}")
+        if handler.error:
+            log.warning(f"  Guardian session error for req {str(job.get('request_id', '?'))[:8]}: {handler.error}")
         return handler.final_text or ""
 
 
