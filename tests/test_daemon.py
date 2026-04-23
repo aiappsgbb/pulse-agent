@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from daemon.heartbeat import parse_interval
 from core.scheduler import is_office_hours
-from daemon.worker import _write_agent_response, _requeue_with_delay, _is_transient_error
+from daemon.worker import _write_guardian_response, _requeue_with_delay, _is_transient_error
 
 
 # --- _is_transient_error ---
@@ -98,60 +98,63 @@ def test_office_hours_with_config():
     assert isinstance(result, bool)
 
 
-# --- _write_agent_response ---
+# --- _write_guardian_response ---
 
 
-def test_write_agent_response_creates_yaml(tmp_dir):
+def test_write_guardian_response_writes_yaml(tmp_dir):
     """Response YAML is written to reply_to path with correct fields."""
     reply_dir = tmp_dir / "reply-jobs"
     reply_dir.mkdir()
 
-    config = {"user": {"name": "Esther Barthel"}}
+    config = {"user": {"name": "Beta User", "alias": "beta"}}
     job = {
-        "type": "agent_request",
-        "task": "What about Vodafone?",
-        "from": "Artur Zielinski",
+        "task": "original question?",
+        "project_id": "some-project",
         "reply_to": str(reply_dir),
-        "request_id": "abc-12345678",
+        "request_id": "abc12345",
     }
+    parsed = {
+        "status": "answered",
+        "result": "Some answer.",
+        "sources": ["transcripts/x.md"],
+    }
+    _write_guardian_response(config, job, parsed)
 
-    _write_agent_response(config, job, "Vodafone deal is progressing well.")
-
-    yaml_files = list(reply_dir.glob("*.yaml"))
-    assert len(yaml_files) == 1
-    data = yaml.safe_load(yaml_files[0].read_text())
+    files = list(reply_dir.glob("*.yaml"))
+    assert len(files) == 1
+    data = yaml.safe_load(files[0].read_text())
     assert data["type"] == "agent_response"
     assert data["kind"] == "response"
-    assert data["request_id"] == "abc-12345678"
-    assert data["from"] == "Esther Barthel"
-    assert "Vodafone" in data["result"]
-    assert data["original_task"] == "What about Vodafone?"
+    assert data["status"] == "answered"
+    assert data["project_id"] == "some-project"
+    assert data["request_id"] == "abc12345"
+    assert data["from"] == "Beta User"
+    assert data["result"] == "Some answer."
+    assert data["sources"] == ["transcripts/x.md"]
+    assert data["original_task"] == "original question?"
 
 
-def test_write_agent_response_no_reply_to(tmp_dir):
+def test_write_guardian_response_empty_reply_to_no_crash(tmp_dir, caplog):
     """No crash and no file written when reply_to is empty."""
-    config = {"user": {"name": "Esther"}}
-    job = {"type": "agent_request", "task": "Test", "reply_to": ""}
-
-    _write_agent_response(config, job, "Result")
+    _write_guardian_response(
+        {"user": {"name": "X", "alias": "x"}},
+        {"task": "q", "reply_to": "", "request_id": "r"},
+        {"status": "no_context"},
+    )
     # Nothing should be written anywhere
     assert not list(tmp_dir.glob("**/*.yaml"))
 
 
-def test_write_agent_response_creates_reply_dir(tmp_dir):
+def test_write_guardian_response_creates_missing_reply_dir(tmp_dir):
     """reply_to directory is created if it does not exist."""
-    reply_dir = tmp_dir / "new-reply-dir"
-    config = {"user": {"name": "Esther"}}
-    job = {
-        "type": "agent_request",
-        "task": "Test",
-        "reply_to": str(reply_dir),
-        "request_id": "xyz-987",
-    }
-
-    _write_agent_response(config, job, "Answer here.")
-    assert reply_dir.exists()
-    assert len(list(reply_dir.glob("*.yaml"))) == 1
+    reply_to = tmp_dir / "new" / "deep"  # does not exist yet
+    _write_guardian_response(
+        {"user": {"name": "B", "alias": "b"}},
+        {"task": "q", "project_id": "p", "reply_to": str(reply_to), "request_id": "abc123"},
+        {"status": "no_context"},
+    )
+    assert reply_to.exists()
+    assert len(list(reply_to.glob("*.yaml"))) == 1
 
 
 # --- _requeue_with_delay ---

@@ -398,10 +398,9 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
                             log.warning(f"  Auto-sweep failed: {e}")
 
             elif job_type == "agent_request":
-                result_text = await _handle_agent_request(client, config, job)
+                await _handle_agent_request(client, config, job)
                 if "_file" in job:
                     mark_task_completed(job)
-                _write_agent_response(config, job, result_text)
 
             elif job_type == "agent_response":
                 from_name = job.get("from", "Unknown")
@@ -755,30 +754,46 @@ async def _execute_inbox_sweep(config: dict, full_sweep: bool = False) -> dict:
     return await execute_sweep(config, full_sweep=full_sweep)
 
 
-async def _handle_agent_request(client, config: dict, job: dict) -> str:
-    """Process an incoming agent_request — runs a chat query to answer."""
-    from sdk.runner import run_job
+async def _run_guardian_session(client, config: dict, job: dict) -> str:
+    """Open an SDK session in 'guardian' mode and return the final text.
 
+    Returns an empty string on timeout or error; parser will default to no_context.
+    """
+    from sdk.session import agent_session
+    from sdk.tools import get_tools
+
+    task_text = job.get("task", "")
+    from_name = job.get("from", "Unknown")
+    project_id = job.get("project_id", "")
+
+    user_prompt = (
+        f"Teammate: {from_name}\n"
+        f"Project context: {project_id or '(unspecified)'}\n"
+        f"Question: {task_text}\n\n"
+        f"Follow the Guardian Mode workflow. End with the structured JSON."
+    )
+
+    tools = get_tools()
+    async with agent_session(client, config, "guardian", tools=tools) as (session, handler):
+        await session.send(user_prompt)
+        try:
+            await asyncio.wait_for(handler.done.wait(), timeout=120)
+        except asyncio.TimeoutError:
+            log.warning(f"  Guardian session timed out for req {str(job.get('request_id', '?'))[:8]}")
+        return handler.final_text or ""
+
+
+async def _handle_agent_request(client, config: dict, job: dict) -> None:
+    """Process an incoming agent_request via Guardian Mode and write response YAML."""
     task_text = job.get("task", "")
     from_name = job.get("from", "Unknown")
     kind = job.get("kind", "question")
 
-    log.info(f"  Agent request from {from_name} ({kind}): {task_text[:80]}...")
+    log.info(f"  Guardian for {from_name} ({kind}): {task_text[:80]}...")
 
-    if kind == "research":
-        context = {"task": job}
-        result = await run_job(client, config, "research", context=context)
-    else:
-        prompt = (
-            f"A colleague ({from_name}) sent this request to your agent:\n\n"
-            f"**Request ({kind}):** {task_text}\n\n"
-            f"Search your local files (transcripts, documents, emails) for relevant "
-            f"context and provide a thorough answer. Include specific details from "
-            f"meetings and documents if available."
-        )
-        result = await run_chat_query(client, config, prompt)
-
-    return result or "No response generated."
+    output_text = await _run_guardian_session(client, config, job)
+    parsed = _parse_guardian_output(output_text)
+    _write_guardian_response(config, job, parsed)
 
 
 def _parse_guardian_output(text: str) -> dict:
@@ -820,47 +835,54 @@ def _parse_guardian_output(text: str) -> dict:
     return data
 
 
-def _write_agent_response(config: dict, original_job: dict, result_text: str):
-    """Write a response YAML to the requesting agent's reply_to path."""
+def _write_guardian_response(config: dict, original_job: dict, parsed: dict) -> None:
+    """Write a structured response YAML to the requester's reply_to path.
+
+    ``parsed`` is the Guardian LLM's output dict, at minimum containing 'status'.
+    """
     reply_to = original_job.get("reply_to", "")
     if not reply_to:
-        log.warning("  Agent request has no reply_to — cannot send response")
+        log.warning("  Agent request has no reply_to, cannot send response")
         return
 
     reply_dir = Path(reply_to)
-    if not reply_dir.exists():
-        try:
-            reply_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            log.error(f"  Cannot create reply_to path: {e}")
-            return
+    try:
+        reply_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        log.error(f"  Cannot create reply_to path: {e}")
+        return
 
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = from_name.lower().split()[0] if from_name else "unknown"
+    from_alias = user_cfg.get("alias") or (from_name.lower().split()[0] if from_name else "unknown")
 
     request_id = original_job.get("request_id", "unknown")
+    project_id = original_job.get("project_id", "")
     timestamp = datetime.now().isoformat()
     date_str = datetime.now().strftime("%Y-%m-%d")
-    slug = request_id[:8]
+    slug = str(request_id)[:8]
 
     response_data = {
         "type": "agent_response",
         "kind": "response",
         "request_id": request_id,
+        "project_id": project_id,
         "from": from_name,
         "from_alias": from_alias,
         "original_task": original_job.get("task", "")[:200],
-        "result": result_text,
+        "status": parsed.get("status", "no_context"),
+        "result": parsed.get("result", ""),
+        "sources": parsed.get("sources", []),
         "created_at": timestamp,
     }
+    if parsed.get("status") == "declined" and "reason" in parsed:
+        response_data["reason"] = parsed["reason"]
 
     response_file = reply_dir / f"{date_str}-response-{from_alias}-{slug}.yaml"
-
-    with open(response_file, "w") as f:
+    with open(response_file, "w", encoding="utf-8") as f:
         yaml.dump(response_data, f, default_flow_style=False)
 
-    log.info(f"  Response written to: {response_file}")
+    log.info(f"  Guardian response written: status={parsed.get('status')} to {response_file}")
 
 
 def _build_onboarding_prompt(config: dict, user_prompt: str) -> str:

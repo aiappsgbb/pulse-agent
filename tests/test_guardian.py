@@ -81,3 +81,87 @@ def test_parse_guardian_output_bare_json_no_fence():
     result = _parse_guardian_output(text)
     assert result["status"] == "answered"
     assert result["result"] == "answer"
+
+
+# --- Guardian session flow ---
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+import yaml
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_request_writes_response_yaml(tmp_path, monkeypatch):
+    """Guardian session flow: fake LLM returns structured JSON, worker writes YAML."""
+    from daemon.worker import _handle_agent_request
+
+    reply_to = tmp_path / "reply"
+    reply_to.mkdir()
+
+    job = {
+        "type": "agent_request",
+        "kind": "broadcast",
+        "task": "Any context on Fabric-on-SAP?",
+        "project_id": "fabric-sap-engagement",
+        "from": "Artur Zielinski",
+        "from_alias": "artur",
+        "reply_to": str(reply_to),
+        "request_id": "test-req-123",
+        "created_at": "2026-04-23T10:00:00",
+    }
+    config = {"user": {"name": "Beta User", "alias": "beta"}}
+
+    # Mock the Guardian session to return a happy-path answer
+    fake_output = '''```json
+{"status": "answered", "result": "Found 2 POCs in my notes.", "sources": ["transcripts/a.md"]}
+```'''
+    fake_run = AsyncMock(return_value=fake_output)
+    monkeypatch.setattr("daemon.worker._run_guardian_session", fake_run)
+
+    client = MagicMock()
+    await _handle_agent_request(client, config, job)
+
+    yaml_files = list(reply_to.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    data = yaml.safe_load(yaml_files[0].read_text())
+    assert data["type"] == "agent_response"
+    assert data["status"] == "answered"
+    assert data["project_id"] == "fabric-sap-engagement"
+    assert data["request_id"] == "test-req-123"
+    assert data["from"] == "Beta User"
+    assert data["result"] == "Found 2 POCs in my notes."
+    assert data["sources"] == ["transcripts/a.md"]
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_request_no_context_writes_minimal_response(tmp_path, monkeypatch):
+    """no_context responses still write a YAML so the sender can log+dedup."""
+    from daemon.worker import _handle_agent_request
+
+    reply_to = tmp_path / "reply"
+    reply_to.mkdir()
+    job = {
+        "type": "agent_request",
+        "task": "something obscure",
+        "project_id": "some-project",
+        "from": "Artur",
+        "from_alias": "artur",
+        "reply_to": str(reply_to),
+        "request_id": "test-req-456",
+        "created_at": "2026-04-23T10:00:00",
+    }
+    config = {"user": {"name": "Beta", "alias": "beta"}}
+
+    fake_run = AsyncMock(return_value='```json\n{"status": "no_context"}\n```')
+    monkeypatch.setattr("daemon.worker._run_guardian_session", fake_run)
+
+    await _handle_agent_request(MagicMock(), config, job)
+
+    yaml_files = list(reply_to.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    data = yaml.safe_load(yaml_files[0].read_text())
+    assert data["status"] == "no_context"
+    assert data["project_id"] == "some-project"
+    assert data.get("result", "") == ""
