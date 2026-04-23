@@ -1,4 +1,5 @@
 """Tests for broadcast_to_team tool -- fan-out to all configured teammates."""
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -47,6 +48,8 @@ async def test_broadcast_fans_out_to_all_teammates(tmp_team):
         assert data["from_alias"] == "artur"
         assert "Fabric-on-SAP" in data["task"]
         assert data["request_id"]  # UUID set
+        # reply_to must point to the sender's own inbox so responses route back
+        assert Path(data["reply_to"]) == team_dir / "artur" / "jobs" / "pending"
 
 
 @pytest.mark.asyncio
@@ -101,3 +104,26 @@ async def test_broadcast_skips_inaccessible_teammate_folders(tmp_path):
     # Verify only alpha got a YAML
     alpha_files = list((team_dir / "alpha" / "jobs" / "pending").glob("*.yaml"))
     assert len(alpha_files) == 1
+
+
+@pytest.mark.asyncio
+async def test_broadcast_all_folders_inaccessible_returns_error(tmp_path):
+    """When every teammate's folder is missing, return ERROR so LLM sees the failure."""
+    team_dir = tmp_path / "Pulse-Team"
+    # Neither alpha nor beta folder exists
+    config = {
+        "team": [
+            {"name": "Alpha", "alias": "alpha"},
+            {"name": "Beta", "alias": "beta"},
+        ],
+        "user": {"name": "Artur", "alias": "artur"},
+    }
+    with patch("core.config.load_config", return_value=config), \
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
+        result = await broadcast_to_team.handler({"arguments": {
+            "question": "What do you know about the Contoso deal?",
+            "project_id": "contoso-deal",
+        }})
+
+    assert "ERROR" in result["textResultForLlm"]
+    assert "broadcast failed" in result["textResultForLlm"]

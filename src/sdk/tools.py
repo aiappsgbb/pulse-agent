@@ -441,15 +441,19 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
             "priority": "normal",
             "created_at": timestamp,
         }
-        task_file = jobs_dir / f"{date_str}-from-{from_alias}-broadcast-{slug}.yaml"
+        task_file = jobs_dir / f"{date_str}-from-{from_alias}-broadcast-{slug}-{request_id[:8]}.yaml"
         with open(task_file, "w") as f:
             yaml.dump(task_data, f, default_flow_style=False)
         sent.append(alias)
 
+    if not sent:
+        reason = f"Skipped: {', '.join(skipped)}" if skipped else "no eligible teammates"
+        return f"ERROR: broadcast failed, no teammate folders were accessible ({reason})."
+
     msg = f"Broadcasted to {len(sent)} teammate{'s' if len(sent) != 1 else ''}: {', '.join(sent) or '(none)'}"
     if skipped:
         msg += f" | Skipped (folder not accessible): {', '.join(skipped)}"
-    msg += f" | Request ID: {request_id} | Responses will accrete into project '{params.project_id}'."
+    msg += f" | Request ID: {request_id} | Responses will accrete into project '{params.project_id}'. Do NOT call this tool again for the same question."
     return msg
 
 
