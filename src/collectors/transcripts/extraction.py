@@ -1,5 +1,6 @@
 """Transcript extraction from SharePoint Stream pages — click Transcript tab, scroll+collect."""
 
+import json as _json
 import re
 
 from playwright.async_api import Page
@@ -9,6 +10,19 @@ from collectors.transcripts.js_snippets import (
     FIND_SCROLL_CONTAINER_JS,
     SCROLL_AND_COLLECT_JS,
 )
+
+
+# URL pattern for SharePoint's direct transcript content endpoint:
+#   .../_api/v2.1/drives/{driveId}/items/{itemId}/versions/current/media/transcripts/{uuid}/content
+# The recap launcher routes to this when the Stream viewer isn't applicable.
+# We can fetch it directly (auth cookies travel on the browser context's request
+# client) and parse the WebVTT body — no DOM scraping needed.
+_API_TRANSCRIPT_RE = re.compile(r"/_api/.+/media/transcripts/[^/]+/content(?:$|\?)")
+
+
+def is_api_transcript_url(url: str) -> bool:
+    """True if URL is a SharePoint API transcript-content endpoint."""
+    return bool(url) and bool(_API_TRANSCRIPT_RE.search(url))
 
 
 class TransientExtractionError(Exception):
@@ -110,11 +124,16 @@ async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) ->
     Raises:
         TransientExtractionError: Auth/page-load failures (caller should NOT mark attempted).
     """
-    # Skip API URLs that trigger downloads instead of rendering pages.
-    # This is permanent — the URL structure won't change on retry.
+    # SharePoint's recap launcher often hands us a direct transcript-content
+    # API URL rather than a viewable Stream page. Fetch + parse the VTT body
+    # directly — no DOM scraping required.
+    if is_api_transcript_url(sharepoint_url):
+        return await _fetch_api_transcript(page, sharepoint_url)
+
+    # Any OTHER /_api/ URL (non-transcript) is still useless to navigate to.
     if "/_api/" in sharepoint_url or "/media/transcripts/" in sharepoint_url:
-        log.info(f"    Skipping API/transcript URL (not a viewable page): {sharepoint_url[:80]}")
-        return False
+        log.warning(f"    Skipping non-transcript API URL: {sharepoint_url[:80]}")
+        return None
 
     log.info(f"    Navigating to SharePoint Stream: {sharepoint_url[:100]}...")
     try:
@@ -248,6 +267,132 @@ async def extract_transcript_from_sharepoint(page: Page, sharepoint_url: str) ->
         return None
 
     return clean_transcript(entries)
+
+
+def parse_vtt(body: str) -> str | None:
+    """Parse WebVTT body into the standard speaker-attributed transcript format.
+
+    Accepts either Teams' `<v Speaker>text</v>` voice-tag style or the plain
+    `Speaker: text` style, one cue at a time. Output matches clean_transcript:
+        [M:SS] Speaker: text
+    Returns None if no cues parsed.
+    """
+    if not body or "WEBVTT" not in body.split("\n", 1)[0].upper():
+        # Allow VTT without header in case the server strips it — still try.
+        if not body or "-->" not in body:
+            return None
+
+    # Split into cue blocks. A cue is a (optional id) + timestamp line + text line(s),
+    # separated by blank lines.
+    blocks = re.split(r"\n\s*\n", body.strip())
+    voice_tag_re = re.compile(r"<v\s+([^>]+?)>(.*?)(?:</v>|$)", re.DOTALL)
+    ts_re = re.compile(r"(\d{2}):(\d{2}):(\d{2})[.,]\d+\s+-->")
+
+    out = []
+    for block in blocks:
+        if "-->" not in block:
+            continue
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        ts_idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if ts_idx is None:
+            continue
+        m = ts_re.search(lines[ts_idx])
+        if not m:
+            continue
+        h, mnt, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        total_seconds = h * 3600 + mnt * 60 + s
+
+        text_lines = lines[ts_idx + 1:]
+        if not text_lines:
+            continue
+        text_blob = "\n".join(text_lines).strip()
+
+        vm = voice_tag_re.search(text_blob)
+        if vm:
+            speaker = vm.group(1).strip()
+            text = vm.group(2).strip()
+            # Strip any trailing voice-tag pieces / other tags
+            text = re.sub(r"<[^>]+>", "", text).strip()
+        else:
+            # Fall back to "Speaker: text" convention
+            colon = text_blob.find(":")
+            if 0 < colon < 60 and "\n" not in text_blob[:colon]:
+                speaker = text_blob[:colon].strip()
+                text = text_blob[colon + 1:].strip()
+            else:
+                speaker = "Unknown"
+                text = text_blob
+            text = re.sub(r"<[^>]+>", "", text).strip()
+
+        if not text:
+            continue
+        out.append((total_seconds, f"[{format_timestamp(total_seconds)}] {speaker}: {text}"))
+
+    if not out:
+        return None
+    out.sort(key=lambda x: x[0])
+    return "\n".join(line for _, line in out) + "\n"
+
+
+async def _fetch_api_transcript(page: Page, url: str) -> str | None | bool:
+    """Fetch transcript directly from SharePoint's API content endpoint.
+
+    Uses the browser context's request client so auth cookies travel with the
+    request. Returns the parsed transcript text, or False if the server says
+    the resource is gone/forbidden (permanent), or None for anything transient
+    worth retrying.
+    """
+    log.info(f"    API transcript fetch: {url[:100]}")
+    try:
+        resp = await page.context.request.get(url)
+    except Exception as e:
+        log.warning(f"    API transcript request failed: {e}")
+        return None
+
+    status = resp.status
+    if status == 404 or status == 410:
+        log.info(f"    API transcript returned {status} — recording has no transcript")
+        return False
+    if status == 401 or status == 403:
+        log.warning(f"    API transcript returned {status} — auth/permissions issue")
+        raise TransientExtractionError(f"API transcript auth failed ({status})")
+    if status >= 400:
+        log.warning(f"    API transcript returned {status} — will retry")
+        return None
+
+    try:
+        body = await resp.text()
+    except Exception as e:
+        log.warning(f"    Could not read API transcript body: {e}")
+        return None
+
+    if not body.strip():
+        log.info(f"    API transcript body empty")
+        return None
+
+    # Some endpoints return JSON-wrapped VTT (`{"vtt": "WEBVTT..."}`) rather than raw.
+    stripped = body.lstrip()
+    if stripped.startswith("{"):
+        try:
+            data = _json.loads(body)
+            for key in ("vtt", "content", "transcript"):
+                if isinstance(data.get(key), str):
+                    body = data[key]
+                    break
+        except Exception:
+            pass  # fall through — treat as raw text
+
+    parsed = parse_vtt(body)
+    if parsed:
+        n_cues = parsed.count("\n")
+        log.info(f"    Parsed {n_cues} VTT cues ({len(parsed)} chars)")
+        return parsed
+
+    log.warning(
+        f"    API transcript body did not parse as VTT "
+        f"(first 120 chars: {body[:120]!r})"
+    )
+    return None
 
 
 def clean_transcript(entries: dict[str, str]) -> str | None:
