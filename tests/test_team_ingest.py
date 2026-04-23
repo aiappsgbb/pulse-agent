@@ -101,6 +101,24 @@ def test_ingest_missing_project_is_logged_not_crashed(project_dir, caplog):
     _ingest_agent_response(job)
     # No project file should be created
     assert not (project_dir / "nonexistent-project.yaml").exists()
+    # Verify the warning log was emitted
+    assert any(
+        "not found" in rec.message.lower() or "dropping" in rec.message.lower()
+        for rec in caplog.records
+    )
+
+
+def test_ingest_declined_response_is_dropped(project_dir):
+    _write_project(project_dir, "fabric-sap")
+    job = {
+        "status": "declined",
+        "project_id": "fabric-sap",
+        "request_id": "req-declined",
+        "reason": "too sensitive",
+    }
+    _ingest_agent_response(job)
+    data = yaml.safe_load((project_dir / "fabric-sap.yaml").read_text())
+    assert data.get("team_context", []) == []
 
 
 def test_ingest_preserves_other_project_fields(project_dir):

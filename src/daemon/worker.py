@@ -923,7 +923,9 @@ def _ingest_agent_response(job: dict) -> None:
         log.error(f"  Ingest: cannot read project '{project_id}': {e}")
         return
 
-    team_context = data.get("team_context") or []
+    team_context = data.get("team_context")
+    if not isinstance(team_context, list):
+        team_context = []
     request_id = job.get("request_id", "")
     if any(entry.get("request_id") == request_id for entry in team_context):
         log.info(f"  Ingest: request_id {str(request_id)[:8]} already present, dedup skip")
@@ -935,17 +937,21 @@ def _ingest_agent_response(job: dict) -> None:
         "contributed_at": job.get("created_at", datetime.now().isoformat()),
         "question": job.get("original_task", "")[:200],
         "answer": job.get("result", ""),
-        "sources": job.get("sources", []),
+        "sources": job.get("sources") or [],
         "request_id": request_id,
     }
     team_context.append(entry)
     data["team_context"] = team_context
 
     # Atomic write via temp file + rename
-    tmp_path = project_path.with_suffix(".yaml.tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    tmp_path.replace(project_path)
+    try:
+        tmp_path = project_path.with_suffix(".yaml.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        tmp_path.replace(project_path)
+    except Exception as e:
+        log.error(f"  Ingest: failed to write project '{project_id}': {e}")
+        return
 
     log.info(f"  Ingest: added team_context entry to project '{project_id}' from {entry['from']}")
 
