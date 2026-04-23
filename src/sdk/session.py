@@ -217,10 +217,10 @@ async def agent_session(
     Handles session creation with retry, event streaming via dispatch table,
     and cleanup automatically.
     """
-    from core.browser import get_browser_manager
+    from core.browser import ensure_browser
     from sdk.event_handler import EventHandler
 
-    mgr = get_browser_manager()
+    mgr = await ensure_browser()
     cdp_endpoint = mgr.cdp_endpoint if mgr else None
 
     session_config = build_session_config(

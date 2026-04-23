@@ -2102,6 +2102,28 @@ class ProjectsPane(Widget):
         if summary:
             lines += ["", summary]
 
+        # Team context (answers received from teammate agents)
+        team_context = project.get("team_context", [])
+        if isinstance(team_context, list) and team_context:
+            n = len(team_context)
+            lines += ["", f"[bold cyan]Team Context ({n} contribution{'s' if n != 1 else ''})[/bold cyan]"]
+            for entry in team_context[-5:]:
+                if not isinstance(entry, dict):
+                    continue
+                who = entry.get("from", "?")
+                when = (entry.get("contributed_at") or "")[:10]
+                answer = (entry.get("answer") or "").strip()
+                sources = entry.get("sources") or []
+                lines.append(f"  [bold]{who}[/bold] [dim]({when})[/dim]")
+                for ln in answer.split("\n"):
+                    ln = ln.strip()
+                    if ln:
+                        lines.append(f"    {ln}")
+                if sources:
+                    src_names = ", ".join(str(s).split("/")[-1] for s in sources[:3])
+                    more = f" +{len(sources) - 3} more" if len(sources) > 3 else ""
+                    lines.append(f"    [dim]sources: {src_names}{more}[/dim]")
+
         # Key dates (upcoming/critical deadlines)
         key_dates = project.get("key_dates", [])
         if key_dates:

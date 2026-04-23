@@ -2,10 +2,16 @@
 
 # JS to extract URL parameters from the Teams launcher page.
 # "View recap" in Outlook Calendar opens teams.microsoft.com/dl/launcher/launcher.html
-# with a URL param containing sitePath (direct SharePoint Stream URL).
+# with a URL param (`url`) containing the deep-link. Depending on the meeting,
+# the deep-link carries the viewable SharePoint Stream URL in either `objectUrl`
+# or `sitePath` — older meetings seem to land on `sitePath` pointing at the
+# personal-site _api root (unusable for rendering). We therefore return all
+# candidate params plus the raw href so the caller can pick the best one and
+# log diagnostics when none work.
 EXTRACT_LAUNCHER_PARAMS_JS = """
 () => {
-    const url = new URL(window.location.href);
+    const href = window.location.href;
+    const url = new URL(href);
     const innerUrl = url.searchParams.get('url') || '';
     let params;
     if (innerUrl.includes('?')) {
@@ -14,6 +20,10 @@ EXTRACT_LAUNCHER_PARAMS_JS = """
         params = new URLSearchParams(innerUrl);
     }
     return {
+        href: href,
+        innerUrl: innerUrl,
+        objectUrl: params.get('objectUrl') || '',
+        fileUrl: params.get('fileUrl') || '',
         sitePath: params.get('sitePath') || '',
         driveId: params.get('driveId') || '',
         driveItemId: params.get('driveItemId') || '',

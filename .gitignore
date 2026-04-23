@@ -42,3 +42,7 @@ presentations/
 # Build scripts (internal tooling, not shipped)
 scripts/
 docs/*.docx
+
+# One-pager and PDFs (local presentation artifacts, not shipped)
+docs/one-pager.*
+docs/pulse-agent*.pdf

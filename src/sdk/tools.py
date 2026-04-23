@@ -86,6 +86,11 @@ class SendTaskToAgentParams(BaseModel):
     description: str = ""
 
 
+class BroadcastToTeamParams(BaseModel):
+    question: str  # the question to broadcast
+    project_id: str  # slug of the project this question is about (required for routing responses back)
+
+
 class UpdateProjectParams(BaseModel):
     project_id: str  # slug, e.g. "qbe-foundry-migration"
     yaml_content: str  # full YAML content for the project file
@@ -362,6 +367,94 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
         f"Request ID: {request_id}\n"
         f"Written to: {task_file}"
     )
+
+
+@define_tool(
+    name="broadcast_to_team",
+    description=(
+        "Broadcast a question to ALL configured teammates at once. Drops an "
+        "agent_request YAML into each teammate's shared OneDrive jobs/pending/ "
+        "folder. Each teammate's agent will decide (via its Guardian prompt) "
+        "whether it has relevant local context and respond asynchronously. "
+        "Responses accrete into the named project's team_context field. "
+        "Use this (not send_task_to_agent) when the question is about a specific "
+        "project and you want to reach anyone on the team who might know."
+    ),
+)
+def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation) -> str:
+    from core.config import load_config
+
+    if not params.project_id.strip():
+        return "ERROR: project_id is required for broadcast_to_team (responses must route back to a project)."
+
+    config = load_config()
+    team = config.get("team", [])
+    if not team:
+        return "ERROR: no teammates configured, add entries under `team:` in standing-instructions.yaml."
+
+    user_cfg = config.get("user", {})
+    from_name = user_cfg.get("name", "Unknown")
+    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+
+    # Sender's own inbox for responses
+    my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
+    my_team_dir.mkdir(parents=True, exist_ok=True)
+    reply_to = str(my_team_dir)
+
+    request_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    slug = re.sub(r"[^a-z0-9-]", "", params.question.lower().replace(" ", "-"))[:40]
+    date_str = datetime.now().strftime("%Y-%m-%d")
+
+    sent: list[str] = []
+    skipped: list[str] = []
+
+    for member in team:
+        alias = (member.get("alias") or "").lower()
+        if not alias:
+            skipped.append(member.get("name", "?") + " (no alias)")
+            continue
+
+        # Convention-based path; fall back to explicit agent_path for backward compat
+        explicit = member.get("agent_path")
+        if explicit:
+            agent_path = Path(explicit)
+            jobs_dir = agent_path / "Jobs"
+        else:
+            agent_path = PULSE_TEAM_DIR / alias
+            jobs_dir = agent_path / "jobs" / "pending"
+
+        if not agent_path.exists():
+            skipped.append(alias)
+            continue
+
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        task_data = {
+            "type": "agent_request",
+            "kind": "broadcast",
+            "task": params.question,
+            "project_id": params.project_id,
+            "from": from_name,
+            "from_alias": from_alias,
+            "reply_to": reply_to,
+            "request_id": request_id,
+            "priority": "normal",
+            "created_at": timestamp,
+        }
+        task_file = jobs_dir / f"{date_str}-from-{from_alias}-broadcast-{slug}-{request_id[:8]}.yaml"
+        with open(task_file, "w") as f:
+            yaml.dump(task_data, f, default_flow_style=False)
+        sent.append(alias)
+
+    if not sent:
+        reason = f"Skipped: {', '.join(skipped)}" if skipped else "no eligible teammates"
+        return f"ERROR: broadcast failed, no teammate folders were accessible ({reason})."
+
+    msg = f"Broadcasted to {len(sent)} teammate{'s' if len(sent) != 1 else ''}: {', '.join(sent) or '(none)'}"
+    if skipped:
+        msg += f" | Skipped (folder not accessible): {', '.join(skipped)}"
+    msg += f" | Request ID: {request_id} | Responses will accrete into project '{params.project_id}'. Do NOT call this tool again for the same question."
+    return msg
 
 
 # --- Local file search ---
@@ -702,6 +795,6 @@ def get_tools() -> list[Tool]:
         schedule_task, list_schedules_tool, update_schedule_tool, cancel_schedule,
         search_local_files, update_project,
         send_teams_message, send_email_reply,
-        send_task_to_agent, save_config_tool,
+        send_task_to_agent, broadcast_to_team, save_config_tool,
         sweep_inbox,
     ]

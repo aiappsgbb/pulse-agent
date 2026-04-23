@@ -72,6 +72,14 @@ chat:
     - stop_powershell
   user_input_handler: telegram
 
+guardian:
+  model_key: chat
+  working_dir: root
+  agents: []
+  system_prompt: config/prompts/system/guardian.md
+  system_prompt_mode: replace
+  trigger_prompt: null
+
 knowledge:
   standalone: true
   description: "Pipeline mode — runs archive + per-project enrichment (see runner.py)"

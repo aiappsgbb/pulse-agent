@@ -221,12 +221,27 @@ if ($LASTEXITCODE -ne 0) {
 Write-Ok "All dependencies installed"
 
 # -- 10. Install Playwright Edge browser ------------------------------------
-Write-Step "Installing Playwright Edge browser..."
-& python -m playwright install msedge 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Playwright browser install had issues - transcript collection may not work"
+# Note: `playwright install msedge` runs Microsoft's Edge MSI installer.
+# On managed/corporate devices this often trips UAC, Intune, or Defender ASR.
+# Edge ships with Windows 11, so if it's already on disk we skip the MSI step
+# and let Playwright's `channel="msedge"` target the existing install.
+Write-Step "Checking Playwright Edge browser..."
+$edgePaths = @(
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "${env:ProgramFiles}\Microsoft\Edge\Application\msedge.exe",
+    "${env:LOCALAPPDATA}\Microsoft\Edge\Application\msedge.exe"
+)
+$edgeFound = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($edgeFound) {
+    Write-Ok "Edge already installed at $edgeFound - skipping Playwright MSI step"
 } else {
-    Write-Ok "msedge installed"
+    Write-Step "Edge not found - running 'playwright install msedge' (may prompt for admin)"
+    & python -m playwright install msedge 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Playwright Edge install had issues. If Edge is already on this machine you can ignore this; otherwise install Edge from microsoft.com and re-run setup."
+    } else {
+        Write-Ok "msedge installed"
+    }
 }
 
 # -- 11. Seed PULSE_HOME directory structure --------------------------------

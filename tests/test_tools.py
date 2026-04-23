@@ -118,14 +118,14 @@ async def test_add_note_persists(tmp_dir):
 
 def test_get_tools_returns_all():
     tools = get_tools()
-    assert len(tools) == 15
+    assert len(tools) == 16
     names = {t.name for t in tools}
     assert names == {
         "write_output", "queue_task", "dismiss_item", "add_note",
         "schedule_task", "list_schedules", "update_schedule", "cancel_schedule",
         "search_local_files", "update_project",
         "send_teams_message", "send_email_reply",
-        "send_task_to_agent", "save_config",
+        "send_task_to_agent", "broadcast_to_team", "save_config",
         "sweep_inbox",
     }
 

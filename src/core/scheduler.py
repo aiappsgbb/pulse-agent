@@ -299,7 +299,7 @@ async def scheduler_loop(
     config: dict,
     job_queue,
     shutdown_event: asyncio.Event,
-    check_interval: int = 60,
+    check_interval: int = 30,
 ):
     """Background loop — checks schedules and syncs OneDrive every `check_interval` seconds.
 

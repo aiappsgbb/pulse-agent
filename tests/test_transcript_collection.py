@@ -18,12 +18,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from collectors.transcripts.extraction import (
     extract_transcript_from_sharepoint,
+    is_api_transcript_url,
+    parse_vtt,
     TransientExtractionError,
 )
 from collectors.transcripts.navigation import (
     _find_recap_element,
     _log_popup_diagnostics,
     _parse_meeting_date,
+    _pick_stream_url,
+    _is_viewable_stream_url,
     discover_meetings_with_recaps,
     find_meeting_buttons,
     SKIP_KEYWORDS,
@@ -189,17 +193,271 @@ class TestFindRecapElement:
 
 
 # ===========================================================================
+# Launcher URL picker tests
+# ===========================================================================
+
+class TestPickStreamUrl:
+    """_pick_stream_url chooses a viewable URL from launcher params."""
+
+    def test_prefers_objectUrl_over_sitePath(self):
+        params = {
+            "objectUrl": "https://contoso-my.sharepoint.com/personal/u/Documents/x.mp4",
+            "sitePath": "https://contoso-my.sharepoint.com/personal/u/_api/v2.1",
+        }
+        assert _pick_stream_url(params, "m") == params["objectUrl"]
+
+    def test_falls_back_to_fileUrl(self):
+        params = {
+            "fileUrl": "https://contoso-my.sharepoint.com/personal/u/Documents/x.mp4",
+            "sitePath": "https://contoso-my.sharepoint.com/personal/u/_api/v2.1",
+        }
+        assert _pick_stream_url(params, "m") == params["fileUrl"]
+
+    def test_uses_sitePath_when_viewable(self):
+        params = {"sitePath": "https://contoso.sharepoint.com/sites/team/rec.mp4"}
+        assert _pick_stream_url(params, "m") == params["sitePath"]
+
+    def test_rejects_api_root(self):
+        """Bare /_api/ roots (no transcript content path) are unusable."""
+        params = {"sitePath": "https://contoso-my.sharepoint.com/personal/u/_api/v2.1"}
+        assert _pick_stream_url(params, "m") == ""
+
+    def test_accepts_api_transcript_content_url(self):
+        """SharePoint's direct transcript-content API endpoint IS usable — extractor fetches it."""
+        url = (
+            "https://x-my.sharepoint.com/personal/u/_api/v2.1/drives/b!abc/"
+            "items/XYZ/versions/current/media/transcripts/uuid-1/content"
+        )
+        params = {"sitePath": url}
+        assert _pick_stream_url(params, "m") == url
+
+    def test_empty_params_returns_empty(self):
+        assert _pick_stream_url({}, "m") == ""
+
+    def test_relative_path_rejected(self):
+        """Only absolute http(s) URLs are viewable — relative paths can't be navigated to."""
+        params = {"sitePath": "/sites/test/video"}
+        assert _pick_stream_url(params, "m") == ""
+
+    def test_is_viewable_rejects_bare_api(self):
+        assert not _is_viewable_stream_url("https://x.sharepoint.com/_api/v2.1")
+        assert not _is_viewable_stream_url("")
+        assert not _is_viewable_stream_url("/relative/path")
+
+    def test_is_viewable_accepts_stream(self):
+        assert _is_viewable_stream_url("https://x.sharepoint.com/:v:/g/personal/u/file")
+
+    def test_is_viewable_accepts_api_transcript_content(self):
+        assert _is_viewable_stream_url(
+            "https://x.sharepoint.com/personal/u/_api/v2.1/drives/b!abc/"
+            "items/XYZ/versions/current/media/transcripts/u/content"
+        )
+
+
+# ===========================================================================
+# VTT parser + API transcript URL detection
+# ===========================================================================
+
+class TestIsApiTranscriptUrl:
+    """is_api_transcript_url matches the SharePoint transcript-content endpoint."""
+
+    def test_matches_content_endpoint(self):
+        assert is_api_transcript_url(
+            "https://x-my.sharepoint.com/personal/u/_api/v2.1/drives/b!abc/"
+            "items/ABC/versions/current/media/transcripts/uuid-1/content"
+        )
+
+    def test_matches_with_query_string(self):
+        assert is_api_transcript_url(
+            "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content?format=vtt"
+        )
+
+    def test_rejects_bare_api_root(self):
+        assert not is_api_transcript_url("https://x.sharepoint.com/_api/v2.1")
+
+    def test_rejects_non_content_path(self):
+        assert not is_api_transcript_url(
+            "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u"
+        )
+
+    def test_rejects_stream_viewer_url(self):
+        assert not is_api_transcript_url(
+            "https://x.sharepoint.com/:v:/g/personal/u/ABC/stream.aspx"
+        )
+
+    def test_rejects_empty(self):
+        assert not is_api_transcript_url("")
+
+
+class TestParseVtt:
+    """parse_vtt handles the WebVTT flavors Teams actually emits."""
+
+    def test_voice_tag_style(self):
+        body = (
+            "WEBVTT\n\n"
+            "00:00:03.000 --> 00:00:07.000\n"
+            "<v Alice>Good morning everyone.</v>\n\n"
+            "00:01:15.500 --> 00:01:20.000\n"
+            "<v Bob>Thanks for joining.</v>\n"
+        )
+        out = parse_vtt(body)
+        assert out is not None
+        assert "[0:03] Alice: Good morning everyone." in out
+        assert "[1:15] Bob: Thanks for joining." in out
+
+    def test_speaker_colon_style(self):
+        body = (
+            "WEBVTT\n\n"
+            "cue-1\n"
+            "00:00:10.000 --> 00:00:14.000\n"
+            "Alice: Hello world.\n\n"
+            "cue-2\n"
+            "00:00:14.000 --> 00:00:18.000\n"
+            "Bob: Hi back.\n"
+        )
+        out = parse_vtt(body)
+        assert "[0:10] Alice: Hello world." in out
+        assert "[0:14] Bob: Hi back." in out
+
+    def test_sorts_by_timestamp(self):
+        body = (
+            "WEBVTT\n\n"
+            "00:00:20.000 --> 00:00:25.000\n<v Bob>Second</v>\n\n"
+            "00:00:05.000 --> 00:00:10.000\n<v Alice>First</v>\n"
+        )
+        out = parse_vtt(body)
+        lines = out.strip().split("\n")
+        assert lines[0].startswith("[0:05]")
+        assert lines[1].startswith("[0:20]")
+
+    def test_strips_stray_tags(self):
+        body = (
+            "WEBVTT\n\n"
+            "00:00:01.000 --> 00:00:03.000\n"
+            "<v Alice>Hello <i>everyone</i></v>\n"
+        )
+        out = parse_vtt(body)
+        assert "<" not in out
+        assert "Hello everyone" in out
+
+    def test_hours_timestamp(self):
+        body = (
+            "WEBVTT\n\n"
+            "01:02:03.000 --> 01:02:05.000\n"
+            "<v Alice>One hour in.</v>\n"
+        )
+        out = parse_vtt(body)
+        assert "[1:02:03]" in out
+
+    def test_missing_speaker_falls_back_to_unknown(self):
+        body = (
+            "WEBVTT\n\n"
+            "00:00:01.000 --> 00:00:02.000\n"
+            "Just some text with no speaker marker here that is quite long.\n"
+        )
+        out = parse_vtt(body)
+        assert "Unknown:" in out
+
+    def test_empty_returns_none(self):
+        assert parse_vtt("") is None
+        assert parse_vtt("not a vtt file at all") is None
+
+    def test_no_header_still_parses_if_has_cues(self):
+        """Some servers strip the WEBVTT header — still try if timestamps present."""
+        body = (
+            "00:00:01.000 --> 00:00:03.000\n"
+            "<v Alice>Hi</v>\n"
+        )
+        out = parse_vtt(body)
+        assert out is not None
+        assert "Alice: Hi" in out
+
+
+class TestApiTranscriptFetch:
+    """extract_transcript_from_sharepoint fetches + parses API transcript URLs."""
+
+    def _page_with_response(self, status, body, raises=None):
+        page = _make_mock_page()
+        response = AsyncMock()
+        response.status = status
+        response.text = AsyncMock(return_value=body)
+        request_ctx = AsyncMock()
+        if raises is not None:
+            request_ctx.get = AsyncMock(side_effect=raises)
+        else:
+            request_ctx.get = AsyncMock(return_value=response)
+        page.context = MagicMock()
+        page.context.request = request_ctx
+        return page
+
+    async def test_fetches_and_parses_vtt(self):
+        body = (
+            "WEBVTT\n\n"
+            "00:00:01.000 --> 00:00:03.000\n"
+            "<v Alice>Hello.</v>\n"
+        )
+        page = self._page_with_response(200, body)
+        url = (
+            "https://x.sharepoint.com/_api/v2.1/drives/b/items/X/"
+            "versions/current/media/transcripts/u/content"
+        )
+        result = await extract_transcript_from_sharepoint(page, url)
+        assert isinstance(result, str)
+        assert "Alice: Hello." in result
+
+    async def test_404_returns_false_permanent(self):
+        page = self._page_with_response(404, "")
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        assert await extract_transcript_from_sharepoint(page, url) is False
+
+    async def test_403_raises_transient(self):
+        page = self._page_with_response(403, "")
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        with pytest.raises(TransientExtractionError):
+            await extract_transcript_from_sharepoint(page, url)
+
+    async def test_500_returns_none_transient(self):
+        page = self._page_with_response(500, "")
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        assert await extract_transcript_from_sharepoint(page, url) is None
+
+    async def test_unparseable_body_returns_none(self):
+        page = self._page_with_response(200, "this is not vtt")
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        assert await extract_transcript_from_sharepoint(page, url) is None
+
+    async def test_json_wrapped_vtt_is_unwrapped(self):
+        body = _json_dumps_wrapped(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n<v Alice>Hi</v>\n"
+        )
+        page = self._page_with_response(200, body)
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        result = await extract_transcript_from_sharepoint(page, url)
+        assert isinstance(result, str) and "Alice: Hi" in result
+
+    async def test_request_exception_returns_none(self):
+        page = self._page_with_response(200, "", raises=RuntimeError("network down"))
+        url = "https://x.sharepoint.com/_api/v2.1/x/media/transcripts/u/content"
+        assert await extract_transcript_from_sharepoint(page, url) is None
+
+
+def _json_dumps_wrapped(vtt: str) -> str:
+    import json
+    return json.dumps({"vtt": vtt})
+
+
+# ===========================================================================
 # Extraction return type handling tests
 # ===========================================================================
 
 class TestExtractionReturnTypes:
     """Tests that extract_transcript_from_sharepoint returns the right types."""
 
-    async def test_api_url_returns_false(self):
-        """API URLs return False (permanent — URL structure won't change on retry)."""
+    async def test_api_url_returns_none(self):
+        """API URLs return None (transient — our URL picker may find a viewable URL next run)."""
         page = _make_mock_page()
         result = await extract_transcript_from_sharepoint(page, "https://example.com/_api/stream")
-        assert result is False
+        assert result is None
 
     async def test_access_denied_returns_false(self):
         """AccessDenied pages return False (permanent)."""

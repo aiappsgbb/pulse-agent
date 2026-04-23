@@ -48,6 +48,56 @@ class MeetingInfo:
     slug: str
 
 
+def _is_usable_transcript_url(url: str) -> bool:
+    """Is this a URL the extractor knows how to handle?
+
+    Accepts both navigable Stream pages and SharePoint's direct transcript-
+    content API endpoints (extractor fetches those directly).
+    """
+    if not url or not url.startswith("http"):
+        return False
+    # SharePoint's direct transcript-content endpoint — extractor fetches it.
+    if "/media/transcripts/" in url and "/content" in url:
+        return True
+    # Any OTHER /_api/ URL is unusable — we can't render or fetch it meaningfully.
+    if "/_api/" in url:
+        return False
+    return True
+
+
+# Backwards-compat alias used by tests.
+_is_viewable_stream_url = _is_usable_transcript_url
+
+
+def _pick_stream_url(params: dict, meeting_name: str) -> str:
+    """Pick the best URL for transcript extraction from launcher params.
+
+    Prefers `objectUrl` (newer launchers) then `fileUrl`, then falls back to
+    `sitePath`. `sitePath` is often the direct API transcript-content endpoint
+    — that's fine, the extractor handles it via an authenticated fetch.
+    """
+    candidates = [
+        ("objectUrl", params.get("objectUrl", "")),
+        ("fileUrl", params.get("fileUrl", "")),
+        ("sitePath", params.get("sitePath", "")),
+    ]
+    for name, value in candidates:
+        if _is_usable_transcript_url(value):
+            return value
+
+    # Nothing usable — emit diagnostics and return empty so the caller marks
+    # skipped-no-url (which does NOT poison state).
+    non_empty = {k: v for k, v in params.items() if v and k not in ("href", "innerUrl")}
+    log.warning(
+        f"    No usable transcript URL in launcher for '{meeting_name[:50]}' — "
+        f"params: {non_empty}"
+    )
+    raw_href = params.get("href") or ""
+    if raw_href:
+        log.info(f"    [DIAG] launcher href: {raw_href[:200]}")
+    return ""
+
+
 # Keywords to skip when scanning calendar event buttons
 SKIP_KEYWORDS = [
     "my work plan", "go to today", "go to previous",
@@ -413,7 +463,7 @@ async def discover_meetings_with_recaps(
                 try:
                     from collectors.transcripts.js_snippets import EXTRACT_LAUNCHER_PARAMS_JS
                     params = await page.evaluate(EXTRACT_LAUNCHER_PARAMS_JS)
-                    sharepoint_url = params.get("sitePath", "")
+                    sharepoint_url = _pick_stream_url(params, meeting_name)
                 except Exception:
                     pass
                 # Navigate back to calendar
@@ -431,7 +481,7 @@ async def discover_meetings_with_recaps(
             try:
                 from collectors.transcripts.js_snippets import EXTRACT_LAUNCHER_PARAMS_JS
                 params = await launcher_page.evaluate(EXTRACT_LAUNCHER_PARAMS_JS)
-                sharepoint_url = params.get("sitePath", "")
+                sharepoint_url = _pick_stream_url(params, meeting_name)
             except Exception as e:
                 log.warning(f"    Could not extract launcher params: {e}")
 
