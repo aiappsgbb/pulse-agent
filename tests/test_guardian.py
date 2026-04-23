@@ -29,3 +29,55 @@ def test_guardian_prompt_contains_required_directives():
     assert any(word in text.lower() for word in ("pii", "personal", "sensitive"))
     # Must instruct to search local files first
     assert "search_local_files" in text
+
+
+from daemon.worker import _parse_guardian_output
+
+
+def test_parse_guardian_output_answered():
+    text = '''Some prose before.
+```json
+{"status": "answered", "result": "3 POCs tried. Licensing was the main objection.", "sources": ["transcripts/2026-01-15.md"]}
+```
+Trailing prose.'''
+    result = _parse_guardian_output(text)
+    assert result["status"] == "answered"
+    assert "POCs" in result["result"]
+    assert result["sources"] == ["transcripts/2026-01-15.md"]
+
+
+def test_parse_guardian_output_no_context():
+    text = '```json\n{"status": "no_context"}\n```'
+    result = _parse_guardian_output(text)
+    assert result["status"] == "no_context"
+    assert result.get("result", "") == ""
+    assert result.get("sources", []) == []
+
+
+def test_parse_guardian_output_declined():
+    text = '```json\n{"status": "declined", "reason": "too sensitive"}\n```'
+    result = _parse_guardian_output(text)
+    assert result["status"] == "declined"
+    assert result["reason"] == "too sensitive"
+
+
+def test_parse_guardian_output_no_json_block():
+    """No fenced JSON -> fall back to no_context (defensive default)."""
+    text = "The LLM forgot to produce JSON, just wrote prose."
+    result = _parse_guardian_output(text)
+    assert result["status"] == "no_context"
+
+
+def test_parse_guardian_output_malformed_json():
+    """Malformed JSON -> fall back to no_context, do not crash."""
+    text = '```json\n{"status": "answered", "result":\n```'
+    result = _parse_guardian_output(text)
+    assert result["status"] == "no_context"
+
+
+def test_parse_guardian_output_bare_json_no_fence():
+    """Accept raw JSON without fence as a fallback."""
+    text = '{"status": "answered", "result": "answer", "sources": ["a.md"]}'
+    result = _parse_guardian_output(text)
+    assert result["status"] == "answered"
+    assert result["result"] == "answer"

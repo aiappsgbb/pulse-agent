@@ -781,6 +781,45 @@ async def _handle_agent_request(client, config: dict, job: dict) -> str:
     return result or "No response generated."
 
 
+def _parse_guardian_output(text: str) -> dict:
+    """Extract the structured JSON payload the Guardian LLM emits.
+
+    Accepts fenced ```json blocks (preferred) or raw JSON. Falls back to
+    {"status": "no_context"} on any parse failure, which is the defensive
+    default so a misbehaving session does not crash the worker.
+    """
+    import re as _re
+
+    if not text:
+        return {"status": "no_context"}
+
+    # Prefer the last fenced json block
+    fenced = _re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=_re.DOTALL)
+    if fenced:
+        candidate = fenced[-1]
+    else:
+        # Fallback: largest-looking {...} span
+        m = _re.search(r"\{.*\}", text, flags=_re.DOTALL)
+        candidate = m.group(0) if m else ""
+
+    if not candidate:
+        return {"status": "no_context"}
+
+    try:
+        data = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return {"status": "no_context"}
+
+    if not isinstance(data, dict) or "status" not in data:
+        return {"status": "no_context"}
+
+    status = data.get("status")
+    if status not in ("answered", "no_context", "declined"):
+        return {"status": "no_context"}
+
+    return data
+
+
 def _write_agent_response(config: dict, original_job: dict, result_text: str):
     """Write a response YAML to the requesting agent's reply_to path."""
     reply_to = original_job.get("reply_to", "")
