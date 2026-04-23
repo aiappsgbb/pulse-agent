@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR
+from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR, PROJECTS_DIR
 from core.config import mark_task_completed
 from core.logging import log
 from core.notify import notify_desktop, build_toast_summary
@@ -404,15 +404,18 @@ async def job_worker(client, config: dict, job_queue: asyncio.PriorityQueue, wor
 
             elif job_type == "agent_response":
                 from_name = job.get("from", "Unknown")
-                original_task = job.get("original_task", "")
-                log.info(f"  Agent response from {from_name} (req: {str(job.get('request_id') or '?')[:8]})")
+                project_id = job.get("project_id", "")
+                log.info(f"  Agent response from {from_name} (project: {project_id or 'n/a'}, req: {str(job.get('request_id') or '?')[:8]})")
+                _ingest_agent_response(job)
                 if "_file" in job:
                     mark_task_completed(job)
-                notify_desktop(
-                    f"Pulse — Response from {from_name}",
-                    f"Re: {original_task[:80]}",
-                    urgency="urgent",
-                )
+                if job.get("status") == "answered":
+                    original_task = job.get("original_task", "")
+                    notify_desktop(
+                        f"Pulse — {from_name} contributed",
+                        f"Project: {project_id or 'n/a'} | Re: {original_task[:60]}",
+                        urgency="normal",
+                    )
 
             elif job_type == "teams_send":
                 recipient = job.get("chat_name") or job.get("recipient") or ""
@@ -885,6 +888,66 @@ def _write_guardian_response(config: dict, original_job: dict, parsed: dict) -> 
         yaml.dump(response_data, f, default_flow_style=False)
 
     log.info(f"  Guardian response written: status={parsed.get('status')} to {response_file}")
+
+
+def _ingest_agent_response(job: dict) -> None:
+    """Fold an agent_response into its target project YAML's team_context[].
+
+    Silent skip on:
+      - status != "answered" (no_context / declined)
+      - missing project_id
+      - missing project YAML
+      - duplicate request_id (already ingested)
+
+    Atomic write: writes to a temp path and renames.
+    """
+    status = job.get("status", "")
+    if status != "answered":
+        log.info(f"  Ingest: skipping response with status='{status}' (req={str(job.get('request_id', '?'))[:8]})")
+        return
+
+    project_id = job.get("project_id", "")
+    if not project_id:
+        log.warning(f"  Ingest: response has no project_id, dropping (req={str(job.get('request_id', '?'))[:8]})")
+        return
+
+    project_path = PROJECTS_DIR / f"{project_id}.yaml"
+    if not project_path.exists():
+        log.warning(f"  Ingest: project '{project_id}' not found, dropping response")
+        return
+
+    try:
+        with open(project_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception as e:
+        log.error(f"  Ingest: cannot read project '{project_id}': {e}")
+        return
+
+    team_context = data.get("team_context") or []
+    request_id = job.get("request_id", "")
+    if any(entry.get("request_id") == request_id for entry in team_context):
+        log.info(f"  Ingest: request_id {str(request_id)[:8]} already present, dedup skip")
+        return
+
+    entry = {
+        "from": job.get("from", "Unknown"),
+        "from_alias": job.get("from_alias", ""),
+        "contributed_at": job.get("created_at", datetime.now().isoformat()),
+        "question": job.get("original_task", "")[:200],
+        "answer": job.get("result", ""),
+        "sources": job.get("sources", []),
+        "request_id": request_id,
+    }
+    team_context.append(entry)
+    data["team_context"] = team_context
+
+    # Atomic write via temp file + rename
+    tmp_path = project_path.with_suffix(".yaml.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    tmp_path.replace(project_path)
+
+    log.info(f"  Ingest: added team_context entry to project '{project_id}' from {entry['from']}")
 
 
 def _build_onboarding_prompt(config: dict, user_prompt: str) -> str:
