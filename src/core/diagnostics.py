@@ -445,11 +445,26 @@ def _check_playwright_edge() -> HealthCheck:
             browser.close()
             return HealthCheck("Playwright Edge", True, "launches OK")
         except Exception as e:
-            return HealthCheck("Playwright Edge", False, str(e), "python -m playwright install msedge")
+            return HealthCheck("Playwright Edge", False, str(e), _edge_launch_remediation(e))
         finally:
             pw.__exit__(None, None, None)
     except Exception as e:
-        return HealthCheck("Playwright Edge", False, str(e), "python -m playwright install msedge")
+        return HealthCheck("Playwright Edge", False, str(e), _edge_launch_remediation(e))
+
+
+def _edge_launch_remediation(err: Exception) -> str:
+    """Pick remediation based on why Edge failed to launch.
+
+    `playwright install msedge` is only correct when Edge isn't on disk. Profile
+    locks, auth redirects, or transient crashes have nothing to do with the
+    installer — sending users there is a corporate-IT rabbit hole.
+    """
+    msg = str(err).lower()
+    if "executable doesn't exist" in msg or "please run the following command" in msg:
+        return "Install Edge from microsoft.com/edge, or run: python -m playwright install msedge"
+    if "user data directory is already in use" in msg or ("profile" in msg and "lock" in msg):
+        return "Close other Edge windows using Pulse's profile, then retry"
+    return "Run: python src/pulse.py --health-check (and verify Edge is installed)"
 
 
 def _check_config(config: dict | None) -> list[HealthCheck]:
@@ -501,7 +516,7 @@ async def run_health_check_async(config: dict | None = None) -> list[HealthCheck
     except Exception as e:
         checks.append(HealthCheck(
             "Browser: Teams auth", False, str(e),
-            "python -m playwright install msedge",
+            "Run: python src/pulse.py --health-check (opens Edge for Teams sign-in)",
         ))
 
     return checks

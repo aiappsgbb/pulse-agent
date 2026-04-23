@@ -390,7 +390,10 @@ The health check will:
 6. **The user closes the browser window** (or it auto-closes after auth succeeds)
 7. Health check re-verifies auth
 
-**Common issue — "Playwright Edge FAIL"**: Playwright can't launch Edge. Run `python -m playwright install msedge` (Step 3.3) and retry.
+**Common issue — "Playwright Edge FAIL"**: On Windows 11 Edge is always preinstalled at `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, and Playwright's `channel="msedge"` will use it. If this check fails, the cause is almost never a missing Edge. Check the error message first:
+- "User data directory is already in use" / profile lock: close any Edge windows using the Pulse profile and retry.
+- Redirected to login / Teams auth error: re-run `python src/pulse.py --health-check` and sign in when the window opens.
+- "Executable doesn't exist": only then run `python -m playwright install msedge` (Step 3.3). On managed/corporate devices that step runs Microsoft's Edge MSI and may prompt UAC or be blocked by Intune/Defender ASR — safe to skip if Edge is already on disk.
 
 **Common issue — browser window opens but immediately shows an error**: An orphan Edge process may be locking the profile. Kill it:
 ```
@@ -424,7 +427,7 @@ Check the output. Here's what each result means:
 | GitHub CLI auth | Yes | `gh auth login` (Step 2) |
 | Copilot CLI extension | Yes | `gh extension install github/gh-copilot` (Step 4.1) |
 | PULSE_HOME | Yes | OneDrive detection (Step 5.1) |
-| Playwright Edge | Yes | `python -m playwright install msedge` (Step 3.3) |
+| Playwright Edge | Yes | Verify Edge is installed (it ships with Windows 11). Only run `python -m playwright install msedge` if truly missing — see Step 6 troubleshooting. |
 | Browser: Teams auth | Recommended | Re-run `--health-check` with browser login (Step 6) |
 | WorkIQ MCP server | Optional | `npm install -g @microsoft/workiq` (Step 4.2) |
 | Config: user identity | No | Will be set in Step 8 |
@@ -565,8 +568,8 @@ Your data in OneDrive is untouched — only the code updates.
 |---------|-------|-----|
 | `pip install` fails with permission errors | Installing to system Python | Make sure venv is activated (Step 3.1) |
 | `import copilot` fails | Wrong Python / venv not activated | Activate venv, verify with `python -c "import sys; print(sys.prefix)"` |
-| Playwright install fails | Network/proxy issue | Try: `python -m playwright install msedge --with-deps` |
-| Edge launch test fails | Edge not installed on system | Install Edge from microsoft.com, then re-run `python -m playwright install msedge` |
+| `playwright install msedge` fails or prompts UAC | It runs Microsoft's Edge MSI, not a bundled browser. Blocked by Intune/Defender ASR on managed devices. | Safe to skip if Edge is already installed (it is on Windows 11). Playwright uses the system Edge via `channel="msedge"`. |
+| Edge launch test fails | Usually profile lock or Teams auth, not a missing browser | Close orphan Edge processes (`taskkill /F /IM msedge.exe`), then re-run `python src/pulse.py --health-check`. Only install Edge if `where msedge` returns nothing. |
 
 ### Runtime
 
