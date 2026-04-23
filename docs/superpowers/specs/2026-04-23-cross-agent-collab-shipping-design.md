@@ -32,7 +32,7 @@ This design specifies what we need to ship to make the cross-agent collaboration
 ```
 SENDER (primary agent)                        RECEIVER (teammate agent)
 -------------------------                     -------------------------
-Trigger: chat command or digest Phase 1g      30s fixed poll reads
+Trigger: chat command or digest run           30s fixed poll reads
   |                                           jobs/pending/
   v                                                         |
 LLM session calls broadcast_to_team(...)                    v
@@ -145,19 +145,32 @@ Your loyalty is to YOUR user, not the asker. Transparency by default,
 caution by default for anything that looks personal.
 ```
 
-### New digest phase (`src/sdk/runner.py` or digest pre-process)
+### Digest team-enrichment (agent-driven)
 
-Phase 1g `_run_team_enrichment` runs during digest pipeline:
+The digest phase is **agent-driven**: no new Python pre-process step. Instead, the digest agent (existing `digest-writer` or equivalent) gets `broadcast_to_team` added to its tool list, plus a new directive in its system prompt:
 
-1. Load all active project YAMLs from `PROJECTS_DIR`.
-2. For each project, check if it "needs team input" (see Gap Detection below).
-3. Cap total broadcasts at 3 per digest run.
-4. For each selected project, generate a team-directed question:
-   - If `questions[0]` exists, use it verbatim.
-   - Else, call LLM with project context and prompt: "Produce a concise one-sentence question to ask teammates who may have worked on related topics. Focus on prior objections, customer-specific context, or tech-specific learnings."
-5. Call `broadcast_to_team(question, project_id)`.
-6. Update project YAML's `last_team_enrichment` timestamp.
-7. Digest completes normally. Responses arrive asynchronously later.
+```
+TEAM ENRICHMENT
+
+While producing the digest, check each active project for team-input gaps.
+A project needs team input when:
+
+  - last_team_enrichment is null (never asked), OR
+  - questions: [...] contains an entry with added_at > last_team_enrichment
+
+For each project that qualifies (maximum 3 per digest), produce a concise
+one-sentence question for teammates (take from questions[0] if populated,
+else generate from project context focusing on prior objections, customer
+context, or tech-specific learnings). Call broadcast_to_team(question,
+project_id). Then update the project YAML's last_team_enrichment timestamp
+via update_project.
+
+Do NOT wait for responses. Fire the broadcast and continue the digest.
+Responses will be ingested asynchronously into the project's team_context
+as they arrive.
+```
+
+The digest LLM handles the gap check, question generation, and tool invocation. No Python orchestration logic required. This keeps the intelligence in the prompt layer (per project principles in CLAUDE.md: "Don't lock behind arbitrary Python. If you can use a prompt/agent, do that instead").
 
 ### Scheduler change (`core/scheduler.py` or config)
 
@@ -221,15 +234,13 @@ Each `questions` entry (optional, user-maintainable):
 A project "needs team input" if ALL of the following are true:
 
 1. `status == "active"` (never broadcast about blocked, completed, or on-hold projects).
-2. `last_team_enrichment` is `null` OR older than 7 days.
+2. Either:
+   - `last_team_enrichment` is `null` (never asked the team about this project), OR
+   - `questions: [...]` contains an entry whose `added_at` is more recent than `last_team_enrichment` (new open question since the last broadcast).
 
-AND at least one of:
+**Default behavior: ask once, then stop.** After the first broadcast, `last_team_enrichment` gets stamped. The project will not be re-broadcast unless the user or an upstream agent adds a new entry to `questions[]`. No time-based cooldown, no weekly retry. This prevents broadcast spam and keeps the trigger honest: we only ask when we have a new thing to ask about.
 
-3. `team_context` is empty (cold-start enrichment), OR
-4. `questions: [...]` is non-empty (user or agent flagged a specific question), OR
-5. `next_meeting` is within the next 48 hours (upcoming meeting prep).
-
-Cap total broadcasts at 3 per digest run (configurable via `team_enrichment.max_per_run` in standing instructions). If more projects qualify than the cap allows, prioritize: questions populated > upcoming meeting > cold-start.
+Cap total broadcasts at 3 per digest run (configurable via `team_enrichment.max_per_run` in standing instructions). If more projects qualify than the cap allows, prioritize: explicitly-populated questions before cold-starts.
 
 ## Manual trigger path
 
@@ -273,7 +284,7 @@ New test files (additive to the current 814-test suite):
 
 - `tests/test_guardian_prompt.py`: validates the Guardian Mode session. Mocked search results containing PII produce outputs where the PII is redacted or the status is "declined." Mocked search with no hits produces status "no_context." Mocked search with benign hits produces status "answered" with source citations.
 
-- `tests/test_digest_team_enrichment.py`: validates `_run_team_enrichment`. Cases: gap detection correctly flags projects, respects 7-day `last_team_enrichment` cooldown, respects 3-per-run cap, prioritizes correctly when over cap, LLM-generated question is called when `questions[]` is empty, `questions[0]` is used verbatim when populated.
+- `tests/test_digest_team_enrichment.py`: validates the agent-driven team-enrichment flow at the prompt-contract level. Cases: gap detection correctly flags projects (null `last_team_enrichment` triggers; populated with no new questions does not), a new `questions[]` entry added after `last_team_enrichment` re-triggers, respects 3-per-run cap, prioritizes explicitly-populated questions before cold-starts. Tests exercise the digest agent with mocked SDK responses to verify the tool-call contract rather than exercising production LLM behavior.
 
 - `tests/test_cross_agent_e2e.py`: integration test with two temp `$PULSE_HOME` directories and a mocked GHCP SDK. Broadcasts, simulates response arrival, verifies project YAML update. Not a full browser test, just the file-plumbing contract.
 
@@ -299,8 +310,9 @@ Manual validation: the two-terminal demo script itself, run end-to-end before th
 | `src/core/scheduler.py` (or config) | Add fixed 30s `agent-job-sync` schedule |
 | `config/prompts/system/guardian.md` | New system prompt for Guardian Mode |
 | `config/modes.yaml` | Add `guardian` mode entry wiring the prompt to the receiver flow |
-| `config/standing-instructions.yaml` | Add `team_enrichment:` section with `max_per_run: 3` and `cooldown_days: 7` |
-| `src/sdk/runner.py` (or digest pre-process) | Add Phase 1g `_run_team_enrichment` |
+| `config/standing-instructions.yaml` | Add `team_enrichment:` section with `max_per_run: 3` |
+| `config/prompts/agents/digest-writer.md` (or equivalent) | Add "Team Enrichment" directive and `broadcast_to_team` to tool list |
+| `config/modes.yaml` | Add `broadcast_to_team` to the digest mode's tool allowlist and the chat mode's tool allowlist |
 | `src/core/projects.py` (or equivalent) | Support `team_context`, `questions`, `last_team_enrichment` fields in project YAML reader/writer |
 | `config/prompts/system/chat.md` | Add chat-mode instruction for manual trigger routing |
 | `scripts/seed_demo_data.py` | New demo seeding script |
@@ -314,6 +326,6 @@ Manual validation: the two-terminal demo script itself, run end-to-end before th
 
 (None that block the spec; the plan can resolve these.)
 
-- Exact placement of Phase 1g: inside the digest SDK session (as an agent-driven step) or as a pre-process Python step that calls the tool directly.
 - Whether `_run_guardian_session` should live in `worker.py` or be extracted into `sdk/guardian.py`.
-- Cooldown default (7 days) and max-per-run (3) should be reviewed against real digest frequency.
+- `max_per_run: 3` default should be reviewed against real digest frequency; may want to lower to 1-2 at demo time to keep cadence predictable.
+- Exact tool-list integration point: does `broadcast_to_team` go into `modes.yaml` at the mode level, or into the digest agent's front-matter? Either works; pick the one that matches existing patterns for other enrichment tools.
