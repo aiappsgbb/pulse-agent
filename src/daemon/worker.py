@@ -895,7 +895,9 @@ def _resolve_reply_dir(config: dict, original_job: dict) -> Path | None:
         if explicit:
             root = Path(explicit)
             if root.exists():
-                candidates.append(root / "pending")
+                # Mirror send-side path: agent_path/jobs/pending (bug fixed upstream
+                # in edb6c92 — we use the same segment here).
+                candidates.append(root / "jobs" / "pending")
 
         conv_alias = (matched.get("alias") or "").strip().lower()
         if conv_alias:
