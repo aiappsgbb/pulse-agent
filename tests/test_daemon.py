@@ -212,16 +212,123 @@ def test_write_guardian_response_convention_fallback(tmp_dir):
     assert len(files) == 1
 
 
-def test_write_guardian_response_creates_missing_reply_dir(tmp_dir):
-    """reply_to directory is created if it does not exist."""
-    reply_to = tmp_dir / "new" / "deep"  # does not exist yet
-    _write_guardian_response(
-        {"user": {"name": "B", "alias": "b"}},
-        {"task": "q", "project_id": "p", "reply_to": str(reply_to), "request_id": "abc123"},
-        {"status": "no_context"},
+def test_write_guardian_response_does_not_invent_bogus_path(tmp_dir, caplog):
+    """Regression for Bug A: resolver must not mkdir an unshared local folder.
+
+    When ``from_alias`` does not match any team member, we previously
+    mkdir'd ``PULSE_TEAM_DIR/{from_alias}/jobs/pending`` on the receiver's
+    local disk and wrote the reply there. That folder was not backed by any
+    OneDrive share, so the reply was silently stranded.
+
+    New behaviour: no team match AND no pre-existing convention/reply_to
+    path → no write, error logged, no rogue folders created.
+    """
+    team_dir = tmp_dir / "Pulse-Team"
+    team_dir.mkdir()  # exists but has no subfolders for 'todo'
+
+    with patch("core.constants.PULSE_TEAM_DIR", team_dir):
+        config = {
+            "user": {"name": "Artur", "alias": "artur"},
+            "team": [{"name": "Riccardo", "alias": "ricchi"}],  # no placeholder match
+        }
+        job = {
+            "task": "q",
+            "from": "TODO: Your Full Name",  # unreal name
+            "from_alias": "todo",              # unreal alias
+            "reply_to": "C:/Users/ghost/path/not-here",  # unreachable
+            "request_id": "req-ghost",
+        }
+        _write_guardian_response(config, job, {"status": "answered", "result": "hi", "sources": []})
+
+    # Orphan folder must NOT have been created
+    assert not (team_dir / "todo").exists()
+    # No YAML dropped anywhere under tmp_dir
+    assert not list(tmp_dir.rglob("*.yaml"))
+    # Clear error logged
+    assert any(
+        "cannot resolve reply destination" in rec.message.lower()
+        for rec in caplog.records
     )
-    assert reply_to.exists()
-    assert len(list(reply_to.glob("*.yaml"))) == 1
+
+
+def test_write_guardian_response_matches_by_name_when_alias_placeholder(tmp_dir):
+    """Sender has placeholder alias but real name — match on name, route to agent_path.
+
+    Real-world case: a teammate never fixed their config after onboarding,
+    so ``from_alias: todo``. Their display name ``from: Riccardo Chiodaroli``
+    is still meaningful. The receiver has them in their team config under
+    the correct alias. We should match by name and route to the right folder.
+    """
+    shortcut = tmp_dir / "Riccardo Chiodaroli's files - ricchi"
+    shortcut.mkdir()
+
+    config = {
+        "user": {"name": "Artur", "alias": "artur"},
+        "team": [{
+            "name": "Riccardo Chiodaroli",
+            "alias": "ricchi",
+            "agent_path": str(shortcut),
+        }],
+    }
+    job = {
+        "task": "q",
+        "from": "Riccardo Chiodaroli",
+        "from_alias": "todo",  # placeholder — alias match would fail
+        "reply_to": "C:/Users/ghost/unreachable",
+        "request_id": "req-name-match",
+    }
+
+    _write_guardian_response(config, job, {"status": "answered", "result": "ok", "sources": []})
+
+    files = list((shortcut / "pending").glob("*.yaml"))
+    assert len(files) == 1
+    assert yaml.safe_load(files[0].read_text())["request_id"] == "req-name-match"
+
+
+def test_write_guardian_response_requires_preexisting_convention_path(tmp_dir, caplog):
+    """Convention path ``PULSE_TEAM_DIR/{alias}/jobs/`` must ALREADY EXIST.
+
+    Without this guard, ``mkdir(parents=True)`` would create the folder on the
+    receiver's disk even though no OneDrive share is syncing it — that's
+    exactly what Bug A was about.
+    """
+    team_dir = tmp_dir / "Pulse-Team"
+    team_dir.mkdir()  # only root exists — no /ricchi/jobs/ subtree
+
+    with patch("core.constants.PULSE_TEAM_DIR", team_dir):
+        config = {
+            "user": {"name": "Artur", "alias": "artur"},
+            "team": [{"name": "Riccardo", "alias": "ricchi"}],  # no agent_path
+        }
+        job = {
+            "task": "q",
+            "from_alias": "ricchi",
+            "reply_to": "",
+            "request_id": "req-noconv",
+        }
+        _write_guardian_response(config, job, {"status": "answered", "result": "ok", "sources": []})
+
+    assert not (team_dir / "ricchi").exists()
+    assert any("cannot resolve reply destination" in rec.message.lower() for rec in caplog.records)
+
+
+def test_write_guardian_response_same_machine_raw_reply_to(tmp_dir):
+    """Same-machine demo: raw reply_to is accepted IF the path already exists."""
+    reply_dir = tmp_dir / "alpha-inbox" / "pending"
+    reply_dir.mkdir(parents=True)
+
+    config = {"user": {"name": "Beta", "alias": "beta"}, "team": []}
+    job = {
+        "task": "q",
+        "from": "Alpha",
+        "from_alias": "alpha",
+        "reply_to": str(reply_dir),
+        "request_id": "req-samehost",
+    }
+    _write_guardian_response(config, job, {"status": "answered", "result": "ok", "sources": []})
+
+    files = list(reply_dir.glob("*.yaml"))
+    assert len(files) == 1
 
 
 # --- _requeue_with_delay ---

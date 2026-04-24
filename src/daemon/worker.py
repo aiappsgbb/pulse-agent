@@ -844,40 +844,77 @@ def _parse_guardian_output(text: str) -> dict:
 def _resolve_reply_dir(config: dict, original_job: dict) -> Path | None:
     """Resolve where to write a Guardian response on THIS machine.
 
-    The sender's ``reply_to`` is a path local to their machine
-    (``C:\\Users\\<their-username>\\...``) and is not accessible here. Resolve
-    against the receiver's own view of the sender's shared folder instead:
+    The sender's ``reply_to`` field is a path on the SENDER's machine
+    (``C:\\Users\\<their-username>\\...``) and is almost never accessible on
+    the receiver. Resolve against the receiver's own view of the sender's
+    shared OneDrive folder instead.
 
-      1. Look up sender's alias in ``config["team"]`` — if that entry has
-         ``agent_path`` (OneDrive shortcut landed somewhere non-convention),
-         use ``agent_path/pending``.
-      2. Else try the convention path ``PULSE_TEAM_DIR/{sender_alias}/jobs/pending``.
-      3. Last-resort fallback: raw ``reply_to`` from the request (works only
-         when sender and receiver are on the same machine, e.g. demo seeds).
+    Matching strategy (strong signals only):
 
-    Returns None when no candidate folder can be created.
+      1. Find the sender in ``config["team"]`` by matching ``from_alias`` OR
+         ``from`` (display name), case-insensitive. This tolerates senders
+         whose config has a placeholder alias (e.g. ``todo``) but a real name,
+         or vice-versa.
+      2. If a match has ``agent_path`` and that folder exists on disk, use
+         ``agent_path/pending``.
+      3. Else try convention ``PULSE_TEAM_DIR/{matched_alias}/jobs/pending``
+         BUT only if ``PULSE_TEAM_DIR/{matched_alias}/jobs/`` already exists
+         (meaning the shortcut is actually synced at the convention path).
+      4. Only fall back to the raw ``reply_to`` if that path already exists
+         — covers same-machine demos (alpha/beta personas).
+
+    Never creates a directory tree outside a pre-existing shared folder. That
+    was a bug in the previous version: ``mkdir(parents=True)`` on an
+    unresolvable ``PULSE_TEAM_DIR/{unknown_alias}/...`` path silently created
+    an orphan local folder that nobody is subscribed to, and the reply was
+    stranded there forever.
+
+    Returns None when no candidate resolves to a real shared folder.
     """
     from core.constants import PULSE_TEAM_DIR
 
-    sender_alias = (original_job.get("from_alias") or "").lower()
+    sender_alias = (original_job.get("from_alias") or "").strip().lower()
+    sender_name = (original_job.get("from") or "").strip().lower()
+
+    # Find team entry by alias OR by name (whichever matches first)
+    matched: dict | None = None
+    for member in config.get("team", []):
+        m_alias = (member.get("alias") or "").strip().lower()
+        m_name = (member.get("name") or "").strip().lower()
+        if sender_alias and m_alias == sender_alias:
+            matched = member
+            break
+        if sender_name and m_name and m_name == sender_name:
+            matched = member
+            break
+
     candidates: list[Path] = []
 
-    if sender_alias:
-        for member in config.get("team", []):
-            if (member.get("alias") or "").lower() != sender_alias:
-                continue
-            explicit = member.get("agent_path")
-            if explicit:
-                candidates.append(Path(explicit) / "pending")
-            break
-        candidates.append(PULSE_TEAM_DIR / sender_alias / "jobs" / "pending")
+    if matched is not None:
+        explicit = matched.get("agent_path")
+        if explicit:
+            root = Path(explicit)
+            if root.exists():
+                candidates.append(root / "pending")
 
-    raw = original_job.get("reply_to") or ""
+        conv_alias = (matched.get("alias") or "").strip().lower()
+        if conv_alias:
+            conv_jobs = PULSE_TEAM_DIR / conv_alias / "jobs"
+            if conv_jobs.exists():
+                candidates.append(conv_jobs / "pending")
+
+    # Same-machine demo: sender and receiver share filesystem. Accept only
+    # if the raw reply_to path already exists.
+    raw = (original_job.get("reply_to") or "").strip()
     if raw:
-        candidates.append(Path(raw))
+        raw_path = Path(raw)
+        if raw_path.exists():
+            candidates.append(raw_path)
 
     for candidate in candidates:
         try:
+            # Only the pending/ leaf is ever created; the parent is required
+            # to pre-exist (it's the real shared-folder root).
             candidate.mkdir(parents=True, exist_ok=True)
             return candidate
         except OSError as e:
