@@ -525,9 +525,12 @@ Tell the user:
 
 For each `jobs` folder a teammate shares with you:
 
-1. The user opens the share email or goes to OneDrive web (`onedrive.live.com`) → **Shared** → **Shared with you**.
-2. Click the teammate's `jobs` folder → **Add shortcut to My files**.
-3. OneDrive syncs the shortcut to the local disk.
+1. Open the share link from the email, or go to [onedrive.live.com](https://onedrive.live.com) → click **Shared** in the left sidebar → **Shared with you** tab.
+2. Find the teammate's shared `jobs` folder in the list. **Right-click** on it (or click the **⋯** three-dot menu on the row).
+3. Select **Add shortcut to My files** from the context menu. (If you don't see it, open the folder first, then use the **Add shortcut to My files** button in the toolbar at the top.)
+4. A confirmation toast appears: "Shortcut added". OneDrive syncs the shortcut to your local disk automatically.
+
+> **Tip:** If you opened the share link directly, you'll land inside the folder. Look for the **Add shortcut to My files** button in the toolbar above the file list — it has a folder icon with a link arrow.
 
 **Important — OneDrive maps shared folders to its root, not under Pulse-Team.** When you add a shortcut to a teammate's shared folder, OneDrive places it at:
 
