@@ -848,7 +848,7 @@ async def test_send_task_to_agent_explicit_agent_path(tmp_dir):
             "task": "Test backward compat",
         }})
     assert result["resultType"] == "success"
-    # Should write to explicit path's Jobs/ folder (not convention path)
-    jobs_dir = tmp_dir / "alice-custom" / "Jobs"
+    # Should write to explicit path's jobs/pending/ folder
+    jobs_dir = tmp_dir / "alice-custom" / "jobs" / "pending"
     yaml_files = list(jobs_dir.glob("*.yaml"))
     assert len(yaml_files) == 1

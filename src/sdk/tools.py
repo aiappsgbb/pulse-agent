@@ -318,10 +318,9 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
     explicit_path = agent_entry.get("agent_path")
     if explicit_path:
         agent_path = Path(explicit_path)
-        jobs_dir = agent_path / "Jobs"
     else:
         agent_path = PULSE_TEAM_DIR / alias
-        jobs_dir = agent_path / "jobs" / "pending"
+    jobs_dir = agent_path / "jobs" / "pending"
 
     if not agent_path.exists():
         return (
@@ -334,7 +333,7 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
     # Build reply_to path — convention-based: PULSE_TEAM_DIR/{my_alias}/jobs/pending/
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or re.sub(r"[^a-z0-9-]", "", from_name.lower().split()[0]) or "unknown"
     my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
     my_team_dir.mkdir(parents=True, exist_ok=True)
     reply_to = str(my_team_dir)
@@ -394,7 +393,7 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
 
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or re.sub(r"[^a-z0-9-]", "", from_name.lower().split()[0]) or "unknown"
 
     # Sender's own inbox for responses
     my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
@@ -419,10 +418,9 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
         explicit = member.get("agent_path")
         if explicit:
             agent_path = Path(explicit)
-            jobs_dir = agent_path / "Jobs"
         else:
             agent_path = PULSE_TEAM_DIR / alias
-            jobs_dir = agent_path / "jobs" / "pending"
+        jobs_dir = agent_path / "jobs" / "pending"
 
         if not agent_path.exists():
             skipped.append(alias)

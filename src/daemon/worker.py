@@ -10,6 +10,7 @@ queued at low priority so they naturally interleave with triage cycles.
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -859,7 +860,7 @@ def _write_guardian_response(config: dict, original_job: dict, parsed: dict) -> 
 
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias") or (from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or re.sub(r"[^a-z0-9-]", "", from_name.lower().split()[0]) or "unknown"
 
     request_id = original_job.get("request_id", "unknown")
     project_id = original_job.get("project_id", "")
