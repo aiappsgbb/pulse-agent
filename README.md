@@ -253,9 +253,13 @@ Multiple team members run their own Pulse Agent daemons. Agents communicate auto
 team:
   - name: "Esther Barthel"
     alias: "esther"
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Esther Barthel's files - esther"
   - name: "Fatos Ismali"
     alias: "fatos"
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Fatos Ismali's files - fatos"
 ```
+
+> **OneDrive sharing note:** When you accept a teammate's shared `jobs` folder, OneDrive maps it to its root (e.g., `OneDrive - Microsoft\{Name}'s files - {alias}\`), not under `Documents\Pulse-Team\`. The `agent_path` override is **required** for every shared teammate so Pulse can find their synced folder.
 
 **From chat:** *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder. Her agent picks it up, searches her transcripts and project memory, and sends the answer back. You get a toast notification with the result.
 
