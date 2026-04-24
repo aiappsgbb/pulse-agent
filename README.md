@@ -260,6 +260,8 @@ team:
 ```
 
 > **OneDrive sharing note:** When you accept a teammate's shared `jobs` folder, OneDrive maps it to its root (e.g., `OneDrive - Microsoft\{Name}'s files - {alias}\`), not under `Documents\Pulse-Team\`. The `agent_path` override is **required** for every shared teammate so Pulse can find their synced folder.
+>
+> **Auto-detect on install/upgrade:** You don't have to hand-write these entries. SETUP.md Step 9.5 instructs your install/upgrade agent (Copilot CLI, Claude Code, etc.) to scan your OneDrive root for `{Name}'s files - {alias}/jobs/` shortcuts and offer to add them to your `team:` list. Re-run whenever a new teammate shares their folder with you.
 
 **From chat:** *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder. Her agent picks it up, searches her transcripts and project memory, and sends the answer back. You get a toast notification with the result.
 

@@ -135,15 +135,81 @@ def test_write_guardian_response_writes_yaml(tmp_dir):
 
 
 def test_write_guardian_response_empty_reply_to_no_crash(tmp_dir, caplog):
-    """No crash and no file written when reply_to is empty."""
+    """No crash and no file written when neither reply_to nor sender-alias resolve."""
     _write_guardian_response(
-        {"user": {"name": "X", "alias": "x"}},
+        {"user": {"name": "X", "alias": "x"}, "team": []},
         {"task": "q", "reply_to": "", "request_id": "r"},
         {"status": "no_context"},
     )
-    # Nothing should be written anywhere
     assert not list(tmp_dir.glob("**/*.yaml"))
-    assert any("no reply_to" in rec.message.lower() or "cannot send" in rec.message.lower() for rec in caplog.records)
+    assert any(
+        "cannot resolve reply destination" in rec.message.lower()
+        for rec in caplog.records
+    )
+
+
+def test_write_guardian_response_prefers_receiver_team_config(tmp_dir, monkeypatch):
+    """Cross-machine reply_to is ignored when the receiver has the sender in its team.
+
+    The sender's reply_to points at a path local to the sender's machine
+    (``C:\\Users\\<them>\\...``) which is not accessible on the receiver.
+    The receiver must resolve the write destination from its own team config
+    (``agent_path`` or ``PULSE_TEAM_DIR/{alias}/jobs/pending``), not trust the
+    sender-provided path.
+    """
+    # Simulate sender's unreachable path
+    unreachable = Path("C:/Users/ghost-user-does-not-exist/OneDrive/Pulse-Team/ricchi/jobs/pending")
+
+    # Receiver's view of sender's shared folder (OneDrive shortcut wherever it landed)
+    receiver_view = tmp_dir / "shortcut-from-ricchi"
+    receiver_view.mkdir()
+
+    config = {
+        "user": {"name": "Artur", "alias": "artur"},
+        "team": [{"name": "Riccardo", "alias": "ricchi", "agent_path": str(receiver_view)}],
+    }
+    job = {
+        "task": "What do you know about X?",
+        "project_id": "proj-a",
+        "from": "Riccardo",
+        "from_alias": "ricchi",
+        "reply_to": str(unreachable),
+        "request_id": "req-xyz",
+    }
+    parsed = {"status": "answered", "result": "Answer text.", "sources": []}
+
+    _write_guardian_response(config, job, parsed)
+
+    # Did NOT write to the sender-local (unreachable) path
+    assert not unreachable.exists()
+    # DID write to the receiver's local shortcut view
+    files = list((receiver_view / "pending").glob("*.yaml"))
+    assert len(files) == 1
+    data = yaml.safe_load(files[0].read_text())
+    assert data["status"] == "answered"
+    assert data["request_id"] == "req-xyz"
+
+
+def test_write_guardian_response_convention_fallback(tmp_dir):
+    """Without agent_path, falls back to PULSE_TEAM_DIR/{sender_alias}/jobs/pending."""
+    team_dir = tmp_dir / "Pulse-Team"
+    (team_dir / "ricchi" / "jobs" / "pending").mkdir(parents=True)
+
+    with patch("core.constants.PULSE_TEAM_DIR", team_dir):
+        config = {
+            "user": {"name": "Artur", "alias": "artur"},
+            "team": [{"name": "Riccardo", "alias": "ricchi"}],
+        }
+        job = {
+            "task": "q",
+            "from_alias": "ricchi",
+            "reply_to": "C:/Users/ghost/whatever",
+            "request_id": "req-1",
+        }
+        _write_guardian_response(config, job, {"status": "no_context", "result": "", "sources": []})
+
+    files = list((team_dir / "ricchi" / "jobs" / "pending").glob("*.yaml"))
+    assert len(files) == 1
 
 
 def test_write_guardian_response_creates_missing_reply_dir(tmp_dir):
@@ -222,7 +288,8 @@ def test_load_pending_tasks_skips_future_retry(tmp_dir):
         yaml.dump(job_data), encoding="utf-8"
     )
 
-    with patch("core.config.JOBS_DIR", tmp_dir):
+    with patch("core.config.JOBS_DIR", tmp_dir), \
+         patch("core.config.load_config", return_value={}):
         tasks = load_pending_tasks()
 
     assert tasks == []
@@ -242,11 +309,109 @@ def test_load_pending_tasks_includes_past_retry(tmp_dir):
         yaml.dump(job_data), encoding="utf-8"
     )
 
-    with patch("core.config.JOBS_DIR", tmp_dir):
+    with patch("core.config.JOBS_DIR", tmp_dir), \
+         patch("core.config.load_config", return_value={}):
         tasks = load_pending_tasks()
 
     assert len(tasks) == 1
     assert tasks[0]["type"] == "monitor"
+
+
+# --- inter-agent inbox bridge ---
+
+
+def test_load_pending_tasks_picks_up_team_inbox(tmp_dir):
+    """A YAML in PULSE_TEAM_DIR/{my_alias}/jobs/pending/ must be enqueued alongside local jobs."""
+    from core.config import load_pending_tasks
+
+    local_pending = tmp_dir / "local" / "pending"
+    local_pending.mkdir(parents=True)
+    (local_pending / "local-digest.yaml").write_text(
+        yaml.dump({"type": "digest"}), encoding="utf-8"
+    )
+
+    team_root = tmp_dir / "team"
+    inbox = team_root / "artur" / "jobs" / "pending"
+    inbox.mkdir(parents=True)
+    (inbox / "from-riccardo.yaml").write_text(
+        yaml.dump({
+            "type": "agent_request",
+            "kind": "question",
+            "task": "got context on X?",
+            "from": "Riccardo",
+            "from_alias": "riccardo",
+        }),
+        encoding="utf-8",
+    )
+
+    fake_config = {"user": {"alias": "artur"}}
+    with patch("core.config.JOBS_DIR", tmp_dir / "local"), \
+         patch("core.config.PULSE_TEAM_DIR", team_root), \
+         patch("core.config.load_config", return_value=fake_config):
+        tasks = load_pending_tasks()
+
+    types = sorted(t["type"] for t in tasks)
+    assert types == ["agent_request", "digest"]
+    team_task = next(t for t in tasks if t["type"] == "agent_request")
+    assert team_task["from_alias"] == "riccardo"
+    assert "team" in team_task["_file"] and "artur" in team_task["_file"]
+
+
+def test_load_pending_tasks_no_alias_skips_team_inbox(tmp_dir):
+    """Solo users with no user.alias never scan the team inbox — defensive no-op."""
+    from core.config import load_pending_tasks
+
+    (tmp_dir / "local" / "pending").mkdir(parents=True)
+
+    team_root = tmp_dir / "team"
+    inbox = team_root / "someone-else" / "jobs" / "pending"
+    inbox.mkdir(parents=True)
+    (inbox / "stale.yaml").write_text(
+        yaml.dump({"type": "agent_request", "from": "ghost"}), encoding="utf-8"
+    )
+
+    with patch("core.config.JOBS_DIR", tmp_dir / "local"), \
+         patch("core.config.PULSE_TEAM_DIR", team_root), \
+         patch("core.config.load_config", return_value={"user": {}}):
+        tasks = load_pending_tasks()
+
+    assert tasks == []
+
+
+def test_mark_task_completed_moves_within_team_inbox(tmp_dir):
+    """Completion must move the file into the sibling completed/ of its ORIGIN folder.
+
+    Previously mark_task_completed always used JOBS_DIR/completed, which meant
+    team-inbox requests would cross-dir move into the local PULSE_HOME instead
+    of being archived in the shared Pulse-Team folder.
+    """
+    from core.config import mark_task_completed
+
+    team_pending = tmp_dir / "team" / "artur" / "jobs" / "pending"
+    team_pending.mkdir(parents=True)
+    src = team_pending / "req-abc.yaml"
+    src.write_text(yaml.dump({"type": "agent_request"}), encoding="utf-8")
+
+    mark_task_completed({"_file": str(src)})
+
+    assert not src.exists()
+    expected = tmp_dir / "team" / "artur" / "jobs" / "completed" / "req-abc.yaml"
+    assert expected.exists()
+
+
+def test_mark_task_completed_moves_within_local_queue(tmp_dir):
+    """Local queue completion still lands in JOBS_DIR/completed — existing behavior preserved."""
+    from core.config import mark_task_completed
+
+    local_pending = tmp_dir / "jobs" / "pending"
+    local_pending.mkdir(parents=True)
+    src = local_pending / "digest.yaml"
+    src.write_text(yaml.dump({"type": "digest"}), encoding="utf-8")
+
+    mark_task_completed({"_file": str(src)})
+
+    assert not src.exists()
+    assert (tmp_dir / "jobs" / "completed" / "digest.yaml").exists()
 
 
 # --- write_daemon_status_loop: queue_size includes pending files ---
@@ -367,7 +532,8 @@ def test_load_pending_tasks_normal_jobs_unaffected(tmp_dir):
         yaml.dump({"type": "research", "task": "Market analysis"}), encoding="utf-8"
     )
 
-    with patch("core.config.JOBS_DIR", tmp_dir):
+    with patch("core.config.JOBS_DIR", tmp_dir), \
+         patch("core.config.load_config", return_value={}):
         tasks = load_pending_tasks()
 
     assert len(tasks) == 1

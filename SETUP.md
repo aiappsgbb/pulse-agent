@@ -542,25 +542,59 @@ This is **outside** the `Documents\Pulse-Team\` directory. The convention-based 
 
 **Common issue — "shortcut not syncing"**: If the shortcut shows a cloud icon for more than a few minutes, right-click → **Always keep on this device** to force sync.
 
-### 9.5 List teammates in standing-instructions.yaml
+### 9.5 Auto-detect teammates and populate `team:`
 
-Open `$pulseHome\standing-instructions.yaml` and add each teammate to the `team:` section. Every shared teammate needs `agent_path:` pointing to the actual OneDrive-synced path:
+**Run this every time new teammates share their folder, including during upgrades** — OneDrive may have synced new shortcuts since the last install.
+
+Walk the user's OneDrive root and find every folder matching the shortcut naming pattern `{Name}'s files - {alias}` that contains a `jobs/` subfolder. That's how OneDrive labels accepted "Add shortcut to My files" shortcuts for Pulse-Team folders.
+
+**Step 1: List candidate shortcuts.**
+
+```powershell
+Get-ChildItem -Path $env:OneDriveCommercial -Directory |
+  Where-Object { $_.Name -match "^(?<name>.+?)'s files - (?<alias>[a-z0-9][a-z0-9-]*)$" } |
+  Where-Object { Test-Path (Join-Path $_.FullName 'jobs') } |
+  Select-Object FullName, Name
+```
+
+**Bash** equivalent:
+```bash
+ls -d "$OneDriveCommercial"/*"'s files - "*/ 2>/dev/null | while read d; do
+  [ -d "${d}jobs" ] && echo "$d"
+done
+```
+
+**Step 2: Parse each match.** The folder name decomposes into `{Full Name}` and `{alias}`. Read the user's own alias from `$pulseHome\standing-instructions.yaml` and exclude any candidate whose alias matches the user's own (safety: never add the user as their own teammate).
+
+**Step 3: Filter against current team config.** Load the existing `team:` list from `standing-instructions.yaml`. For each candidate:
+- If the alias is not in the list → new teammate, propose to add
+- If the alias IS in the list but the entry is missing `agent_path` → propose to add the path
+- If the alias IS in the list with a matching `agent_path` → skip, already done
+
+**Step 4: Prompt the user.** Show the list of proposed additions/updates and ask a single Y/n. Example:
+
+> "I found 2 teammate shortcuts synced to your OneDrive:
+>   - Riccardo Chiodaroli (`ricchi`)
+>   - Esther Barthel (`esther`)
+>
+> Add them to your team config so your agent can reach them? [Y/n]"
+
+**Step 5: Update `standing-instructions.yaml`.** For each accepted candidate, insert into the `team:` list:
 
 ```yaml
 team:
-  - name: "Artur Zielinski"
-    alias: "artur"
-    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Artur Zielinski's files - artur"
-  - name: "Esther Barthel"
-    alias: "esther"
-    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Esther Barthel's files - esther"
+  - name: "Riccardo Chiodaroli"
+    alias: "ricchi"
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Riccardo Chiodaroli's files - ricchi"
 ```
 
-Replace `USERNAME` with your Windows username. The `agent_path` must point to the folder whose child is `jobs/pending/`.
+Use forward slashes in `agent_path` — YAML doesn't need to escape them and they work identically on Windows. Preserve any existing entries the user already wrote by hand.
+
+**Step 6: Tell the user to restart the daemon** so it picks up the new team config on its next cycle.
 
 > **Why `agent_path` is required:** OneDrive sharing places shortcuts at its root (`OneDrive - Microsoft\{Name}'s files - {alias}\`), not under `Documents\Pulse-Team\{alias}\`. Without `agent_path`, the tool looks in `Pulse-Team\{alias}\` which doesn't contain the synced content. Only your **own** mailbox lives under `Pulse-Team\` — teammates' shared folders always need the override.
 
-The alias MUST match exactly what the teammate set during their own onboarding (case-sensitive). If unsure, ask them to paste the `alias:` line from their own `standing-instructions.yaml`.
+**Manual fallback** (if the auto-detect finds nothing, e.g. no teammates have shared yet): the user can hand-edit `standing-instructions.yaml` later, following the schema above. The alias MUST match exactly what the teammate set during their own onboarding (case-sensitive).
 
 ### 9.6 Verify the loop
 
