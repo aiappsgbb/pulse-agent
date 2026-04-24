@@ -253,10 +253,23 @@ Multiple team members run their own Pulse Agent daemons. Agents communicate auto
 team:
   - name: "Esther Barthel"
     alias: "esther"
+<<<<<<< HEAD
   - name: "Fatos Ismali"
     alias: "fatos"
 ```
 
+=======
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Esther Barthel's files - esther"
+  - name: "Fatos Ismali"
+    alias: "fatos"
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Fatos Ismali's files - fatos"
+```
+
+> **OneDrive sharing note:** When you accept a teammate's shared `jobs` folder, OneDrive maps it to its root (e.g., `OneDrive - Microsoft\{Name}'s files - {alias}\`), not under `Documents\Pulse-Team\`. The `agent_path` override is **required** for every shared teammate so Pulse can find their synced folder.
+>
+> **Auto-detect on install/upgrade:** You don't have to hand-write these entries. SETUP.md Step 9.5 instructs your install/upgrade agent (Copilot CLI, Claude Code, etc.) to scan your OneDrive root for `{Name}'s files - {alias}/jobs/` shortcuts and offer to add them to your `team:` list. Re-run whenever a new teammate shares their folder with you.
+
+>>>>>>> push-to-public
 **From chat:** *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder. Her agent picks it up, searches her transcripts and project memory, and sends the answer back. You get a toast notification with the result.
 
 **Supported task types:** questions (instant chat query), research (deep 60-min investigation), intel (competitive brief), review (document/proposal feedback).

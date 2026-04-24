@@ -478,7 +478,139 @@ After answering, the agent saves the config automatically to `$PULSE_HOME/standi
 
 ---
 
-## Step 9: Desktop Shortcut
+## Step 9: Team Folder (Optional)
+
+### **USER ACTION REQUIRED**
+
+Skip this step if the user is running solo (no teammates on Pulse).
+
+Pulse uses OneDrive-shared folders for cross-agent messaging. Your agent drops task YAMLs into a teammate's shared folder; their agent drops answers back into yours. Only small YAML files move — nothing from `$PULSE_HOME` is ever shared.
+
+### 9.1 Read the alias from config
+
+The alias was set during onboarding. Read it out of the saved config:
+
+**PowerShell**:
+```powershell
+$alias = (Select-String -Path "$pulseHome\standing-instructions.yaml" -Pattern '^\s*alias:\s*"?([^"\r\n]+)"?' | Select-Object -First 1).Matches.Groups[1].Value.Trim()
+echo "Your alias is: $alias"
+```
+
+**Verify**: `$alias` is a non-empty lowercase slug (e.g., `artur`, `riccardo`). If empty, re-run Step 8 onboarding.
+
+### 9.2 Create your team mailbox
+
+**PowerShell**:
+```powershell
+$pulseTeam = (Split-Path $pulseHome) + "\Pulse-Team"
+$myMailbox = "$pulseTeam\$alias\jobs\pending"
+New-Item -ItemType Directory -Path $myMailbox -Force | Out-Null
+New-Item -ItemType Directory -Path "$pulseTeam\$alias\jobs\completed" -Force | Out-Null
+echo "Created: $pulseTeam\$alias\jobs\"
+```
+
+**Verify**: The folder `Pulse-Team\{alias}\jobs\pending\` exists and is empty.
+
+### 9.3 Share your `jobs/` folder with teammates
+
+Tell the user:
+
+> "Open File Explorer and navigate to `OneDrive - Microsoft\Documents\Pulse-Team\{your-alias}\`. Right-click the `jobs` folder → **OneDrive** → **Share**. Add each teammate's work email with **Can edit** permission. Share ONLY the `jobs` folder — not the `{alias}` parent, not `Pulse`. Your private data stays on your machine."
+>
+> "Ask each teammate to share their `Pulse-Team\{their-alias}\jobs\` folder back with you the same way."
+
+**Why edit permission**: teammates' agents need to *write* request YAMLs into your `jobs/pending/`. View-only breaks the messaging loop.
+
+### 9.4 Accept teammates' shared folders
+
+For each `jobs` folder a teammate shares with you:
+
+1. Open the share link from the email, or go to [onedrive.live.com](https://onedrive.live.com) → click **Shared** in the left sidebar → **Shared with you** tab.
+2. Find the teammate's shared `jobs` folder in the list. **Right-click** on it (or click the **⋯** three-dot menu on the row).
+3. Select **Add shortcut to My files** from the context menu. (If you don't see it, open the folder first, then use the **Add shortcut to My files** button in the toolbar at the top.)
+4. A confirmation toast appears: "Shortcut added". OneDrive syncs the shortcut to your local disk automatically.
+
+> **Tip:** If you opened the share link directly, you'll land inside the folder. Look for the **Add shortcut to My files** button in the toolbar above the file list — it has a folder icon with a link arrow.
+
+**Important — OneDrive maps shared folders to its root, not under Pulse-Team.** When you add a shortcut to a teammate's shared folder, OneDrive places it at:
+
+```
+C:\Users\{you}\OneDrive - Microsoft\{Teammate Name}'s files - {their-alias}\jobs\
+```
+
+This is **outside** the `Documents\Pulse-Team\` directory. The convention-based path (`Pulse-Team\{alias}\jobs\pending\`) will NOT find it. You **must** add an `agent_path:` override in `standing-instructions.yaml` for every shared teammate (see Step 9.5).
+
+**Common issue — "shortcut not syncing"**: If the shortcut shows a cloud icon for more than a few minutes, right-click → **Always keep on this device** to force sync.
+
+### 9.5 Auto-detect teammates and populate `team:`
+
+**Run this every time new teammates share their folder, including during upgrades** — OneDrive may have synced new shortcuts since the last install.
+
+Walk the user's OneDrive root and find every folder matching the shortcut naming pattern `{Name}'s files - {alias}` that contains a `jobs/` subfolder. That's how OneDrive labels accepted "Add shortcut to My files" shortcuts for Pulse-Team folders.
+
+**Step 1: List candidate shortcuts.**
+
+```powershell
+Get-ChildItem -Path $env:OneDriveCommercial -Directory |
+  Where-Object { $_.Name -match "^(?<name>.+?)'s files - (?<alias>[a-z0-9][a-z0-9-]*)$" } |
+  Where-Object { Test-Path (Join-Path $_.FullName 'jobs') } |
+  Select-Object FullName, Name
+```
+
+**Bash** equivalent:
+```bash
+ls -d "$OneDriveCommercial"/*"'s files - "*/ 2>/dev/null | while read d; do
+  [ -d "${d}jobs" ] && echo "$d"
+done
+```
+
+**Step 2: Parse each match.** The folder name decomposes into `{Full Name}` and `{alias}`. Read the user's own alias from `$pulseHome\standing-instructions.yaml` and exclude any candidate whose alias matches the user's own (safety: never add the user as their own teammate).
+
+**Step 3: Filter against current team config.** Load the existing `team:` list from `standing-instructions.yaml`. For each candidate:
+- If the alias is not in the list → new teammate, propose to add
+- If the alias IS in the list but the entry is missing `agent_path` → propose to add the path
+- If the alias IS in the list with a matching `agent_path` → skip, already done
+
+**Step 4: Prompt the user.** Show the list of proposed additions/updates and ask a single Y/n. Example:
+
+> "I found 2 teammate shortcuts synced to your OneDrive:
+>   - Riccardo Chiodaroli (`ricchi`)
+>   - Esther Barthel (`esther`)
+>
+> Add them to your team config so your agent can reach them? [Y/n]"
+
+**Step 5: Update `standing-instructions.yaml`.** For each accepted candidate, insert into the `team:` list:
+
+```yaml
+team:
+  - name: "Riccardo Chiodaroli"
+    alias: "ricchi"
+    agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Riccardo Chiodaroli's files - ricchi"
+```
+
+Use forward slashes in `agent_path` — YAML doesn't need to escape them and they work identically on Windows. Preserve any existing entries the user already wrote by hand.
+
+**Step 6: Tell the user to restart the daemon** so it picks up the new team config on its next cycle.
+
+> **Why `agent_path` is required:** OneDrive sharing places shortcuts at its root (`OneDrive - Microsoft\{Name}'s files - {alias}\`), not under `Documents\Pulse-Team\{alias}\`. Without `agent_path`, the tool looks in `Pulse-Team\{alias}\` which doesn't contain the synced content. Only your **own** mailbox lives under `Pulse-Team\` — teammates' shared folders always need the override.
+
+**Manual fallback** (if the auto-detect finds nothing, e.g. no teammates have shared yet): the user can hand-edit `standing-instructions.yaml` later, following the schema above. The alias MUST match exactly what the teammate set during their own onboarding (case-sensitive).
+
+### 9.6 Verify the loop
+
+After the user finishes the mutual share with at least one teammate, test it end-to-end. In the TUI's Chat tab, type:
+
+> "ask the team what context they have on [any topic]"
+
+Within ~60 seconds (30s OneDrive sync + 30s teammate's job poll), a toast should fire on the user's machine when the response lands. If nothing arrives after a few minutes:
+
+- Check the teammate's daemon is running (`python src/pulse.py` open on their machine)
+- Check the teammate's jobs folder on your disk — if the YAML you sent is still there, their OneDrive hasn't synced yet
+- Check `logs\YYYY-MM-DD.jsonl` on the user's machine for `broadcast_to_team` errors
+
+---
+
+## Step 10: Desktop Shortcut
 
 Create a shortcut so the user can launch Pulse with a double-click:
 

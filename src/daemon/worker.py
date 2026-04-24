@@ -10,6 +10,7 @@ queued at low priority so they naturally interleave with triage cycles.
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -840,26 +841,68 @@ def _parse_guardian_output(text: str) -> dict:
     return data
 
 
+def _resolve_reply_dir(config: dict, original_job: dict) -> Path | None:
+    """Resolve where to write a Guardian response on THIS machine.
+
+    The sender's ``reply_to`` is a path local to their machine
+    (``C:\\Users\\<their-username>\\...``) and is not accessible here. Resolve
+    against the receiver's own view of the sender's shared folder instead:
+
+      1. Look up sender's alias in ``config["team"]`` — if that entry has
+         ``agent_path`` (OneDrive shortcut landed somewhere non-convention),
+         use ``agent_path/pending``.
+      2. Else try the convention path ``PULSE_TEAM_DIR/{sender_alias}/jobs/pending``.
+      3. Last-resort fallback: raw ``reply_to`` from the request (works only
+         when sender and receiver are on the same machine, e.g. demo seeds).
+
+    Returns None when no candidate folder can be created.
+    """
+    from core.constants import PULSE_TEAM_DIR
+
+    sender_alias = (original_job.get("from_alias") or "").lower()
+    candidates: list[Path] = []
+
+    if sender_alias:
+        for member in config.get("team", []):
+            if (member.get("alias") or "").lower() != sender_alias:
+                continue
+            explicit = member.get("agent_path")
+            if explicit:
+                candidates.append(Path(explicit) / "pending")
+            break
+        candidates.append(PULSE_TEAM_DIR / sender_alias / "jobs" / "pending")
+
+    raw = original_job.get("reply_to") or ""
+    if raw:
+        candidates.append(Path(raw))
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError as e:
+            log.debug(f"  reply candidate {candidate} not usable: {e}")
+            continue
+    return None
+
+
 def _write_guardian_response(config: dict, original_job: dict, parsed: dict) -> None:
-    """Write a structured response YAML to the requester's reply_to path.
+    """Write a structured response YAML to the requester's shared mailbox.
 
     ``parsed`` is the Guardian LLM's output dict, at minimum containing 'status'.
     """
-    reply_to = original_job.get("reply_to", "")
-    if not reply_to:
-        log.warning("  Agent request has no reply_to, cannot send response")
-        return
-
-    reply_dir = Path(reply_to)
-    try:
-        reply_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        log.error(f"  Cannot create reply_to path: {e}")
+    reply_dir = _resolve_reply_dir(config, original_job)
+    if reply_dir is None:
+        log.error(
+            "  Cannot resolve reply destination for agent_request (from_alias="
+            f"{original_job.get('from_alias')!r}, reply_to={original_job.get('reply_to')!r}). "
+            "Add the sender to your team config or ensure the shared OneDrive folder is synced."
+        )
         return
 
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias") or (from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or re.sub(r"[^a-z0-9-]", "", (from_name or "unknown").lower().split()[0]) or "unknown"
 
     request_id = original_job.get("request_id", "unknown")
     project_id = original_job.get("project_id", "")

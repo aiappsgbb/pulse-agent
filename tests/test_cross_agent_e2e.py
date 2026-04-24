@@ -65,11 +65,18 @@ async def test_full_loop_broadcast_guardian_ingest(tmp_path, monkeypatch):
         '```'
     )
 
-    beta_config = {"user": {"name": "Beta User", "alias": "beta"}}
+    # Beta must have Artur in its team config — the receiver's write destination
+    # is resolved from the receiver's own view of the sender's shared folder,
+    # not from the sender-provided reply_to (which is a sender-machine path).
+    beta_config = {
+        "user": {"name": "Beta User", "alias": "beta"},
+        "team": [{"name": "Artur Zielinski", "alias": "artur"}],
+    }
     beta_job["_file"] = str(beta_files[0])
 
     fake_run = AsyncMock(return_value=fake_guardian_output)
     monkeypatch.setattr("daemon.worker._run_guardian_session", fake_run)
+    monkeypatch.setattr("core.constants.PULSE_TEAM_DIR", team_dir)
 
     await _handle_agent_request(MagicMock(), beta_config, beta_job)
 

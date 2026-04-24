@@ -163,6 +163,44 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
 ACTIONS_FILE = PULSE_HOME / ".digest-actions.json"
 
 
+def _resolve_teammate_jobs_dir(member: dict, alias: str) -> Path | None:
+    """Resolve the teammate's inbox folder to write YAMLs into.
+
+    ``agent_path`` (when set) points at the teammate's ROOT folder — wherever
+    OneDrive placed the synced shortcut, which is typically OneDrive root with a
+    name like ``{Name}'s files - {alias}/``. Code appends ``/jobs/pending`` in
+    both branches so the write destination always matches the receiver's poller.
+
+    Why ``agent_path`` exists: OneDrive "Add shortcut to My files" only places
+    shortcuts at OneDrive root and won't let you move them into subfolders
+    cleanly, so the convention-based ``PULSE_TEAM_DIR/{alias}/`` rarely matches
+    where the synced data actually lives.
+
+    Returns None when no candidate folder exists on disk.
+    """
+    explicit = member.get("agent_path")
+    if explicit:
+        root = Path(explicit)
+    else:
+        root = PULSE_TEAM_DIR / alias
+    if not root.exists():
+        return None
+    return root / "jobs" / "pending"
+
+
+def _sanitize_alias_fallback(name: str) -> str:
+    """Build a path-safe alias from the user's display name as a last resort.
+
+    Strips non-alphanumeric chars from the first token so template placeholders
+    like ``TODO: Your Full Name`` don't produce Windows-invalid folder names
+    such as ``todo:``.
+    """
+    if not name:
+        return "unknown"
+    token = name.lower().split()[0]
+    return re.sub(r"[^a-z0-9-]", "", token) or "unknown"
+
+
 def load_actions() -> dict:
     """Load digest actions (dismissed items, notes). Public for digest module."""
     return load_json_state(ACTIONS_FILE, {"dismissed": [], "notes": {}})
@@ -313,20 +351,18 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
     if not alias:
         return f"ERROR: Agent '{params.agent}' has no alias configured."
 
-    # Convention-based path: PULSE_TEAM_DIR/{alias}/jobs/pending/
-    # Falls back to explicit agent_path if set (backward compat)
-    explicit_path = agent_entry.get("agent_path")
-    if explicit_path:
-        agent_path = Path(explicit_path)
-        jobs_dir = agent_path / "Jobs"
-    else:
-        agent_path = PULSE_TEAM_DIR / alias
-        jobs_dir = agent_path / "jobs" / "pending"
-
-    if not agent_path.exists():
+    # Resolve this teammate's inbox. Two modes:
+    #   1. agent_path set: points directly at the shared `jobs/` folder (wherever OneDrive
+    #      placed the shortcut). Code appends `/pending`.
+    #   2. convention: PULSE_TEAM_DIR/{alias}/jobs/pending/ (only works when the teammate's
+    #      shortcut can be placed at that exact path — rare given OneDrive's root-only rule).
+    jobs_dir = _resolve_teammate_jobs_dir(agent_entry, alias)
+    if jobs_dir is None:
         return (
-            f"ERROR: Path for agent '{alias}' not accessible: {agent_path}. "
-            f"Make sure the Pulse-Team OneDrive folder is shared and synced."
+            f"ERROR: Path for agent '{alias}' not accessible. "
+            f"Make sure the shared OneDrive folder from '{alias}' is synced locally, "
+            f"and set `agent_path:` in the team entry if the shortcut is not at "
+            f"{PULSE_TEAM_DIR / alias}."
         )
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +370,7 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
     # Build reply_to path — convention-based: PULSE_TEAM_DIR/{my_alias}/jobs/pending/
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or _sanitize_alias_fallback(from_name)
     my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
     my_team_dir.mkdir(parents=True, exist_ok=True)
     reply_to = str(my_team_dir)
@@ -394,7 +430,7 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
 
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
-    from_alias = user_cfg.get("alias", from_name.lower().split()[0] if from_name else "unknown")
+    from_alias = user_cfg.get("alias") or _sanitize_alias_fallback(from_name)
 
     # Sender's own inbox for responses
     my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
@@ -415,16 +451,8 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
             skipped.append(member.get("name", "?") + " (no alias)")
             continue
 
-        # Convention-based path; fall back to explicit agent_path for backward compat
-        explicit = member.get("agent_path")
-        if explicit:
-            agent_path = Path(explicit)
-            jobs_dir = agent_path / "Jobs"
-        else:
-            agent_path = PULSE_TEAM_DIR / alias
-            jobs_dir = agent_path / "jobs" / "pending"
-
-        if not agent_path.exists():
+        jobs_dir = _resolve_teammate_jobs_dir(member, alias)
+        if jobs_dir is None:
             skipped.append(alias)
             continue
 

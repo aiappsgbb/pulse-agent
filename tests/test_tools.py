@@ -836,19 +836,23 @@ async def test_send_task_to_agent_match_by_name(tmp_dir):
 
 
 async def test_send_task_to_agent_explicit_agent_path(tmp_dir):
-    """Backward compat — explicit agent_path in config still works."""
-    (tmp_dir / "alice-custom").mkdir()
+    """Explicit agent_path points at the teammate's root folder; code appends /jobs/pending.
+
+    Matches the docs' recommended config:
+        agent_path: "C:/.../{Name}'s files - {alias}"
+    which is OneDrive's default name for a synced shared-folder shortcut.
+    """
+    shortcut_root = tmp_dir / "Alice's files - alice"
+    shortcut_root.mkdir()
     team_config = {
-        "team": [{"name": "Alice", "alias": "alice", "agent_path": str(tmp_dir / "alice-custom")}],
+        "team": [{"name": "Alice", "alias": "alice", "agent_path": str(shortcut_root)}],
         "user": {"name": "Artur", "alias": "artur"},
     }
     with patch("core.config.load_config", return_value=team_config):
         result = await send_task_to_agent.handler({"arguments": {
             "agent": "alice",
-            "task": "Test backward compat",
+            "task": "Test explicit agent_path",
         }})
     assert result["resultType"] == "success"
-    # Should write to explicit path's Jobs/ folder (not convention path)
-    jobs_dir = tmp_dir / "alice-custom" / "Jobs"
-    yaml_files = list(jobs_dir.glob("*.yaml"))
+    yaml_files = list((shortcut_root / "jobs" / "pending").glob("*.yaml"))
     assert len(yaml_files) == 1

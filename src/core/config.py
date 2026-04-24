@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import CONFIG_DIR, JOBS_DIR, PULSE_HOME
+from core.constants import CONFIG_DIR, JOBS_DIR, PULSE_HOME, PULSE_TEAM_DIR
 
 
 def _expand_env_vars(obj):
@@ -97,35 +97,65 @@ def load_template_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def load_pending_tasks() -> list[dict]:
-    """Load all pending jobs from jobs/pending/.
+def _team_inbox_pending_dir() -> Path | None:
+    """Resolve this agent's inter-agent inbox: PULSE_TEAM_DIR/{my_alias}/jobs/pending.
 
-    Skips retry jobs whose _retry_after timestamp has not yet passed.
+    Returns None when there is no configured alias or the folder does not exist —
+    that is the normal case for solo users and prevents a missing-folder warning.
+    """
+    try:
+        alias = (load_config().get("user") or {}).get("alias")
+    except Exception:
+        alias = None
+    if not alias:
+        return None
+    candidate = PULSE_TEAM_DIR / alias / "jobs" / "pending"
+    return candidate if candidate.exists() else None
+
+
+def load_pending_tasks() -> list[dict]:
+    """Load all pending jobs from the local queue AND this agent's team inbox.
+
+    Scans both ``PULSE_HOME/jobs/pending/`` (local/agent-generated work) and
+    ``PULSE_TEAM_DIR/{my_alias}/jobs/pending/`` (inter-agent requests synced
+    from teammates' OneDrives). Skips retry jobs whose ``_retry_after``
+    timestamp has not yet passed.
     """
     from datetime import datetime
-    pending_dir = JOBS_DIR / "pending"
+
+    pending_dirs = [JOBS_DIR / "pending"]
+    team_inbox = _team_inbox_pending_dir()
+    if team_inbox is not None:
+        pending_dirs.append(team_inbox)
+
     tasks = []
-    if not pending_dir.exists():
-        return tasks
     now = datetime.now()
-    for task_file in sorted(pending_dir.glob("*.yaml")):
-        with open(task_file, "r") as f:
-            task = yaml.safe_load(f)
-        retry_after = task.get("_retry_after")
-        if retry_after:
-            try:
-                if datetime.fromisoformat(retry_after) > now:
-                    continue  # Not yet due — skip until next sync cycle
-            except (ValueError, TypeError):
-                pass  # Malformed timestamp — proceed anyway
-        task["_file"] = str(task_file)
-        tasks.append(task)
+    for pending_dir in pending_dirs:
+        if not pending_dir.exists():
+            continue
+        for task_file in sorted(pending_dir.glob("*.yaml")):
+            with open(task_file, "r") as f:
+                task = yaml.safe_load(f)
+            retry_after = task.get("_retry_after")
+            if retry_after:
+                try:
+                    if datetime.fromisoformat(retry_after) > now:
+                        continue  # Not yet due — skip until next sync cycle
+                except (ValueError, TypeError):
+                    pass  # Malformed timestamp — proceed anyway
+            task["_file"] = str(task_file)
+            tasks.append(task)
     return tasks
 
 
 def mark_task_completed(task: dict):
-    """Move a task file from pending/ to completed/."""
+    """Move a task file from pending/ to its sibling completed/ folder.
+
+    Supports both the local queue (``PULSE_HOME/jobs/``) and team inboxes
+    (``PULSE_TEAM_DIR/{alias}/jobs/``) by deriving the destination from the
+    source file's parent, not from the static JOBS_DIR.
+    """
     src = Path(task["_file"])
-    dest = JOBS_DIR / "completed" / src.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    src.rename(dest)
+    completed_dir = src.parent.parent / "completed"
+    completed_dir.mkdir(parents=True, exist_ok=True)
+    src.rename(completed_dir / src.name)
