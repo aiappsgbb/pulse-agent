@@ -183,7 +183,7 @@ def test_write_guardian_response_prefers_receiver_team_config(tmp_dir, monkeypat
     # Did NOT write to the sender-local (unreachable) path
     assert not unreachable.exists()
     # DID write to the receiver's local shortcut view
-    files = list((receiver_view / "pending").glob("*.yaml"))
+    files = list((receiver_view / "jobs" / "pending").glob("*.yaml"))
     assert len(files) == 1
     data = yaml.safe_load(files[0].read_text())
     assert data["status"] == "answered"

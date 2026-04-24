@@ -868,7 +868,7 @@ def _resolve_reply_dir(config: dict, original_job: dict) -> Path | None:
                 continue
             explicit = member.get("agent_path")
             if explicit:
-                candidates.append(Path(explicit) / "pending")
+                candidates.append(Path(explicit) / "jobs" / "pending")
             break
         candidates.append(PULSE_TEAM_DIR / sender_alias / "jobs" / "pending")
 
