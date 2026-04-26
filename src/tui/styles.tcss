@@ -1,0 +1,242 @@
+/* =========================================================
+   Pulse Agent TUI — Textual stylesheet
+   Brand: cyan / green / amber on deep dark
+   ========================================================= */
+
+Screen {
+    background: $background;
+}
+
+Header {
+    background: $surface;
+    color: $primary;
+    height: 1;
+}
+
+Footer {
+    background: $background;
+    height: 1;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+/* ─── Today pane ──────────────────────────────────────── */
+
+TodayPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+#today-header {
+    height: 1;
+    color: $primary;
+    padding: 0 1;
+}
+
+TodayPane ListView {
+    height: 1fr;
+    border: round $panel;
+    border-title-color: $primary;
+    padding: 0 1;
+}
+
+TodayPane .detail-container {
+    height: 45%;
+    border: round $panel;
+    border-title-color: $text-muted;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Inbox pane ───────────────────────────────────────── */
+
+InboxPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+InboxPane ListView {
+    height: 1fr;
+    border: round $panel;
+    border-title-color: $primary;
+    padding: 0 1;
+}
+
+InboxPane .detail-container {
+    height: 45%;
+    border: round $panel;
+    border-title-color: $text-muted;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Projects pane ────────────────────────────────────── */
+
+ProjectsPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+#sort-indicator {
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+ProjectsPane ListView {
+    height: 44%;
+    border: round $panel;
+    padding: 0 1;
+}
+
+ProjectsPane .detail-container {
+    height: 55%;
+    border: round $panel;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Jobs pane ────────────────────────────────────────── */
+
+JobsPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+JobsPane ListView {
+    height: 45%;
+    border: round $panel;
+    padding: 0 1;
+}
+
+JobsPane .detail-container {
+    height: 55%;
+    border: round $panel;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ─── Chat pane ────────────────────────────────────────── */
+
+ChatPane {
+    layout: vertical;
+    height: 1fr;
+}
+
+#chat-log {
+    height: 1fr;
+    border: round $panel;
+    padding: 0 1;
+}
+
+#chat-input {
+    height: 3;
+    border: round $primary;
+    margin: 0;
+}
+
+/* ─── Status bar ───────────────────────────────────────── */
+
+#status-bar {
+    height: 1;
+    background: $background;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+/* ─── Modals ───────────────────────────────────────────── */
+
+ReplyModal, NoteModal, QuestionModal, HelpModal, ProjectStatusModal, CommitmentModal {
+    align: center middle;
+}
+
+#help-dialog {
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+    max-height: 70%;
+}
+
+#status-dialog, #commitment-dialog {
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+    max-height: 70%;
+}
+
+#status-title, #commitment-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#status-current {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#status-buttons {
+    layout: horizontal;
+    height: 3;
+    margin-bottom: 1;
+}
+
+#reply-dialog, #note-dialog, #question-dialog {
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+    width: 80%;
+    height: auto;
+    max-height: 70%;
+}
+
+#reply-title, #note-title, #question-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#reply-subject, #question-text {
+    color: $text-muted;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+
+#reply-text {
+    height: 8;
+    margin-bottom: 1;
+}
+
+#note-input, #question-input {
+    margin-bottom: 1;
+}
+
+#reply-buttons, #note-buttons, #question-buttons {
+    layout: horizontal;
+    height: 3;
+    align: right middle;
+}
+
+Button {
+    margin-left: 1;
+}
+
+/* ─── List items ───────────────────────────────────────── */
+
+ListItem {
+    padding: 0 1;
+}
+
+ListItem:hover {
+    background: $primary 15%;
+}
+
+ListItem.-highlighted {
+    background: $primary 20%;
+}

@@ -1,0 +1,20 @@
+# Core — required for all modes
+github-copilot-sdk==0.1.23
+pyyaml==6.0.3
+feedparser==6.0.12
+python-dotenv==1.2.1
+
+# Document extraction — required for digest mode
+python-docx==1.2.0
+python-pptx==1.0.2
+PyPDF2==3.0.1
+openpyxl==3.1
+
+# Browser automation — required for transcript collection mode
+playwright==1.58.0
+
+# Desktop notifications — Windows toast notifications
+winotify>=1.1
+
+# Terminal UI — interactive dashboard
+textual==8.0.0

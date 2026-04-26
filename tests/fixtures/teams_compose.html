@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head><title>Teams Compose</title></head>
+<body>
+<!-- Teams chat sidebar with existing chats -->
+<div role="tree" aria-label="Chat list">
+  <div role="treeitem" aria-level="1" aria-expanded="true">
+    <span>Recent</span>
+    <div role="group">
+      <div role="treeitem" aria-level="2" data-item-type="chat">
+        Fatos Ismali
+        <time>8:30 AM</time>
+      </div>
+      <div role="treeitem" aria-level="2" data-item-type="chat">
+        Alice Johnson
+        <time>Yesterday</time>
+      </div>
+      <div role="treeitem" aria-level="2" data-item-type="chat">
+        Data Engineering and Data Science
+        <time>9:15 AM</time>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New message button -->
+<button aria-label="New message" id="new-msg-btn">New message</button>
+<button aria-label="New chat" id="new-chat-btn" style="display:none">New chat</button>
+
+<!-- Recipient field (hidden until new chat clicked) -->
+<div id="new-chat-pane" style="display:none">
+  <input placeholder="Enter name, email, or group" aria-label="To:" id="to-field" />
+  <div role="combobox" aria-label="To:">
+    <input id="to-combobox-input" />
+  </div>
+
+  <!-- Autocomplete suggestions (hidden until search) -->
+  <div role="listbox" id="suggestions" style="display:none">
+    <div role="option">Fatos Ismali - fatos@contoso.com</div>
+    <div role="option">Fatima Ali - fatima@contoso.com</div>
+  </div>
+</div>
+
+<!-- Compose box -->
+<div role="textbox" aria-label="Type a message" contenteditable="true" id="compose-box">
+</div>
+
+<!-- CKEditor fallback compose -->
+<div data-tid="ckeditor" style="display:none">
+  <div contenteditable="true" id="ckeditor-compose"></div>
+</div>
+
+<!-- Send button -->
+<button aria-label="Send" id="send-btn">Send</button>
+</body>
+</html>

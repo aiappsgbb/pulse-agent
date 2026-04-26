@@ -1,0 +1,257 @@
+"""Session configuration builder — config-driven, no hardcoded if/elif chains."""
+
+import asyncio
+from collections.abc import Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import yaml
+
+from copilot import (
+    CopilotClient,
+    SessionConfig,
+    Tool,
+    PermissionRequest,
+    PermissionRequestResult,
+)
+
+from core.constants import PROJECT_ROOT, PULSE_HOME, CONFIG_DIR
+from core.logging import log
+from sdk.prompts import load_prompt
+from sdk.agents import load_agents, _mcp_config
+from sdk.hooks import build_hooks
+
+MAX_SESSION_RETRIES = 3
+
+
+def load_modes() -> dict:
+    """Load mode definitions from config/modes.yaml."""
+    modes_path = CONFIG_DIR / "modes.yaml"
+    with open(modes_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def auto_approve_handler(request: PermissionRequest, context: dict) -> PermissionRequestResult:
+    """Auto-approve all tool calls — agent runs autonomously."""
+    return PermissionRequestResult(kind="approved", rules=[])
+
+
+def _build_system_prompt(config: dict, mode: str, mode_cfg: dict) -> str:
+    """Build system prompt by loading base + mode-specific prompt with variable interpolation."""
+    from sdk.prompts import load_enrichments
+
+    # Chat mode replaces the entire system prompt
+    if mode_cfg.get("system_prompt_mode") == "replace":
+        prompt_path = mode_cfg["system_prompt"]
+        variables = _build_prompt_variables(config, mode)
+        text = load_prompt(prompt_path, variables)
+        # Append feature-specific enrichments (e.g., CRM tool listings for chat)
+        enrichment = load_enrichments(mode)
+        if enrichment:
+            text += "\n\n" + enrichment
+        return text
+
+    # Other modes: base + mode-specific additions
+    base = load_prompt("config/prompts/system/base.md")
+
+    prompt_path = mode_cfg.get("system_prompt")
+    if prompt_path:
+        variables = _build_prompt_variables(config, mode)
+        base += "\n" + load_prompt(prompt_path, variables)
+
+    # Append feature-specific enrichments
+    enrichment = load_enrichments(mode)
+    if enrichment:
+        base += "\n\n" + enrichment
+
+    return base
+
+
+def _build_prompt_variables(config: dict, mode: str) -> dict:
+    """Build the variable dict for prompt interpolation based on mode.
+
+    Only includes variables that have {{placeholders}} in the templates.
+    Instruction content is merged directly into prompt templates (not via variables).
+    """
+    variables = {}
+
+    # User identity + context — available in all modes
+    user_cfg = config.get("user", {})
+    variables["user_name"] = user_cfg.get("name", "the user")
+    variables["user_email"] = user_cfg.get("email", "")
+    variables["user_role"] = user_cfg.get("role", "")
+    variables["user_org"] = user_cfg.get("org", "")
+    variables["user_focus"] = user_cfg.get("focus", "").strip()
+
+    what_matters = user_cfg.get("what_matters", [])
+    variables["what_matters"] = "\n".join(f"- {w}" for w in what_matters) if what_matters else ""
+
+    what_is_noise = user_cfg.get("what_is_noise", [])
+    variables["what_is_noise"] = "\n".join(f"- {n}" for n in what_is_noise) if what_is_noise else ""
+
+    if mode == "monitor" or mode == "triage":
+        monitoring = config.get("monitoring", {})
+        priorities = monitoring.get("priorities", [])
+        vips = monitoring.get("vip_contacts", [])
+
+        variables["priorities"] = "\n".join(f"- {p}" for p in priorities)
+        variables["vips"] = ", ".join(vips) if vips else "None configured"
+
+    return variables
+
+
+def build_session_config(
+    config: dict,
+    mode: str,
+    tools: list[Tool] | None = None,
+    cdp_endpoint: str | None = None,
+) -> SessionConfig:
+    """Build a SessionConfig from modes.yaml + standing instructions.
+
+    Config-driven: reads mode definitions from modes.yaml instead of hardcoded if/elif.
+    """
+    modes = load_modes()
+
+    # Map legacy mode name
+    mode_key = "monitor" if mode == "triage" else mode
+    mode_cfg = modes.get(mode_key, {})
+
+    if mode_cfg.get("standalone"):
+        raise ValueError(f"Mode '{mode}' is standalone (no SDK session)")
+
+    # Model
+    model_key = mode_cfg.get("model_key", mode)
+    models = config.get("models", {})
+    model = models.get(model_key, models.get("default", "claude-sonnet"))
+
+    # Working directory
+    wd = mode_cfg.get("working_dir", "root")
+    working_dir = str(PULSE_HOME) if wd == "output" else str(PROJECT_ROOT)
+
+    # MCP servers — inherit from default_mcp_servers unless mode overrides
+    default_servers = modes.get("default_mcp_servers", [])
+    mcp_names = mode_cfg.get("mcp_servers", default_servers)
+    mcp_servers = {}
+    for name in mcp_names:
+        cfg = _mcp_config(name, config, cdp_endpoint)
+        if cfg is not None:
+            mcp_servers[name] = cfg
+
+    # Auto-inject MCP servers from enrichment system (e.g., CRM tools when available)
+    from sdk.agents import _ENRICHMENT_MCP_MAP
+    from sdk.prompts import ENRICHMENTS_DIR
+    import importlib
+    for prefix, checker_path in _ENRICHMENT_MCP_MAP:
+        if prefix not in mcp_servers:
+            # Only inject if at least one enrichment file exists for this prefix
+            has_enrichment = any(ENRICHMENTS_DIR.glob(f"{prefix}-*.md")) if ENRICHMENTS_DIR.exists() else False
+            if has_enrichment:
+                module_path, func_name = checker_path.rsplit(".", 1)
+                mod = importlib.import_module(module_path)
+                if getattr(mod, func_name)():
+                    cfg = _mcp_config(prefix, config, cdp_endpoint)
+                    if cfg is not None:
+                        mcp_servers[prefix] = cfg
+
+    # Custom agents
+    agent_names = mode_cfg.get("agents", [])
+    custom_agents = load_agents(agent_names, config) if agent_names else []
+
+    # System prompt
+    prompt_text = _build_system_prompt(config, mode_key, mode_cfg)
+    sys_mode = mode_cfg.get("system_prompt_mode", "append")
+    sys_msg = {"mode": sys_mode, "content": prompt_text}
+
+    session_config: SessionConfig = {
+        "model": model,
+        "system_message": sys_msg,
+        "mcp_servers": mcp_servers,
+        "custom_agents": custom_agents,
+        "skill_directories": [
+            str(PROJECT_ROOT / "config" / "skills" / "pulse-signal-drafter"),
+            str(PROJECT_ROOT / "config" / "skills" / "teams-sender"),
+            str(PROJECT_ROOT / "config" / "skills" / "meeting-scheduler"),
+            str(PROJECT_ROOT / "config" / "skills" / "email-reply"),
+        ],
+        "working_directory": working_dir,
+        "streaming": True,
+        "on_permission_request": auto_approve_handler,
+        "hooks": build_hooks(mode_key),
+    }
+
+    # Excluded tools
+    excluded = mode_cfg.get("excluded_tools", [])
+    if excluded:
+        session_config["excluded_tools"] = excluded
+
+    # User input handler (for ask_user -> file-based IPC relay to TUI)
+    if mode_cfg.get("user_input_handler"):
+        from tui.ipc import make_user_input_handler_file
+        session_config["on_user_input_request"] = make_user_input_handler_file()
+
+    if tools:
+        session_config["tools"] = tools
+
+    return session_config
+
+
+@asynccontextmanager
+async def agent_session(
+    client: CopilotClient,
+    config: dict,
+    mode: str,
+    tools: list[Tool] | None = None,
+    on_delta: Callable[[str], None] | None = None,
+    log_file: str | None = None,
+):
+    """Async context manager for GHCP SDK sessions.
+
+    Yields (session, handler) tuple. Use session.send() + handler.done.wait()
+    for non-blocking sends with proper timeout control:
+
+        async with agent_session(client, config, "digest", tools=get_tools()) as (session, handler):
+            await session.send({"prompt": prompt})
+            await asyncio.wait_for(handler.done.wait(), timeout=1800)
+            response_text = handler.final_text
+
+    Handles session creation with retry, event streaming via dispatch table,
+    and cleanup automatically.
+    """
+    from core.browser import ensure_browser
+    from sdk.event_handler import EventHandler
+
+    mgr = await ensure_browser()
+    cdp_endpoint = mgr.cdp_endpoint if mgr else None
+
+    session_config = build_session_config(
+        config, mode=mode, tools=tools,
+        cdp_endpoint=cdp_endpoint,
+    )
+
+    # Retry session creation (handles transient CLI startup failures)
+    session = None
+    for attempt in range(1, MAX_SESSION_RETRIES + 1):
+        try:
+            session = await client.create_session(session_config)
+            break
+        except Exception as e:
+            if attempt == MAX_SESSION_RETRIES:
+                raise
+            log.warning(f"Session creation failed (attempt {attempt}/{MAX_SESSION_RETRIES}): {e}")
+            await asyncio.sleep(2 ** attempt)
+
+    handler = EventHandler(on_delta=on_delta, log_file=log_file)
+    unsub = session.on(handler)
+
+    try:
+        yield session, handler
+    finally:
+        if unsub:
+            try:
+                unsub()
+            except Exception:
+                pass
+        try:
+            await session.destroy()
+        except Exception:
+            log.debug("Error destroying session", exc_info=True)

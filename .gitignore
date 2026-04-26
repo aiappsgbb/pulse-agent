@@ -1,0 +1,48 @@
+.venv/
+.playwright-mcp/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+.claude/
+nul
+src/diagnose_transcript.py
+CLAUDE.md
+Contestant - GitHub Copilot SDK Enterprise Challenge.pdf
+config/standing-instructions.yaml
+
+# Data directories (appear when PULSE_HOME defaults to PROJECT_ROOT during dev)
+transcripts/
+documents/
+emails/
+digests/
+intel/
+projects/
+pulse-signals/
+jobs/
+logs/
+
+# State files
+.scheduler.json
+.digest-state.json
+.intel-state.json
+.digest-actions.json
+.pending-actions/
+.chat-state.json
+
+# Legacy (may still exist in old checkouts)
+input/
+output/
+tasks/completed/
+.mcp*
+presentations/
+
+# Build scripts (internal tooling, not shipped)
+scripts/
+docs/*.docx
+
+# One-pager and PDFs (local presentation artifacts, not shipped)
+docs/one-pager.*
+docs/pulse-agent*.pdf

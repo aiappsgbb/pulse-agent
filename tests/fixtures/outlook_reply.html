@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head><title>Outlook Reply</title></head>
+<body>
+<!-- Search box variants -->
+<div role="search">
+  <input aria-label="Search mail" id="search-input" />
+</div>
+<input id="topSearchInput" style="display:none" />
+
+<!-- Mail list with search results -->
+<div role="listbox" aria-label="Message list">
+  <div role="option" data-convid="AAQkAGNh-001" data-focusable-row="true"
+       aria-label="Unread Bob Wilson Q1 Pricing Proposal 2026-03-01">
+    Bob Wilson
+    Q1 Pricing Proposal
+    Please review the attached pricing...
+  </div>
+  <div role="listitem" class="mail-item">
+    Alice Johnson
+    Weekly Status Update
+    Here are the highlights...
+  </div>
+</div>
+
+<!-- Email reading pane (appears when email is opened) -->
+<div id="reading-pane" style="display:none">
+  <div class="email-header">
+    <span>From: Bob Wilson</span>
+    <span>Subject: Q1 Pricing Proposal</span>
+  </div>
+  <div class="email-body">Please review the attached pricing proposal.</div>
+
+  <!-- Reply buttons -->
+  <button aria-label="Reply" id="reply-btn">Reply</button>
+  <div role="menuitem" aria-label="Reply" id="reply-menuitem" style="display:none">Reply</div>
+
+  <!-- Reply compose area (appears after clicking Reply) -->
+  <div id="reply-compose-area" style="display:none">
+    <div role="textbox" aria-label="Message body, press Alt+F10 to exit" contenteditable="true" id="reply-body">
+    </div>
+    <div aria-label="Message body" contenteditable="true" id="reply-body-alt" style="display:none">
+    </div>
+
+    <!-- Send button -->
+    <button aria-label="Send" id="send-btn">Send</button>
+  </div>
+</div>
+</body>
+</html>
