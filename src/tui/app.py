@@ -72,6 +72,7 @@ from tui.screens import (
     ProjectsPane,
     ProjectStatusModal,
     QuestionModal,
+    QuitConfirmModal,
     TodayPane,
 )
 
@@ -425,6 +426,40 @@ class PulseApp(App):
         """Show keybindings help modal (?)."""
         if not any(isinstance(s, HelpModal) for s in self.screen_stack):
             self.push_screen(HelpModal())
+
+    async def action_quit(self) -> None:
+        """Override Textual's default quit to require explicit confirmation.
+
+        Logs the call so we can prove WHO is triggering quits — keyboard,
+        Ctrl+C, widget binding, accidental routing — and stops accidental
+        ``q`` from killing the daemon mid-cycle.
+        """
+        import traceback as _tb
+        try:
+            from core.logging import log
+            log.warning(
+                "TUI action_quit invoked — showing confirmation modal.\n"
+                f"Trigger stack:\n{''.join(_tb.format_stack(limit=10))}"
+            )
+        except Exception:
+            pass
+
+        if any(isinstance(s, QuitConfirmModal) for s in self.screen_stack):
+            return
+        confirmed = await self.push_screen_wait(QuitConfirmModal())
+        if confirmed:
+            try:
+                from core.logging import log
+                log.info("TUI quit confirmed by user — exiting")
+            except Exception:
+                pass
+            self.exit()
+        else:
+            try:
+                from core.logging import log
+                log.info("TUI quit cancelled — staying open")
+            except Exception:
+                pass
 
     def action_clear_chat(self) -> None:
         """Clear chat log (Ctrl+E)."""

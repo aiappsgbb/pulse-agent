@@ -717,6 +717,43 @@ class HelpModal(ModalScreen):
         self.dismiss(None)
 
 
+class QuitConfirmModal(ModalScreen[bool]):
+    """Confirm before quitting — single accidental ``q`` shouldn't kill the daemon.
+
+    The TUI binding for ``q`` used to call Textual's default ``action_quit``
+    which exits with no prompt. Several real users hit ``q`` while focused
+    elsewhere (or while typing) and lost their daemon mid-cycle. This modal
+    forces an explicit confirmation.
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "Yes"),
+        Binding("Y", "confirm", "Yes"),
+        Binding("enter", "confirm", "Yes"),
+        Binding("n", "cancel", "No"),
+        Binding("N", "cancel", "No"),
+        Binding("escape", "cancel", "No"),
+        Binding("q", "cancel", "No"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Widget(id="quit-dialog"):
+            yield Static(
+                "[bold yellow]Quit Pulse Agent?[/bold yellow]\n"
+                "\n"
+                "The daemon will stop. Background jobs in progress\n"
+                "(digest, triage, transcripts) will be cancelled.\n"
+                "\n"
+                "[dim]Y / Enter = quit    N / Esc / Q = stay[/dim]"
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class ReplyModal(ModalScreen):
     """Modal for reviewing and sending a reply draft."""
 

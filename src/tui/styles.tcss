@@ -161,6 +161,14 @@ ReplyModal, NoteModal, QuestionModal, HelpModal, ProjectStatusModal, CommitmentM
     max-height: 70%;
 }
 
+#quit-dialog {
+    background: $surface;
+    border: round $warning;
+    padding: 1 2;
+    width: 50;
+    height: auto;
+}
+
 #status-dialog, #commitment-dialog {
     background: $surface;
     border: round $primary;
