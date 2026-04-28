@@ -503,6 +503,18 @@ Skip this step if the user is running solo (no teammates on Pulse).
 
 Pulse uses OneDrive-shared folders for cross-agent messaging. Your agent drops task YAMLs into a teammate's shared folder; their agent drops answers back into yours. Only small YAML files move — nothing from `$PULSE_HOME` is ever shared.
 
+### Read this before starting
+
+The inter-agent loop is **bidirectional and symmetric**. For a single round-trip (you ask, teammate's agent answers) to work:
+
+1. **Both** users must complete Step 8 (onboarding) so `user.name` and `user.alias` in `standing-instructions.yaml` are real values, **not** the template placeholders `TODO: Your Full Name` / `todo`.
+2. **Both** users must complete the full Step 9 (share their own `jobs/` folder out, accept the teammate's shared folder in, run auto-detect to add the teammate to their `team:` list).
+3. The aliases must agree: your `user.alias` on your machine must match the `alias:` your teammate has for you under their `team:` list (and vice versa).
+
+If any of these is missing on either side, **requests will appear to deliver but replies will be silently dropped**. There is no error toast. The response YAML is logged and discarded because `_resolve_reply_dir` cannot match the sender to any team entry. The most common culprit is one teammate skipping onboarding and ending up with `from_alias: todo` in their outbound YAMLs.
+
+If you only confirm one direction works (e.g. you see the teammate's request arrive in your TUI), you have **not** verified the loop. Always test a full round-trip per Step 9.6.
+
 ### 9.1 Read the alias from config
 
 The alias was set during onboarding. Read it out of the saved config:
@@ -513,7 +525,17 @@ $alias = (Select-String -Path "$pulseHome\standing-instructions.yaml" -Pattern '
 echo "Your alias is: $alias"
 ```
 
-**Verify**: `$alias` is a non-empty lowercase slug (e.g., `artur`, `riccardo`). If empty, re-run Step 8 onboarding.
+**Verify**: `$alias` must be all of:
+- non-empty
+- a lowercase slug (e.g., `artur`, `ricchi`, `esther`)
+- **not** the literal string `todo` (the template placeholder)
+
+Also open `$pulseHome\standing-instructions.yaml` in an editor and confirm:
+- `user.name` is a real human name, **not** `TODO: Your Full Name`
+- `user.email` is a real email, **not** a placeholder
+- `user.alias` matches `$alias` above
+
+**If any of these is still a placeholder, STOP and re-run Step 8 onboarding.** Continuing with placeholder values will cause every cross-agent reply addressed to you to be silently dropped on your teammates' machines. The user will see request YAMLs appear in their inbox but never see a response come back, with no error to indicate why.
 
 ### 9.2 Create your team mailbox
 
@@ -613,17 +635,54 @@ Use forward slashes in `agent_path` — YAML doesn't need to escape them and the
 
 **Manual fallback** (if the auto-detect finds nothing, e.g. no teammates have shared yet): the user can hand-edit `standing-instructions.yaml` later, following the schema above. The alias MUST match exactly what the teammate set during their own onboarding (case-sensitive).
 
+> **Alias mismatch is a silent killer.** The receiver's worker matches an incoming request's `from_alias` (or `from`) against entries in its `team:` list to decide where to write the response. If your `team:` says `alias: ricchi` but the teammate's outbound YAMLs carry `from_alias: riccardo`, every reply addressed to them is dropped. The same is true if either side still has the template `todo` placeholder. Verify by reading any YAML file the teammate has already dropped into your `Pulse-Team\{your-alias}\jobs\completed\` folder — the `from_alias` and `from` fields in that file are the ground truth, and they must appear verbatim (case-insensitive) in your `team:` list.
+
 ### 9.6 Verify the loop
 
 After the user finishes the mutual share with at least one teammate, test it end-to-end. In the TUI's Chat tab, type:
 
 > "ask the team what context they have on [any topic]"
 
-Within ~60 seconds (30s OneDrive sync + 30s teammate's job poll), a toast should fire on the user's machine when the response lands. If nothing arrives after a few minutes:
+Within ~60 seconds (30s OneDrive sync + 30s teammate's job poll), a toast should fire on the user's machine when the response lands. The toast is the **only** confirmation that the loop closed. Request delivery on its own is not.
 
-- Check the teammate's daemon is running (`python src/pulse.py` open on their machine)
-- Check the teammate's jobs folder on your disk — if the YAML you sent is still there, their OneDrive hasn't synced yet
-- Check `logs\YYYY-MM-DD.jsonl` on the user's machine for `broadcast_to_team` errors
+#### If a request goes out but no response comes back
+
+This is the silent-failure mode and is almost always a config mismatch, not a code bug. Diagnose in this order:
+
+**1. Confirm the request reached the teammate's daemon.**
+
+On the teammate's machine, look at `Pulse-Team\{their-alias}\jobs\completed\` — your request YAML should be there once their worker has processed it. If it's still in `pending\`, their daemon isn't running or hasn't polled yet.
+
+**2. Confirm the teammate's identity is real, not a placeholder.**
+
+Open the request YAML on the teammate's machine and look at the `reply_to` field (it points at YOUR shared folder), then have them open their own `standing-instructions.yaml`. Their `user.name` must not be `TODO: Your Full Name` and their `user.alias` must not be `todo`. If either is a placeholder, their Guardian session writes responses with `from_alias: todo` and your `_resolve_reply_dir` cannot match them, so the response is dropped on your machine. **Fix:** they must complete Step 8 onboarding properly, then restart their daemon.
+
+**3. Confirm bidirectional team config.**
+
+On your machine, run a check against the YAMLs the teammate has already sent you (anything in `Pulse-Team\{your-alias}\jobs\pending\` or `\completed\`):
+
+**PowerShell**:
+```powershell
+$incoming = Get-ChildItem "$pulseTeam\$alias\jobs\completed\*.yaml", "$pulseTeam\$alias\jobs\pending\*.yaml" -ErrorAction SilentlyContinue
+foreach ($f in $incoming) {
+    $content = Get-Content $f.FullName -Raw
+    if ($content -match '(?m)^from_alias:\s*(\S+)') { $fromAlias = $Matches[1] }
+    if ($content -match '(?m)^from:\s*(.+)$') { $fromName = $Matches[1].Trim() }
+    Write-Host "Sender: $fromName / $fromAlias  (from $($f.Name))"
+}
+```
+
+Each `from_alias` and `from` must appear verbatim (case-insensitive) in your `team:` list under `standing-instructions.yaml`. If you see `from_alias: todo` in any file, that teammate has not completed onboarding — see step 2 above.
+
+Then ask the teammate to do the same check on their side against the YAMLs you sent them. **Both directions must match.**
+
+**4. Common environmental issues** (only after 1-3 above are clean):
+
+- The teammate's daemon isn't running (`python src/pulse.py` not open on their machine)
+- OneDrive sync delay — request YAML is still in your local `jobs\pending\` because OneDrive hasn't pushed it yet (hover the file in Explorer; if it shows a cloud icon, it's not synced)
+- Check `logs\YYYY-MM-DD.jsonl` on either machine for `broadcast_to_team` or `_resolve_reply_dir` errors
+
+> **What "silent failure" looks like in the logs.** When `_resolve_reply_dir` returns None, the worker writes one ERROR-level line: `Cannot resolve reply destination for agent_request (from_alias='todo', reply_to='C:\\Users\\...'). Add the sender to your team config or ensure the shared OneDrive folder is synced.` That line is your single source of truth. If you see it, the loop is broken on your machine because the sender isn't matching anyone in your `team:` list.
 
 ---
 
