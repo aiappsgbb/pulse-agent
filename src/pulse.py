@@ -355,6 +355,20 @@ async def _daemon_main_headless():
         except NotImplementedError:
             pass  # Windows
 
+    # Surface unhandled task exceptions in the structured log (see threaded
+    # variant for rationale).
+    def _asyncio_exception_handler(loop, context):
+        msg = context.get("message", "<no message>")
+        exc = context.get("exception")
+        if exc is not None:
+            log.error(
+                f"asyncio task error: {msg} ({type(exc).__name__}: {exc})",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+        else:
+            log.error(f"asyncio: {msg}")
+    loop.set_exception_handler(_asyncio_exception_handler)
+
     boot_time = datetime.now()
     job_queue = asyncio.Queue()
 
@@ -421,20 +435,67 @@ async def _daemon_main_headless():
 def _run_daemon_thread(shutdown_event: threading.Event):
     """Run the daemon's asyncio event loop in a background thread.
 
-    Redirects stdout/stderr to devnull so neither our logs nor the
-    Copilot CLI subprocess output bleed into the Textual TUI.
+    Redirects stdout to devnull so SDK / Copilot CLI chatter does not
+    bleed into the Textual TUI, but pipes stderr to a rolling crash log
+    so silent Python tracebacks survive past the next restart.
+
+    Also catches BaseException — a plain ``except Exception`` misses
+    KeyboardInterrupt, SystemExit, and asyncio.CancelledError, which is
+    exactly the family of failures responsible for the "TUI died with
+    no log line" mode that surfaced 2026-04-28.
     """
     import os
+    import traceback
+    from core.constants import LOGS_DIR
+
     devnull = open(os.devnull, "w")
+
+    # Crash log lives at PULSE_HOME/logs/daemon-stderr.log. It's append-mode,
+    # so consecutive crashes accumulate and we can compare runs.
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        stderr_log = open(LOGS_DIR / "daemon-stderr.log", "a", encoding="utf-8", buffering=1)
+    except Exception:
+        # If even the crash log can't be opened, fall back to devnull rather
+        # than crash the whole launch — that would actually defeat the purpose.
+        stderr_log = devnull
+
     sys.stdout = devnull
-    sys.stderr = devnull
+    sys.stderr = stderr_log
+
+    # Banner so consecutive crashes are distinguishable.
+    try:
+        from datetime import datetime
+        stderr_log.write(f"\n=== daemon thread start {datetime.now().isoformat()} ===\n")
+        stderr_log.flush()
+    except Exception:
+        pass
+
     try:
         asyncio.run(_daemon_main_threaded(shutdown_event))
-    except Exception as e:
-        import logging
-        logging.getLogger("pulse").error(f"Daemon thread crashed: {e}", exc_info=True)
+    except BaseException as e:
+        # Log via our structured logger so the crash also lands in
+        # logs/YYYY-MM-DD.jsonl alongside everything else.
+        try:
+            from core.logging import log
+            log.error(f"Daemon thread crashed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        except Exception:
+            pass
+        # And write to the stderr log file directly so it survives logger init failures.
+        try:
+            traceback.print_exc(file=stderr_log)
+        except Exception:
+            pass
     finally:
-        devnull.close()
+        try:
+            devnull.close()
+        except Exception:
+            pass
+        if stderr_log is not devnull:
+            try:
+                stderr_log.close()
+            except Exception:
+                pass
 
 
 async def _daemon_main_threaded(shutdown_event: threading.Event):
@@ -485,6 +546,24 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
 
     # Browser is now lazy — starts on first use, auto-stops after idle.
     # No eager start here. See core/browser.py ensure_browser().
+
+    # Surface unhandled task exceptions in the structured log instead of
+    # losing them to stderr (which the threaded mode redirects to a file
+    # but earlier was redirected to devnull). Without this, a crash inside
+    # any asyncio.create_task body — e.g. the worker, scheduler, or status
+    # writer — produced no log line at all.
+    def _asyncio_exception_handler(loop, context):
+        msg = context.get("message", "<no message>")
+        exc = context.get("exception")
+        if exc is not None:
+            log.error(
+                f"asyncio task error: {msg} ({type(exc).__name__}: {exc})",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+        else:
+            log.error(f"asyncio: {msg}")
+
+    asyncio.get_running_loop().set_exception_handler(_asyncio_exception_handler)
 
     # Bridge threading.Event → asyncio.Event
     aio_shutdown = asyncio.Event()
