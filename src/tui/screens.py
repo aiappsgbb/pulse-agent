@@ -1907,7 +1907,32 @@ class ProjectsPane(Widget):
         idx = event.list_view.index
         if idx is not None and 0 <= idx < len(self._projects):
             self._selected_idx = idx
-            self._show_detail(self._projects[idx])
+            project = self._projects[idx]
+            try:
+                self._show_detail(project)
+            except Exception as e:
+                # A malformed project YAML field used to crash the entire TUI
+                # thread silently (KeyError on slice, etc.). Now we render a
+                # clean error in the detail pane and log the traceback so the
+                # bug can be tracked without bringing the daemon down.
+                import traceback
+                from core.logging import log
+                pid = project.get("_id") or project.get("project") or "?"
+                log.error(
+                    f"ProjectsPane._show_detail crashed for project '{pid}': {e}\n"
+                    f"{traceback.format_exc()}"
+                )
+                try:
+                    detail = self.query_one("#project-detail", Static)
+                    detail.update(
+                        f"[bold red]Could not render this project[/bold red]\n\n"
+                        f"Project ID: [yellow]{pid}[/yellow]\n"
+                        f"Error: [red]{type(e).__name__}: {e}[/red]\n\n"
+                        f"[dim]Full traceback in logs/YYYY-MM-DD.jsonl. The project YAML "
+                        f"likely has a malformed field — check schema.[/dim]"
+                    )
+                except Exception:
+                    pass  # last-ditch: never let a render failure escape
 
     def get_selected_project(self) -> dict | None:
         if 0 <= self._selected_idx < len(self._projects):
@@ -2124,9 +2149,11 @@ class ProjectsPane(Widget):
                     more = f" +{len(sources) - 3} more" if len(sources) > 3 else ""
                     lines.append(f"    [dim]sources: {src_names}{more}[/dim]")
 
-        # Key dates (upcoming/critical deadlines)
-        key_dates = project.get("key_dates", [])
-        if key_dates:
+        # Key dates (upcoming/critical deadlines). Guard against schema drift
+        # where the field is a dict instead of a list — slicing a dict raises
+        # KeyError and crashes the entire daemon thread.
+        key_dates = project.get("key_dates")
+        if isinstance(key_dates, list) and key_dates:
             lines += ["", "[bold yellow]Key Dates[/bold yellow]"]
             for kd in key_dates[:5]:
                 if isinstance(kd, dict):
@@ -2158,9 +2185,10 @@ class ProjectsPane(Widget):
                     title = item.get("title", "?")[:55]
                     lines.append(f"  [{p_color}]{title}[/{p_color}]")
 
-        # Stakeholders (top 5, compact)
-        stakeholders = project.get("stakeholders", [])
-        if stakeholders:
+        # Stakeholders (top 5, compact). Same isinstance guard as key_dates —
+        # malformed fields must not crash the TUI.
+        stakeholders = project.get("stakeholders")
+        if isinstance(stakeholders, list) and stakeholders:
             lines += ["", "[bold]Stakeholders[/bold]"]
             for s in stakeholders[:5]:
                 if isinstance(s, dict):
@@ -2173,14 +2201,21 @@ class ProjectsPane(Widget):
             if len(stakeholders) > 5:
                 lines.append(f"  [dim]+{len(stakeholders) - 5} more[/dim]")
 
-        # Recent timeline (last 5 entries, no source paths)
-        timeline = project.get("timeline", [])
-        if timeline:
+        # Recent timeline. The schema canonically stores a list of {date, event}
+        # dicts, but legacy / agent-edited project files sometimes carry a flat
+        # dict like {started, next_milestone, target_close}. Render both shapes
+        # and ignore anything else so a malformed field never crashes the TUI.
+        timeline = project.get("timeline")
+        if isinstance(timeline, list) and timeline:
             recent = timeline[-5:]
             lines += ["", "[bold]Recent Activity[/bold]"]
             for t in recent:
                 if isinstance(t, dict):
                     lines.append(f"  [dim]{t.get('date', '?')}[/dim]  {t.get('event', '?')[:80]}")
+        elif isinstance(timeline, dict) and timeline:
+            lines += ["", "[bold]Timeline[/bold]"]
+            for k, v in timeline.items():
+                lines.append(f"  [dim]{k}:[/dim] {str(v)[:80]}")
 
         # Next meeting
         next_mtg = project.get("next_meeting", "")
