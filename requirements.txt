@@ -18,3 +18,8 @@ winotify>=1.1
 
 # Terminal UI — interactive dashboard
 textual==8.0.0
+
+# Subprocess tree cleanup on daemon shutdown — without this, Copilot SDK's
+# MCP child processes (workiq, playwright, etc.) leak across daemon restarts
+# on Windows because Win32 doesn't cascade signals via process groups.
+psutil>=5.9

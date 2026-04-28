@@ -393,11 +393,23 @@ async def _daemon_main_headless():
     if browser:
         await browser.stop()
 
+    # Snapshot the subprocess tree BEFORE client.stop() — once the Copilot
+    # CLI exits, its MCP grandchildren reparent and are no longer visible
+    # to psutil.children() from us. Capturing here keeps the PID list
+    # stable across the unravel.
+    from core.process_cleanup import snapshot_descendant_pids, kill_pids
+    descendant_pids = snapshot_descendant_pids()
+
     try:
         await asyncio.wait_for(client.stop(), timeout=10)
     except asyncio.TimeoutError:
         log.warning("client.stop() hung — forcing")
         await client.force_stop()
+
+    # Kill any MCP grandchildren the SDK left behind. Without this, restarts
+    # on Windows leak MCP node procs which race for the WorkIQ token cache
+    # and cause -32001 timeouts that freeze the TUI.
+    kill_pids(descendant_pids)
 
     log.info("Daemon stopped.")
 
@@ -539,11 +551,17 @@ async def _daemon_main_threaded(shutdown_event: threading.Event):
     if browser:
         await browser.stop()
 
+    # See _daemon_main_headless for the rationale: snapshot before, kill after.
+    from core.process_cleanup import snapshot_descendant_pids, kill_pids
+    descendant_pids = snapshot_descendant_pids()
+
     try:
         await asyncio.wait_for(client.stop(), timeout=10)
     except asyncio.TimeoutError:
         log.warning("client.stop() hung — forcing")
         await client.force_stop()
+
+    kill_pids(descendant_pids)
 
     log.info("Daemon stopped.")
 
