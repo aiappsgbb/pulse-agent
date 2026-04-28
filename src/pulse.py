@@ -111,16 +111,52 @@ def main():
     )
     daemon_thread.start()
 
-    # Run TUI in main thread
+    # Run TUI in main thread.
+    # Log how the TUI ended so we can tell user-initiated quit ("q"/Ctrl+C
+    # in TUI / app.exit()) from a Textual rendering crash that would
+    # otherwise vanish silently.
+    tui_exit_reason = "unknown"
+    tui_exception: BaseException | None = None
     try:
         from tui.app import PulseApp
 
         app = PulseApp()
         app.needs_onboarding = needs_onboarding
         app.run()
-    except Exception as e:
-        print(f"TUI error: {e}", file=sys.stderr)
+        # If we get here, the TUI returned normally — user pressed q,
+        # Ctrl+C inside Textual, or some action called app.exit().
+        # Capture Textual's own return_code/exception if exposed.
+        tui_exit_reason = "tui_returned_normally"
+        try:
+            ret = getattr(app, "return_code", None)
+            if ret is not None:
+                tui_exit_reason = f"tui_returned_normally (return_code={ret})"
+        except Exception:
+            pass
+    except BaseException as e:
+        tui_exception = e
+        tui_exit_reason = f"tui_raised: {type(e).__name__}: {e}"
+        # Print to stderr (cmd window) so the user sees it before ``pause``.
+        print(f"\n*** TUI crashed: {tui_exit_reason}\n", file=sys.stderr)
+        import traceback as _tb
+        _tb.print_exc(file=sys.stderr)
     finally:
+        # Log the TUI exit reason via the structured logger so it lands in
+        # logs/YYYY-MM-DD.jsonl alongside everything else. The daemon thread
+        # has its own logger; we just route through the same module.
+        try:
+            from core.logging import log as _log
+            if tui_exception is not None:
+                import traceback as _tb
+                _log.error(
+                    f"TUI exited with exception: {tui_exit_reason}\n"
+                    f"{''.join(_tb.format_exception(tui_exception))}"
+                )
+            else:
+                _log.info(f"TUI exited cleanly: {tui_exit_reason}")
+        except Exception:
+            pass
+
         # TUI exited — signal daemon to shut down
         shutdown_event.set()
         daemon_thread.join(timeout=15)
