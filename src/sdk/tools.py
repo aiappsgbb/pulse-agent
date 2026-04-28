@@ -163,6 +163,60 @@ def queue_task(params: QueueTaskParams, invocation: ToolInvocation) -> str:
 ACTIONS_FILE = PULSE_HOME / ".digest-actions.json"
 
 
+def _ensure_broadcast_landing_zone(
+    project_id: str, question: str, from_name: str
+) -> tuple[bool, str | None]:
+    """Guarantee a project YAML exists for an incoming broadcast's replies.
+
+    The broadcast tool promises "responses accrete into project X". That
+    promise only holds if the asker's worker can find ``projects/X.yaml``
+    when a teammate answers — otherwise ``_ingest_agent_response`` drops the
+    reply. We enforce the invariant here so every caller (chat, digest-writer,
+    future) is covered without relying on prompts.
+
+    Returns ``(created_new, error)``:
+      - ``(False, None)`` — project YAML already existed; no changes made.
+      - ``(True, None)``  — stub written at ``projects/{project_id}.yaml``.
+      - ``(False, msg)``  — BLOCKED; a slug-similar project already exists and
+        the caller should retry with that existing ID. ``msg`` is the text to
+        return to the LLM verbatim.
+    """
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    project_path = (PROJECTS_DIR / f"{project_id}.yaml").resolve()
+
+    # Path traversal guard — redundant with validate_project_id_format but cheap.
+    if not str(project_path).startswith(str(PROJECTS_DIR.resolve())):
+        return False, f"ERROR: Path traversal blocked — '{project_id}' resolves outside projects/"
+
+    if project_path.exists():
+        return False, None
+
+    similar = _find_similar_projects(project_id)
+    if similar:
+        similar_list = ", ".join(similar)
+        return False, (
+            f"BLOCKED: Similar project(s) already exist: {similar_list}. "
+            f"Re-issue the broadcast with the existing project_id so replies "
+            f"accrete into the real project — do NOT create a sibling stub."
+        )
+
+    now = datetime.now().isoformat()
+    summary = (question or "").strip().replace("\n", " ")[:200] or "Seeded by broadcast"
+    stub = {
+        "project": project_id.replace("-", " ").title(),
+        "status": "active",
+        "summary": summary,
+        "origin": "broadcast",
+        "origin_asker": from_name or "",
+        "created_at": now,
+        "updated_at": now,
+        "team_context": [],
+    }
+    with open(project_path, "w", encoding="utf-8") as f:
+        yaml.dump(stub, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    return True, None
+
+
 def _resolve_teammate_jobs_dir(member: dict, alias: str) -> Path | None:
     """Resolve the teammate's inbox folder to write YAMLs into.
 
@@ -413,6 +467,10 @@ def send_task_to_agent(params: SendTaskToAgentParams, invocation: ToolInvocation
         "folder. Each teammate's agent will decide (via its Guardian prompt) "
         "whether it has relevant local context and respond asynchronously. "
         "Responses accrete into the named project's team_context field. "
+        "If no project YAML exists yet for project_id, the tool seeds a minimal "
+        "stub so replies have a landing zone — you do NOT need to call "
+        "update_project first. If a slug-similar project already exists, the "
+        "tool returns BLOCKED with the existing project_id; retry with that ID. "
         "Use this (not send_task_to_agent) when the question is about a specific "
         "project and you want to reach anyone on the team who might know."
     ),
@@ -423,6 +481,12 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
     if not params.project_id.strip():
         return "ERROR: project_id is required for broadcast_to_team (responses must route back to a project)."
 
+    # Enforce the slug format here (matches update_project) so a malformed ID
+    # doesn't slip past into ensure_broadcast_landing_zone and create a file
+    # with a weird name.
+    if not re.match(r"^[a-z0-9][a-z0-9-]{0,80}$", params.project_id):
+        return "ERROR: project_id must be lowercase alphanumeric with hyphens (e.g. 'fabric-sap')"
+
     config = load_config()
     team = config.get("team", [])
     if not team:
@@ -431,6 +495,16 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
     user_cfg = config.get("user", {})
     from_name = user_cfg.get("name", "Unknown")
     from_alias = user_cfg.get("alias") or _sanitize_alias_fallback(from_name)
+
+    # Guarantee the project YAML exists so replies have somewhere to land. If
+    # the slug collides with an existing project, we bail with BLOCKED — the
+    # agent should retry against the real project_id rather than route replies
+    # into a sibling stub.
+    stub_created, landing_error = _ensure_broadcast_landing_zone(
+        params.project_id, params.question, from_name
+    )
+    if landing_error:
+        return landing_error
 
     # Sender's own inbox for responses
     my_team_dir = PULSE_TEAM_DIR / from_alias / "jobs" / "pending"
@@ -481,6 +555,8 @@ def broadcast_to_team(params: BroadcastToTeamParams, invocation: ToolInvocation)
     msg = f"Broadcasted to {len(sent)} teammate{'s' if len(sent) != 1 else ''}: {', '.join(sent) or '(none)'}"
     if skipped:
         msg += f" | Skipped (folder not accessible): {', '.join(skipped)}"
+    if stub_created:
+        msg += f" | Seeded project stub '{params.project_id}' to collect replies"
     msg += f" | Request ID: {request_id} | Responses will accrete into project '{params.project_id}'. Do NOT call this tool again for the same question."
     return msg
 

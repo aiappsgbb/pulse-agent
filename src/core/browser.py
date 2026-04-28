@@ -192,10 +192,31 @@ class BrowserManager:
         self._connected_via_cdp = False
         self._last_used: float = time.monotonic()
         self._idle_task: asyncio.Task | None = None
+        # Number of active pin_active() holders. While >0, the idle watcher
+        # treats the browser as in-use even if no new_page() calls happen.
+        # Critical for long-running consumers like the transcript collector
+        # that hold one page for minutes (clicking through 60+ meetings).
+        self._pin_count: int = 0
 
     def touch(self):
         """Update last-used timestamp — resets the idle shutdown timer."""
         self._last_used = time.monotonic()
+
+    @asynccontextmanager
+    async def pin_active(self):
+        """Hold while doing long-running work to prevent idle shutdown.
+
+        Use when a consumer reuses one page for many sequential operations
+        (no ``new_page()`` calls). The idle watcher sees ``_pin_count > 0``
+        and refreshes ``_last_used`` instead of stopping the browser.
+        """
+        self._pin_count += 1
+        self.touch()
+        try:
+            yield
+        finally:
+            self._pin_count = max(0, self._pin_count - 1)
+            self.touch()
 
     @property
     def idle_seconds(self) -> float:
@@ -303,13 +324,21 @@ class BrowserManager:
             pass  # no event loop — tests or CLI mode
 
     async def _idle_watcher(self):
-        """Background task: check every 30s if browser has been idle too long."""
+        """Background task: check every 30s if browser has been idle too long.
+
+        Holders of ``pin_active()`` keep the timer reset — important for
+        long-running, single-page consumers (transcript collector) that
+        don't call ``new_page()`` for minutes at a stretch.
+        """
         try:
             while True:
                 await asyncio.sleep(30)
                 if not self.is_alive:
                     log.debug("Idle watcher: browser already dead, exiting")
                     return
+                if self._pin_count > 0:
+                    self.touch()  # keep alive while a long task holds the browser
+                    continue
                 idle = self.idle_seconds
                 if idle >= BROWSER_IDLE_TIMEOUT:
                     log.info(f"Browser idle for {idle:.0f}s — auto-stopping to free memory")

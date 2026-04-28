@@ -35,8 +35,14 @@ else:
 # Convention: OneDrive/Documents/Pulse-Team/{alias}/ per team member.
 # Each member's jobs folder: PULSE_TEAM_DIR / alias / "jobs" / "pending"
 if _pulse_home_env:
-    # Explicit override — team dir is sibling of PULSE_HOME
-    PULSE_TEAM_DIR = PULSE_HOME.parent / "Pulse-Team"
+    # PULSE_HOME is either a sibling of Pulse-Team (normal install:
+    # Documents/Pulse + Documents/Pulse-Team) or a child of it (dev/test
+    # instances like Pulse-Team/alpha). Detect which so the shared team
+    # root isn't mis-derived as Pulse-Team/Pulse-Team.
+    if PULSE_HOME.parent.name == "Pulse-Team":
+        PULSE_TEAM_DIR = PULSE_HOME.parent
+    else:
+        PULSE_TEAM_DIR = PULSE_HOME.parent / "Pulse-Team"
 elif _onedrive_biz:
     PULSE_TEAM_DIR = Path(_onedrive_biz) / "Documents" / "Pulse-Team"
 else:
@@ -53,6 +59,11 @@ PROJECTS_DIR = PULSE_HOME / "projects"
 SIGNALS_DIR = PULSE_HOME / "pulse-signals"
 JOBS_DIR = PULSE_HOME / "jobs"
 LOGS_DIR = PULSE_HOME / "logs"
+
+# Safety net for agent_response ingests whose target project YAML has vanished
+# (e.g. project deleted between broadcast and reply). Preserves the raw job
+# YAML so nothing is silently lost — see _ingest_agent_response.
+BROADCAST_ORPHANS_DIR = PULSE_HOME / ".broadcast-orphans"
 
 # State files (dotfiles under PULSE_HOME)
 TRANSCRIPT_STATUS_FILE = PULSE_HOME / ".transcript-collection-status.json"

@@ -86,7 +86,16 @@ def test_ingest_duplicate_request_id_is_deduped(project_dir):
     assert data["team_context"][0]["answer"] == "existing"
 
 
-def test_ingest_missing_project_is_logged_not_crashed(project_dir, caplog):
+def test_ingest_missing_project_persists_orphan(project_dir, tmp_path, monkeypatch, caplog):
+    """Orphan safety net: if project YAML vanished, the raw response is saved.
+
+    Silent-drop used to swallow useful replies — e.g. an agent broadcasts with
+    a bad slug and the teammate's answer evaporates. We now persist to
+    BROADCAST_ORPHANS_DIR so the user can recover or retry by hand.
+    """
+    orphans_dir = tmp_path / "broadcast-orphans"
+    monkeypatch.setattr("daemon.worker.BROADCAST_ORPHANS_DIR", orphans_dir)
+
     job = {
         "status": "answered",
         "project_id": "nonexistent-project",
@@ -97,15 +106,23 @@ def test_ingest_missing_project_is_logged_not_crashed(project_dir, caplog):
         "sources": [],
         "created_at": "2026-04-23T10:00:00",
     }
-    # Should not raise
     _ingest_agent_response(job)
-    # No project file should be created
+
+    # Target project must not be auto-created — discovery rules still apply.
     assert not (project_dir / "nonexistent-project.yaml").exists()
-    # Verify the warning log was emitted
-    assert any(
-        "not found" in rec.message.lower() or "dropping" in rec.message.lower()
-        for rec in caplog.records
-    )
+
+    # But the reply must be preserved, not dropped.
+    orphan_files = list(orphans_dir.glob("*.yaml"))
+    assert len(orphan_files) == 1, "orphaned response must be persisted"
+    saved = yaml.safe_load(orphan_files[0].read_text())
+    assert saved["project_id"] == "nonexistent-project"
+    assert saved["request_id"] == "req-orphan"
+    assert saved["result"] == "answer"
+    assert saved.get("_dropped_reason") == "project_not_found"
+
+    # Operator-visible signal, not a silent warning buried in DEBUG.
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert any("orphan" in r.message.lower() or "nonexistent-project" in r.message for r in errors)
 
 
 def test_ingest_declined_response_is_dropped(project_dir):

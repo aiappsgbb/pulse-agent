@@ -63,24 +63,90 @@ class TestJobHistoryIPC:
             # Should return at most limit * 4 raw entries, but still capped
             assert len(events) == 10  # 10 < 3*4=12, so all fit
 
-    def test_cleanup_orphaned_jobs(self, tmp_dir):
-        """Orphaned 'running' jobs get marked as 'failed' on cleanup."""
+    def test_cleanup_skips_running_job_owned_by_live_daemon(self, tmp_dir):
+        """A running event with a LIVE pid must be left alone.
+
+        Regression: on 2026-04-28 cleanup_orphaned_jobs flipped an
+        actively-running transcripts job to 'failed' just because its status
+        was 'running'. With PID stamping, cleanup must honour live PIDs.
+        """
         with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
             from tui.ipc import append_job_event, read_job_history, cleanup_orphaned_jobs
 
-            # Simulate: j1 completed normally, j2 left running (daemon killed)
+            # j1 completed normally; j2 is genuinely running in this test process
             append_job_event("j1", "digest", "running", "Digest")
             append_job_event("j1", "digest", "completed", "Digest")
-            append_job_event("j2", "monitor", "running", "Triage")
+            append_job_event("j2", "monitor", "running", "Triage")  # stamps os.getpid()
 
             cleaned = cleanup_orphaned_jobs()
+            assert cleaned == 0  # j2's PID is the test process — alive
+
+            j2_events = [e for e in read_job_history() if e["job_id"] == "j2"]
+            assert all(e["status"] == "running" for e in j2_events), \
+                "Live-PID running job must not be marked failed"
+
+    def test_cleanup_marks_dead_pid_as_failed(self, tmp_dir):
+        """A running event whose pid is dead is the actual orphan case."""
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history, cleanup_orphaned_jobs
+
+            # Mock _pid_is_alive to simulate a dead PID for j-orphan
+            with patch("tui.ipc._pid_is_alive", side_effect=lambda pid: False):
+                append_job_event("j-orphan", "transcripts", "running", "Stale")
+                cleaned = cleanup_orphaned_jobs()
+
             assert cleaned == 1
+            events = read_job_history()
+            orphan_events = [e for e in events if e["job_id"] == "j-orphan"]
+            assert any(e["status"] == "failed" for e in orphan_events)
+            assert any("daemon restarted" in e.get("detail", "").lower() for e in orphan_events)
+
+    def test_cleanup_preserves_legacy_running_entries_without_pid(self, tmp_dir):
+        """Pre-PID-stamping entries (no 'pid' field) must NOT be flipped.
+
+        We can't verify their daemon's liveness, so the safe call is to
+        leave them as-is rather than lie. Stale entries get cleared by the
+        usual rotation/manual cleanup paths.
+        """
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import read_job_history, cleanup_orphaned_jobs
+
+            # Hand-write a legacy entry (no pid field) — simulates upgrades
+            history_file = tmp_dir / ".job-history.jsonl"
+            history_file.write_text(
+                json.dumps({
+                    "ts": datetime.now().isoformat(),
+                    "job_id": "legacy-job",
+                    "job_type": "digest",
+                    "status": "running",
+                    "detail": "Pre-PID stamping",
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            cleaned = cleanup_orphaned_jobs()
+            assert cleaned == 0
+            events = read_job_history()
+            assert events[-1]["status"] == "running"
+            assert "pid" not in events[-1]
+
+    def test_running_event_stamps_pid(self, tmp_dir):
+        """append_job_event must stamp os.getpid() into 'running' events."""
+        import os
+        with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
+            from tui.ipc import append_job_event, read_job_history
+
+            append_job_event("j1", "digest", "running", "Digest")
+            append_job_event("j2", "digest", "completed", "Done")
 
             events = read_job_history()
-            # j2 should now have a "failed" event
-            j2_events = [e for e in events if e["job_id"] == "j2"]
-            assert any(e["status"] == "failed" for e in j2_events)
-            assert any("daemon restarted" in e.get("detail", "").lower() for e in j2_events)
+            running_event = next(e for e in events if e["status"] == "running")
+            completed_event = next(e for e in events if e["status"] == "completed")
+
+            assert running_event["pid"] == os.getpid()
+            # PID is only meaningful for running — non-running events shouldn't
+            # carry stale PIDs
+            assert "pid" not in completed_event
 
     def test_cleanup_no_orphans(self, tmp_dir):
         """No orphans to clean up returns 0."""
@@ -299,19 +365,19 @@ class TestFullPipeline:
             assert "Timeout" in jobs[0]["detail"]
 
     def test_cleanup_then_consolidate(self, tmp_dir):
-        """Orphan cleanup + consolidation: daemon restart marks running → failed."""
+        """Orphan cleanup + consolidation: dead-PID running → failed."""
         with patch("tui.ipc.JOB_HISTORY_FILE", tmp_dir / ".job-history.jsonl"):
             from tui.ipc import append_job_event, read_job_history, cleanup_orphaned_jobs
             from tui.screens import _consolidate_jobs
 
-            # Simulate: daemon killed while j1 was running
-            append_job_event("j1", "digest", "running", "Digest")
+            # Simulate: a daemon died mid-job. We mock _pid_is_alive to return
+            # False so the cleanup treats this as a real orphan.
+            with patch("tui.ipc._pid_is_alive", side_effect=lambda pid: False):
+                append_job_event("j1", "digest", "running", "Digest")
+                cleaned = cleanup_orphaned_jobs()
+                assert cleaned == 1
 
-            # Daemon restarts → cleanup
-            cleaned = cleanup_orphaned_jobs()
-            assert cleaned == 1
-
-            # Now the full pipeline should show j1 as failed
+            # Full pipeline should show j1 as failed
             events = read_job_history()
             jobs = _consolidate_jobs(events)
 

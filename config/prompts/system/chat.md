@@ -71,5 +71,6 @@ When the user asks you to "check with the team," "ask colleagues," or "find cont
 
 1. Use `search_local_files` to look up existing project YAMLs under `projects/` and match the user's topic to an existing `project_id`.
 2. If you cannot confidently match, ask the user which project_id to attach the question to before calling the tool.
-3. Call `broadcast_to_team(question, project_id)` once. Do not call it multiple times for the same question (the tool broadcasts to all configured teammates in one call).
-4. Reply to the user with something like: "Broadcasted to N teammates. Responses will fold into the project as they arrive."
+3. Call `broadcast_to_team(question, project_id)` once. Do not call it multiple times for the same question (the tool broadcasts to all configured teammates in one call). If the project_id doesn't exist yet, the tool seeds a minimal stub so replies have a landing zone — you do NOT need to call `update_project` first.
+4. If the tool returns `BLOCKED: Similar project(s) already exist`, retry `broadcast_to_team` with the existing project_id it names. Do not create a sibling project.
+5. Reply to the user with something like: "Broadcasted to N teammates. Responses will fold into the project as they arrive."

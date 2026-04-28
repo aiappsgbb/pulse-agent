@@ -127,19 +127,21 @@ if ($needsPathRefresh) {
 }
 
 # -- 5. Install WorkIQ MCP server (npm) ------------------------------------
-Write-Step "Installing WorkIQ MCP server..."
+# Pinned to 0.2.8: 0.4.x has a Windows WAM broker bug that breaks every MCP
+# stdio caller. See microsoft/work-iq#87 and src/sdk/agents.py:workiq_mcp_config.
+Write-Step "Installing WorkIQ MCP server (pinned to 0.2.8)..."
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if ($npm) {
-    & npm install -g @microsoft/workiq --silent 2>&1 | Out-Null
+    & npm install -g '@microsoft/workiq@0.2.8' --silent 2>&1 | Out-Null
     $workiq = Get-Command workiq -ErrorAction SilentlyContinue
     if ($workiq) {
-        Write-Ok "WorkIQ installed (npm global)"
+        Write-Ok "WorkIQ 0.2.8 installed (npm global)"
     } else {
         # npm global bin might not be on PATH yet
         Refresh-Path
         $workiq = Get-Command workiq -ErrorAction SilentlyContinue
         if ($workiq) {
-            Write-Ok "WorkIQ installed (npm global)"
+            Write-Ok "WorkIQ 0.2.8 installed (npm global)"
         } else {
             Write-Warn "WorkIQ installed but 'workiq' not found on PATH - you may need to restart your terminal"
         }

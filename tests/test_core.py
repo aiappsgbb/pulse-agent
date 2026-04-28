@@ -33,6 +33,30 @@ def test_path_relationships():
     assert JOBS_DIR == PULSE_HOME / "jobs"
 
 
+def test_pulse_team_dir_resolution(monkeypatch):
+    """PULSE_TEAM_DIR must resolve correctly for both sibling and nested layouts.
+
+    Normal install: PULSE_HOME = Documents/Pulse, team lives at Documents/Pulse-Team
+    Dev/test instance: PULSE_HOME = Pulse-Team/alpha, team lives at Pulse-Team
+    """
+    import importlib
+    import core.constants as cmod
+
+    # Sibling layout (normal user install)
+    monkeypatch.setenv("PULSE_HOME", "C:/tmp/Documents/Pulse")
+    importlib.reload(cmod)
+    assert cmod.PULSE_TEAM_DIR == Path("C:/tmp/Documents/Pulse-Team")
+
+    # Nested layout (alpha/beta test instances inside Pulse-Team)
+    monkeypatch.setenv("PULSE_HOME", "C:/tmp/Documents/Pulse-Team/alpha")
+    importlib.reload(cmod)
+    assert cmod.PULSE_TEAM_DIR == Path("C:/tmp/Documents/Pulse-Team")
+
+    # Restore module state so later tests see the original PULSE_HOME
+    monkeypatch.delenv("PULSE_HOME", raising=False)
+    importlib.reload(cmod)
+
+
 # --- core/state ---
 
 def test_load_missing_file_returns_default():

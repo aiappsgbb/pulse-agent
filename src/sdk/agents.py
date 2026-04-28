@@ -36,11 +36,17 @@ def parse_front_matter(path: Path) -> tuple[dict, str]:
 
 
 def workiq_mcp_config(config: dict = None, cdp_endpoint: str | None = None) -> MCPLocalServerConfig:
-    """Standard WorkIQ MCP config — reused across agents."""
+    """Standard WorkIQ MCP config, reused across agents.
+
+    Pinned to 0.2.8 via npx. WorkIQ 0.4.x initializes the Windows WAM broker
+    before consulting the cached token, which fails for non-windowed callers
+    (MCP stdio children) with "A window handle must be configured". 0.2.8 uses
+    browser device-code auth and works fine. See microsoft/work-iq#87.
+    """
     return MCPLocalServerConfig(
         type="local",
-        command="workiq",
-        args=["mcp"],
+        command="npx",
+        args=["-y", "-p", "@microsoft/workiq@0.2.8", "workiq", "mcp"],
         tools=["*"],
         timeout=60000,
     )

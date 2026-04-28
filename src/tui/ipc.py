@@ -525,6 +525,12 @@ def append_job_event(
 
     Status values: queued, running, completed, failed.
     Rotates the file when it exceeds _JOB_HISTORY_MAX_LINES.
+
+    For status="running", stamps the daemon PID so cleanup_orphaned_jobs can
+    distinguish a still-running job from one orphaned by a dead daemon.
+    Without this, every Pulse restart would mark in-flight jobs as failed
+    (see incident on 2026-04-28: transcripts job marked failed at 09:28:41
+    while it was actively saving transcripts in the same daemon).
     """
     try:
         entry = {
@@ -534,6 +540,8 @@ def append_job_event(
             "status": status,
             "detail": detail,
         }
+        if status == "running":
+            entry["pid"] = os.getpid()
         if log_file:
             entry["log_file"] = log_file
         with JOB_HISTORY_FILE.open("a", encoding="utf-8") as f:
@@ -543,6 +551,30 @@ def append_job_event(
         _maybe_rotate_job_history()
     except Exception:
         pass
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Check whether a process with the given PID is currently running.
+
+    Cross-platform via os.kill(pid, 0):
+    - Returns silently if the process exists.
+    - Raises ProcessLookupError if it doesn't.
+    - May raise PermissionError on Windows for processes owned by other
+      users — treat that as 'alive' (we can see the PID exists).
+    """
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it (other user / different session)
+        return True
+    except OSError:
+        # Windows raises OSError(WinError 87) for invalid PIDs.
+        return False
 
 
 def _maybe_rotate_job_history() -> None:
@@ -585,10 +617,19 @@ def read_job_history(limit: int = 200) -> list[dict]:
 
 
 def cleanup_orphaned_jobs() -> int:
-    """Mark any 'running' jobs as 'failed' if they have no terminal event.
+    """Mark 'running' jobs as 'failed' ONLY when the daemon that started
+    them is no longer alive.
 
-    Called on daemon startup to clean up jobs that were running when the
-    previous daemon instance was killed. Returns the number of jobs cleaned up.
+    Called on daemon startup. Without the PID check, every Pulse restart
+    or concurrent instance would flip in-flight jobs to failed (the job
+    history file is OneDrive-synced and shared across instances).
+
+    A running event keeps its 'running' status if:
+    - The recorded PID is alive (real process still works the job), OR
+    - The event has no PID field (legacy entry, can't tell — preserve it
+      to avoid spurious failures).
+
+    Returns the number of jobs flipped to failed.
     """
     try:
         if not JOB_HISTORY_FILE.exists():
@@ -602,7 +643,7 @@ def cleanup_orphaned_jobs() -> int:
             except json.JSONDecodeError:
                 pass
 
-        # Find jobs whose latest status is "running" — they're orphaned
+        # Last event per job_id wins (chronological order).
         latest_status: dict[str, dict] = {}
         for e in entries:
             jid = e.get("job_id", "")
@@ -611,15 +652,26 @@ def cleanup_orphaned_jobs() -> int:
 
         cleaned = 0
         for jid, event in latest_status.items():
-            if event.get("status") == "running":
-                append_job_event(
-                    jid,
-                    event.get("job_type", "unknown"),
-                    "failed",
-                    "Daemon restarted — job interrupted",
-                    log_file=event.get("log_file", ""),
-                )
-                cleaned += 1
+            if event.get("status") != "running":
+                continue
+
+            pid = event.get("pid")
+            if pid is None:
+                # Legacy entry pre-PID-stamping. Can't verify liveness,
+                # so be conservative and preserve — better than lying.
+                continue
+            if _pid_is_alive(int(pid)):
+                # Still-running daemon owns this job — leave it alone.
+                continue
+
+            append_job_event(
+                jid,
+                event.get("job_type", "unknown"),
+                "failed",
+                "Daemon restarted — job interrupted",
+                log_file=event.get("log_file", ""),
+            )
+            cleaned += 1
 
         return cleaned
     except Exception:

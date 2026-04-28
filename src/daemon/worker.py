@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR, PROJECTS_DIR
+from core.constants import PULSE_HOME, JOBS_DIR, LOGS_DIR, PROJECTS_DIR, BROADCAST_ORPHANS_DIR
 from core.config import mark_task_completed
 from core.logging import log
 from core.notify import notify_desktop, build_toast_summary
@@ -972,14 +972,46 @@ def _write_guardian_response(config: dict, original_job: dict, parsed: dict) -> 
     log.info(f"  Guardian response written: status={parsed.get('status')} to {response_file}")
 
 
+def _persist_orphan_response(job: dict, reason: str) -> None:
+    """Save a response whose target project can't be resolved.
+
+    Called from _ingest_agent_response when the project YAML is missing. We
+    don't auto-create the project (discovery rules still apply) but we must
+    not silently discard the reply — teammates spent real cycles answering it.
+    """
+    try:
+        BROADCAST_ORPHANS_DIR.mkdir(parents=True, exist_ok=True)
+        request_id = str(job.get("request_id", "")) or f"noreq-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+        # Sanitize: keep UUIDs and timestamps, drop anything else filesystem-hostile.
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", request_id)[:64] or "orphan"
+        orphan_path = BROADCAST_ORPHANS_DIR / f"{safe_id}.yaml"
+        payload = dict(job)
+        payload["_dropped_reason"] = reason
+        payload["_persisted_at"] = datetime.now().isoformat()
+        with open(orphan_path, "w", encoding="utf-8") as f:
+            yaml.dump(payload, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        log.error(
+            f"  Ingest: orphaned response for project '{job.get('project_id', '?')}' "
+            f"(req={safe_id[:8]}, reason={reason}) preserved at {orphan_path}"
+        )
+    except Exception as e:
+        # Last-ditch log — we tried to preserve and failed. Don't crash the worker.
+        log.error(
+            f"  Ingest: FAILED to persist orphaned response for project "
+            f"'{job.get('project_id', '?')}': {e}"
+        )
+
+
 def _ingest_agent_response(job: dict) -> None:
     """Fold an agent_response into its target project YAML's team_context[].
 
     Silent skip on:
       - status != "answered" (no_context / declined)
       - missing project_id
-      - missing project YAML
       - duplicate request_id (already ingested)
+
+    Missing project YAML is NOT silently skipped — the response is persisted
+    to BROADCAST_ORPHANS_DIR so teammate contributions are never lost.
 
     Atomic write: writes to a temp path and renames.
     """
@@ -995,7 +1027,10 @@ def _ingest_agent_response(job: dict) -> None:
 
     project_path = PROJECTS_DIR / f"{project_id}.yaml"
     if not project_path.exists():
-        log.warning(f"  Ingest: project '{project_id}' not found, dropping response")
+        # Safety net: broadcast_to_team now seeds stubs up front, but a response
+        # can still arrive for a project that was deleted mid-flight or for an
+        # ID that bypassed the tool. Persist the raw job so the reply isn't lost.
+        _persist_orphan_response(job, reason="project_not_found")
         return
 
     try:

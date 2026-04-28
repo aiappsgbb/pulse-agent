@@ -35,6 +35,7 @@ from collectors.transcripts.navigation import (
 from collectors.transcripts.collector import (
     _load_attempted_slugs,
     _mark_attempted,
+    _mark_no_recap,
     _slugify,
     TRANSCRIPT_STATE_FILE,
     ATTEMPT_TTL_DAYS,
@@ -1183,3 +1184,274 @@ class TestCollectorIntegration:
         # But this means permanent-no-transcript meetings get rechecked.
         # This is acceptable — the extra check takes ~8 seconds per meeting.
         assert slug_2 not in loaded
+
+
+# ===========================================================================
+# No-recap memoization — durable skip for popups with no recap button
+# ===========================================================================
+
+class TestNoRecapMemoization:
+    """Tests for the no_recap state map and memoization across runs.
+
+    Without memoization, every digest/knowledge run re-polls the same dead
+    meetings for ~15s each — the bug that caused the 30-min timeout.
+    """
+
+    def test_mark_no_recap_persists_to_state_file(self, tmp_path):
+        state_file = tmp_path / ".transcript-state.json"
+        state_file.write_text(json.dumps({"attempted": {}, "no_recap": {}}), encoding="utf-8")
+
+        with patch("collectors.transcripts.collector.TRANSCRIPT_STATE_FILE", state_file):
+            _mark_no_recap("dead-meeting-1")
+            _mark_no_recap("dead-meeting-2")
+
+        saved = json.loads(state_file.read_text())
+        assert "dead-meeting-1" in saved["no_recap"]
+        assert "dead-meeting-2" in saved["no_recap"]
+        # attempted should remain empty
+        assert saved["attempted"] == {}
+
+    def test_no_recap_slugs_returned_in_skip_set(self, tmp_path):
+        """_load_attempted_slugs returns union of attempted + no_recap."""
+        state_file = tmp_path / ".transcript-state.json"
+        fresh_ts = datetime.now().isoformat()
+        state = {
+            "attempted": {"saved-meeting": fresh_ts},
+            "no_recap": {"no-recap-meeting": fresh_ts},
+        }
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+        output_dir = tmp_path / "transcripts"
+        output_dir.mkdir()
+        (output_dir / "2026-04-27_saved-meeting.txt").write_text("x", encoding="utf-8")
+
+        with patch("collectors.transcripts.collector.TRANSCRIPT_STATE_FILE", state_file):
+            loaded = _load_attempted_slugs(output_dir)
+
+        assert "saved-meeting" in loaded
+        assert "no-recap-meeting" in loaded
+
+    def test_no_recap_entries_not_orphan_pruned(self, tmp_path):
+        """no_recap slugs MUST survive orphan pruning even with no transcript file.
+
+        This is the core of the memoization fix — the original orphan pruning
+        treated 'no file' as 'must retry,' which made memoization impossible.
+        """
+        state_file = tmp_path / ".transcript-state.json"
+        fresh_ts = datetime.now().isoformat()
+        state = {
+            "attempted": {},
+            "no_recap": {
+                "dead-meeting-a": fresh_ts,
+                "dead-meeting-b": fresh_ts,
+            },
+        }
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+        output_dir = tmp_path / "transcripts"
+        output_dir.mkdir()  # empty — no transcript files
+
+        with patch("collectors.transcripts.collector.TRANSCRIPT_STATE_FILE", state_file):
+            loaded = _load_attempted_slugs(output_dir)
+
+        # Both no_recap entries survive even though there's no transcript file
+        assert "dead-meeting-a" in loaded
+        assert "dead-meeting-b" in loaded
+
+    def test_no_recap_ttl_pruning(self, tmp_path):
+        """Expired no_recap entries are pruned after ATTEMPT_TTL_DAYS."""
+        state_file = tmp_path / ".transcript-state.json"
+        old_ts = (datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS + 1)).isoformat()
+        fresh_ts = datetime.now().isoformat()
+        state = {
+            "attempted": {},
+            "no_recap": {"old-dead": old_ts, "fresh-dead": fresh_ts},
+        }
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+        with patch("collectors.transcripts.collector.TRANSCRIPT_STATE_FILE", state_file):
+            loaded = _load_attempted_slugs(None)
+
+        assert "old-dead" not in loaded
+        assert "fresh-dead" in loaded
+
+    def test_legacy_state_format_loads_without_no_recap(self, tmp_path):
+        """Old state files with only `attempted` (no `no_recap`) still load."""
+        state_file = tmp_path / ".transcript-state.json"
+        fresh_ts = datetime.now().isoformat()
+        state = {"attempted": {"legacy-meeting": fresh_ts}}  # no `no_recap` key
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+        with patch("collectors.transcripts.collector.TRANSCRIPT_STATE_FILE", state_file):
+            loaded = _load_attempted_slugs(None)
+
+        assert "legacy-meeting" in loaded
+
+
+class TestDiscoveryReportsNoRecapSlugs:
+    """Discovery must return the slugs of meetings with no recap so the
+    caller can memoize them. Without this, memoization is impossible."""
+
+    def _make_discovery_page(self, meeting_names: list[str]):
+        page = _make_mock_page()
+        page.evaluate = AsyncMock(return_value=meeting_names)
+        click_loc = MagicMock()
+        click_loc.click = AsyncMock()
+        page.get_by_role = MagicMock(return_value=click_loc)
+        return page
+
+    async def test_no_recap_slugs_populated_when_recap_missing(self):
+        """When a popup loads with no recap button, its slug must be in no_recap_slugs."""
+        page = self._make_discovery_page([
+            "Dead Meeting A 9:00 AM to 10:00 AM Wednesday",
+            "Dead Meeting B 11:00 AM to 12:00 PM Thursday",
+        ])
+
+        with patch("collectors.transcripts.navigation._find_recap_element",
+                    new_callable=AsyncMock, return_value=None), \
+             patch("collectors.transcripts.navigation._log_popup_diagnostics",
+                    new_callable=AsyncMock), \
+             patch("collectors.transcripts.navigation._nav_diag",
+                    new_callable=AsyncMock):
+
+            results = await discover_meetings_with_recaps(page, set(), _slugify)
+
+        assert results.skipped_no_recap == 2
+        assert len(results.no_recap_slugs) == 2
+        # Slugs should match _slugify output of each name
+        assert _slugify("Dead Meeting A 9:00 AM to 10:00 AM Wednesday") in results.no_recap_slugs
+        assert _slugify("Dead Meeting B 11:00 AM to 12:00 PM Thursday") in results.no_recap_slugs
+
+    async def test_no_recap_slugs_empty_when_recap_found(self):
+        """Meetings whose popup yielded a recap button must NOT appear in
+        no_recap_slugs — regardless of whether URL extraction later succeeded.
+        Memoization is for the discovery-phase decision, not the URL stage."""
+        page = self._make_discovery_page([
+            "Recorded Meeting 10:00 AM to 11:00 AM Friday",
+        ])
+
+        recap_btn = MagicMock()
+        recap_btn.click = AsyncMock()
+
+        # Simulate launcher tab failing to open — recap WAS found, but URL
+        # extraction fails. no_recap_slugs should still be empty because the
+        # popup did surface a recap button.
+        page.context.expect_page = MagicMock(side_effect=Exception("no new tab"))
+
+        with patch("collectors.transcripts.navigation._find_recap_element",
+                    new_callable=AsyncMock, return_value=recap_btn), \
+             patch("collectors.transcripts.navigation._log_popup_diagnostics",
+                    new_callable=AsyncMock), \
+             patch("collectors.transcripts.navigation._nav_diag",
+                    new_callable=AsyncMock):
+
+            results = await discover_meetings_with_recaps(page, set(), _slugify)
+
+        assert results.skipped_no_recap == 0
+        assert results.no_recap_slugs == []
+
+    async def test_skipped_slugs_not_in_no_recap_list(self):
+        """Slugs that were skipped via skip_slugs should not appear in no_recap_slugs."""
+        page = self._make_discovery_page([
+            "Already Tried Meeting 1:00 PM to 2:00 PM Monday",
+        ])
+
+        skip = {_slugify("Already Tried Meeting 1:00 PM to 2:00 PM Monday")}
+
+        with patch("collectors.transcripts.navigation._find_recap_element",
+                    new_callable=AsyncMock, return_value=None), \
+             patch("collectors.transcripts.navigation._log_popup_diagnostics",
+                    new_callable=AsyncMock), \
+             patch("collectors.transcripts.navigation._nav_diag",
+                    new_callable=AsyncMock):
+
+            results = await discover_meetings_with_recaps(page, skip, _slugify)
+
+        # Already-attempted: counted but not added to no_recap_slugs
+        assert results.skipped_already_attempted == 1
+        assert results.no_recap_slugs == []
+
+    async def test_on_no_recap_callback_fires_inline_per_meeting(self):
+        """Each no-recap miss invokes on_no_recap BEFORE moving to the next meeting.
+
+        Regression test for: when discovery times out mid-week, the no-recap
+        memo for already-clicked meetings must be persisted so the next run
+        can skip them. Persisting only at function return loses everything
+        on a timeout cancel.
+        """
+        page = self._make_discovery_page([
+            "Meeting A 9:00 AM to 9:30 AM Monday",
+            "Meeting B 10:00 AM to 10:30 AM Monday",
+            "Meeting C 11:00 AM to 11:30 AM Monday",
+        ])
+
+        # All meetings have no recap.
+        memoized: list[str] = []
+
+        async def on_no_recap(slug: str):
+            memoized.append(slug)
+
+        with patch("collectors.transcripts.navigation._find_recap_element",
+                    new_callable=AsyncMock, return_value=None), \
+             patch("collectors.transcripts.navigation._log_popup_diagnostics",
+                    new_callable=AsyncMock), \
+             patch("collectors.transcripts.navigation._nav_diag",
+                    new_callable=AsyncMock):
+
+            results = await discover_meetings_with_recaps(
+                page, set(), _slugify, on_no_recap=on_no_recap,
+            )
+
+        assert len(memoized) == 3
+        # Order matters: callback fires per-meeting, not at return
+        assert memoized == results.no_recap_slugs
+
+    async def test_on_meeting_found_callback_fires_inline_per_meeting(self):
+        """Each found-recap meeting invokes on_meeting_found BEFORE the next click.
+
+        Interleaving extraction with discovery means partial progress survives
+        crashes — every saved transcript is durable on disk before we walk
+        to the next event. Without this, a discovery-phase timeout discards
+        all the work.
+        """
+        page = self._make_discovery_page([
+            "Recorded A 9:00 AM to 9:30 AM Monday",
+            "Recorded B 10:00 AM to 10:30 AM Monday",
+        ])
+
+        recap_btn = AsyncMock()
+        recap_btn.click = AsyncMock()
+
+        # Pretend the recap click navigates the SAME tab (no new tab) — that
+        # path is fully synchronous in the test harness and uses page.evaluate
+        # + _pick_stream_url which we patch to a real-looking URL.
+        page.context.expect_page = MagicMock(side_effect=Exception("no new tab"))
+        page.url = "https://teams.microsoft.com/launcher?foo=bar"
+        page.goto = AsyncMock()
+        # Production path on same-tab fallback calls page.evaluate to extract
+        # launcher params, then _pick_stream_url to choose the URL.
+        page.evaluate = AsyncMock(side_effect=[
+            ["Recorded A 9:00 AM to 9:30 AM Monday", "Recorded B 10:00 AM to 10:30 AM Monday"],
+            {"objectUrl": "https://microsoft.sharepoint.com/recorded-a"},
+            {"objectUrl": "https://microsoft.sharepoint.com/recorded-b"},
+        ])
+
+        extracted: list[str] = []
+
+        async def on_meeting_found(meeting):
+            extracted.append(meeting.slug)
+
+        with patch("collectors.transcripts.navigation._find_recap_element",
+                    new_callable=AsyncMock, return_value=recap_btn), \
+             patch("collectors.transcripts.navigation._log_popup_diagnostics",
+                    new_callable=AsyncMock), \
+             patch("collectors.transcripts.navigation._nav_diag",
+                    new_callable=AsyncMock):
+
+            results = await discover_meetings_with_recaps(
+                page, set(), _slugify, on_meeting_found=on_meeting_found,
+            )
+
+        assert len(extracted) == 2, f"callback should have fired twice, got {extracted}"
+        # Both meetings produced URLs and triggered the callback in order
+        assert extracted == [m.slug for m in results.meetings]

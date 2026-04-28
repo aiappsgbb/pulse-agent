@@ -734,20 +734,24 @@ class TestLargeDataHandling:
         assert len(result) > 0
 
     def test_cleanup_orphaned_jobs(self, tmp_path):
-        """cleanup_orphaned_jobs marks running jobs as failed."""
+        """cleanup_orphaned_jobs marks dead-PID running jobs as failed.
+
+        Live-PID running jobs are preserved (regression for 2026-04-28
+        incident where an in-flight transcripts job was incorrectly flipped
+        to failed by a startup cleanup pass).
+        """
         from tui.ipc import cleanup_orphaned_jobs, append_job_event
 
         history_file = tmp_path / ".job-history.jsonl"
-        # Write a job that's "running" — simulates daemon crash
-        with patch("tui.ipc.JOB_HISTORY_FILE", history_file):
+        # Simulate a daemon crash — the PID stamped on the running event no
+        # longer corresponds to a live process.
+        with patch("tui.ipc.JOB_HISTORY_FILE", history_file), \
+             patch("tui.ipc._pid_is_alive", side_effect=lambda pid: False):
             append_job_event("orphan-1", "digest", "running", "Started")
-
-        with patch("tui.ipc.JOB_HISTORY_FILE", history_file):
             cleaned = cleanup_orphaned_jobs()
 
         assert cleaned == 1
 
-        # Verify a "failed" event was appended
         with patch("tui.ipc.JOB_HISTORY_FILE", history_file):
             from tui.ipc import read_job_history
             events = read_job_history()

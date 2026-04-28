@@ -104,7 +104,8 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 playwright install msedge
-npm install -g @microsoft/workiq
+npm install -g @microsoft/workiq@0.2.8
+npx -y -p @microsoft/workiq@0.2.8 workiq accept-eula
 python src/pulse.py --health-check
 python src/pulse.py
 ```
@@ -253,12 +254,6 @@ Multiple team members run their own Pulse Agent daemons. Agents communicate auto
 team:
   - name: "Esther Barthel"
     alias: "esther"
-<<<<<<< HEAD
-  - name: "Fatos Ismali"
-    alias: "fatos"
-```
-
-=======
     agent_path: "C:/Users/USERNAME/OneDrive - Microsoft/Esther Barthel's files - esther"
   - name: "Fatos Ismali"
     alias: "fatos"
@@ -269,7 +264,6 @@ team:
 >
 > **Auto-detect on install/upgrade:** You don't have to hand-write these entries. SETUP.md Step 9.5 instructs your install/upgrade agent (Copilot CLI, Claude Code, etc.) to scan your OneDrive root for `{Name}'s files - {alias}/jobs/` shortcuts and offer to add them to your `team:` list. Re-run whenever a new teammate shares their folder with you.
 
->>>>>>> push-to-public
 **From chat:** *"Ask Esther what context she has on the Vodafone deal"* -- Pulse writes a task YAML to Esther's OneDrive folder. Her agent picks it up, searches her transcripts and project memory, and sends the answer back. You get a toast notification with the result.
 
 **Supported task types:** questions (instant chat query), research (deep 60-min investigation), intel (competitive brief), review (document/proposal feedback).
@@ -345,7 +339,7 @@ python -m pytest tests/ -k "reply"  # Filter by name
 | Config not found | Run `python src/pulse.py` -- first-run onboarding creates it |
 | Copilot SDK won't connect | Run `github-copilot-cli auth` to authenticate |
 | Transcript collection fails | Open Edge, sign into `teams.microsoft.com`, then retry |
-| WorkIQ returns nothing | Accept the WorkIQ EULA first via the MCP tool |
+| WorkIQ returns `{"error":"An error occurred while processing your request."}` for every call | WorkIQ 0.4.x has a Windows broker auth bug ([microsoft/work-iq#87](https://github.com/microsoft/work-iq/issues/87)) that breaks all MCP stdio callers. Pin to 0.2.8: `npm install -g @microsoft/workiq@0.2.8`, then `npx -y -p @microsoft/workiq@0.2.8 workiq accept-eula` and `npx -y -p @microsoft/workiq@0.2.8 workiq ask -q "ping"` once interactively to seed the token cache. Pulse already pins to 0.2.8 in its MCP config. |
 | Encoding errors on Windows | Ensure Python 3.12+ and UTF-8 terminal |
 
 ---

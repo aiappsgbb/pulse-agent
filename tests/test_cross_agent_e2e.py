@@ -41,13 +41,18 @@ async def test_full_loop_broadcast_guardian_ingest(tmp_path, monkeypatch):
     }
 
     # --- Step 1: Broadcast from artur ---
+    # PROJECTS_DIR is patched so the tool's landing-zone check sees only the
+    # test's fabric-sap.yaml, not real projects on the dev machine (which
+    # would otherwise trigger _find_similar_projects and BLOCK the broadcast).
     with patch("core.config.load_config", return_value=sender_config), \
-         patch("sdk.tools.PULSE_TEAM_DIR", team_dir):
+         patch("sdk.tools.PULSE_TEAM_DIR", team_dir), \
+         patch("sdk.tools.PROJECTS_DIR", artur_projects):
         result = await broadcast_to_team.handler({"arguments": {
             "question": "Prior Fabric-on-SAP objections?",
             "project_id": "fabric-sap",
         }})
     assert result["resultType"] == "success"
+    assert "BLOCKED" not in result["textResultForLlm"], result["textResultForLlm"]
 
     # Verify teammate got the YAML
     beta_pending = team_dir / "beta" / "jobs" / "pending"

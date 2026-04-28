@@ -341,7 +341,7 @@ def run_health_check(config: dict | None = None) -> list[HealthCheck]:
     checks.append(HealthCheck(
         "WorkIQ MCP server", found is not None,
         "found" if found else "not found (optional)",
-        "npm install -g @microsoft/workiq",
+        "npm install -g @microsoft/workiq@0.2.8  # 0.4.x has a Windows broker bug, see microsoft/work-iq#87",
     ))
 
     # MSX-MCP (optional — MSX/Dataverse/CRM tools)

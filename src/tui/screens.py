@@ -2476,6 +2476,7 @@ class ChatPane(Widget):
         self._response_buf = ""
         self._response_started = False
         self._wait_ticks = 0
+        self._processing_shown = False
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="chat-log", wrap=True, markup=True, highlight=False)
@@ -2515,6 +2516,7 @@ class ChatPane(Widget):
         self._response_buf = ""
         self._response_started = False
         self._wait_ticks = 0
+        self._processing_shown = False
         self._streaming = True  # Must be set BEFORE send_chat_request
 
         # Clear stale stream BEFORE sending so we never read old responses
@@ -2568,8 +2570,9 @@ class ChatPane(Widget):
                 chat_log.write(safe_line)
         elif not is_done:
             self._wait_ticks += 1
-            if self._wait_ticks == 12:
-                chat_log.write("[dim]Processing... (start daemon if stuck)[/dim]")
+            if self._wait_ticks == 12 and not self._processing_shown:
+                chat_log.write("[dim]Working...[/dim]")
+                self._processing_shown = True
             elif self._wait_ticks >= 600:  # 10 min timeout
                 chat_log.write("[dim red]Request timed out — is the daemon running?[/dim red]")
                 chat_log.write("")

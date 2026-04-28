@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from collectors.transcripts.navigation import (
     navigate_weeks_back,
     discover_meetings_with_recaps,
     DiscoveryResult,
+    MeetingInfo,
 )
 from collectors.transcripts.extraction import (
     extract_transcript_from_sharepoint,
@@ -48,29 +50,46 @@ TRANSCRIPT_STATE_FILE = PULSE_HOME / ".transcript-state.json"
 ATTEMPT_TTL_DAYS = 14  # retry after 14 days in case transcript appears later
 
 
-def _load_attempted_slugs(output_dir: Path | None = None) -> dict[str, str]:
-    """Load attempted slugs from state file, pruning expired and orphaned entries.
-
-    Prunes:
-    - Entries older than ATTEMPT_TTL_DAYS
-    - Entries with no corresponding transcript file (failed extractions from
-      before the False/None distinction was added — these should be retried)
-    """
-    state = load_json_state(TRANSCRIPT_STATE_FILE, {"attempted": {}})
-    attempted = state.get("attempted", {})
+def _load_state() -> dict:
+    """Load the raw state dict, prune expired entries from both maps."""
+    state = load_json_state(TRANSCRIPT_STATE_FILE, {"attempted": {}, "no_recap": {}})
     cutoff_dt = datetime.now() - timedelta(days=ATTEMPT_TTL_DAYS)
-    # Prune expired entries (parse timestamps properly to handle timezone offsets)
-    pruned = {}
-    for slug, ts in attempted.items():
-        try:
-            if datetime.fromisoformat(ts) > cutoff_dt:
-                pruned[slug] = ts
-        except (ValueError, TypeError):
-            pass  # drop unparseable entries
 
-    # Also prune attempted slugs that have no transcript file — these were
-    # extraction failures that should be retried now that we distinguish
-    # permanent (False) from transient (None) failures.
+    def _prune_ttl(m: dict) -> dict:
+        kept = {}
+        for slug, ts in m.items():
+            try:
+                if datetime.fromisoformat(ts) > cutoff_dt:
+                    kept[slug] = ts
+            except (ValueError, TypeError):
+                pass
+        return kept
+
+    state["attempted"] = _prune_ttl(state.get("attempted", {}))
+    state["no_recap"] = _prune_ttl(state.get("no_recap", {}))
+    return state
+
+
+def _save_state(state: dict):
+    save_json_state(TRANSCRIPT_STATE_FILE, state)
+
+
+def _load_attempted_slugs(output_dir: Path | None = None) -> dict[str, str]:
+    """Load attempted slugs from state, pruning expired entries and orphans.
+
+    Returns the union of:
+    - `attempted` (success / permanent-failure markers from the extraction stage)
+    - `no_recap` (popup loaded but no recap button — memoized in discovery)
+
+    Orphan pruning only applies to `attempted` (those should have produced a
+    transcript file). `no_recap` entries are deterministic and never have a
+    file by design.
+    """
+    state = _load_state()
+    attempted = state["attempted"]
+    no_recap = state["no_recap"]
+
+    # Orphan-prune `attempted` only (no_recap entries never have files).
     if output_dir and output_dir.exists():
         existing_files = set()
         for f in output_dir.glob("*.txt"):
@@ -82,20 +101,37 @@ def _load_attempted_slugs(output_dir: Path | None = None) -> dict[str, str]:
             if len(parts) == 2:
                 existing_files.add(parts[1])
 
-        orphaned = {s for s in pruned if s not in existing_files}
+        orphaned = {s for s in attempted if s not in existing_files}
         if orphaned:
             log.info(f"  Pruning {len(orphaned)} attempted slugs with no transcript file (will retry)")
-            pruned = {s: ts for s, ts in pruned.items() if s not in orphaned}
+            attempted = {s: ts for s, ts in attempted.items() if s not in orphaned}
+            state["attempted"] = attempted
 
-    if len(pruned) < len(attempted):
-        save_json_state(TRANSCRIPT_STATE_FILE, {"attempted": pruned})
-    return pruned
+    _save_state(state)
+
+    merged = {**no_recap, **attempted}
+    if no_recap:
+        log.info(f"  Memoized no-recap slugs: {len(no_recap)}")
+    return merged
 
 
 def _mark_attempted(attempted: dict[str, str], slug: str):
-    """Record that we attempted a slug and persist to disk."""
+    """Record that we attempted a slug (extraction stage) and persist to disk."""
     attempted[slug] = datetime.now().isoformat()
-    save_json_state(TRANSCRIPT_STATE_FILE, {"attempted": attempted})
+    state = _load_state()
+    state["attempted"][slug] = attempted[slug]
+    _save_state(state)
+
+
+def _mark_no_recap(slug: str):
+    """Record that a meeting popup loaded but had no recap button.
+
+    Deterministic outcome — recap won't appear later for past meetings.
+    Memoized to avoid re-polling for 15s on every subsequent run.
+    """
+    state = _load_state()
+    state["no_recap"][slug] = datetime.now().isoformat()
+    _save_state(state)
 
 
 def _slugify(text: str) -> str:
@@ -155,6 +191,7 @@ async def run_transcript_collection(client, config: dict):
     _pw = await _pw_cm.__aenter__()
     context = None
     browser = None
+    browser_mgr = None  # Only set when using the shared browser singleton
     own_context = False
 
     # Strategy 1: Connect to existing MCP browser via CDP
@@ -178,6 +215,8 @@ async def run_transcript_collection(client, config: dict):
         if browser_mgr and browser_mgr.context:
             log.info("  Using shared browser instance")
             context = browser_mgr.context
+        else:
+            browser_mgr = None  # not actually using it
 
     # Strategy 3: Launch our own browser (last resort)
     if not context:
@@ -198,122 +237,134 @@ async def run_transcript_collection(client, config: dict):
 
     page = await context.new_page()
 
+    # Pin the shared browser while we hold a single page for many minutes —
+    # otherwise BrowserManager._idle_watcher will close the context out from
+    # under us after BROWSER_IDLE_TIMEOUT (120s) of no new_page() calls.
+    pin_ctx = browser_mgr.pin_active() if browser_mgr is not None else nullcontext()
+
     try:
-        # Navigate to Outlook Calendar
-        await navigate_to_outlook_calendar(page)
+        async with pin_ctx:
+            # Navigate to Outlook Calendar
+            await navigate_to_outlook_calendar(page)
 
-        # Collect existing file slugs to skip already-collected transcripts
-        existing_files = set()
-        for f in output_dir.glob("*.txt"):
-            parts = f.stem.split("_", 1)
-            if len(parts) == 2:
-                existing_files.add(parts[1])
-        for f in output_dir.glob("*.md"):
-            parts = f.stem.split("_", 1)
-            if len(parts) == 2:
-                existing_files.add(parts[1])
+            # Collect existing file slugs to skip already-collected transcripts
+            existing_files = set()
+            for f in output_dir.glob("*.txt"):
+                parts = f.stem.split("_", 1)
+                if len(parts) == 2:
+                    existing_files.add(parts[1])
+            for f in output_dir.glob("*.md"):
+                parts = f.stem.split("_", 1)
+                if len(parts) == 2:
+                    existing_files.add(parts[1])
 
-        skip_slugs = set(attempted_history.keys()) | existing_files
+            skip_slugs = set(attempted_history.keys()) | existing_files
 
-        # Phase 1: Discover all meetings with recaps across all weeks
-        # Start with CURRENT week (not scanned if we skip straight to back-navigation)
-        all_meetings = []
-        # Aggregate skip reasons across all weeks
-        total_scanned = 0
-        total_skip_attempted = 0
-        total_skip_future = 0
-        total_skip_no_recap = 0
-        total_skip_no_url = 0
+            # Aggregate skip reasons across all weeks
+            total_scanned = 0
+            total_skip_attempted = 0
+            total_skip_future = 0
+            total_skip_no_recap = 0
+            total_skip_no_url = 0
 
-        log.info(f"  --- Current week ---")
-        await _diag(page, "week0-current")
-        discovery = await discover_meetings_with_recaps(
-            page, skip_slugs, _slugify
-        )
-        total_scanned += discovery.total_scanned
-        total_skip_attempted += discovery.skipped_already_attempted
-        total_skip_future += discovery.skipped_future
-        total_skip_no_recap += discovery.skipped_no_recap
-        total_skip_no_url += discovery.skipped_no_url
-        for m in discovery.meetings:
-            if m.slug not in skip_slugs:
-                all_meetings.append(m)
-                skip_slugs.add(m.slug)
+            # Counters captured by the per-meeting extract callback. Use a list
+            # to allow mutation from the inner closure without nonlocal gymnastics.
+            counts = {"collected": 0, "skipped": 0}
 
-        for week_num in range(1, lookback_weeks + 1):
-            if collected + len(all_meetings) >= max_meetings:
-                break
+            async def _on_meeting_found(meeting: MeetingInfo):
+                """Extract + save this transcript NOW, before the next meeting.
 
-            log.info(f"  --- Week {week_num} of {lookback_weeks} ---")
-            await navigate_weeks_back(page, 1)
-            await _diag(page, f"week{week_num}-navigated")
+                Interleaving discovery and extraction means partial progress
+                survives crashes and timeouts — every saved transcript is
+                durable on disk before we walk to the next event.
+                """
+                if counts["collected"] >= max_meetings:
+                    return  # cap reached; ignore further finds
 
-            discovery = await discover_meetings_with_recaps(
-                page, skip_slugs, _slugify
-            )
-            total_scanned += discovery.total_scanned
-            total_skip_attempted += discovery.skipped_already_attempted
-            total_skip_future += discovery.skipped_future
-            total_skip_no_recap += discovery.skipped_no_recap
-            total_skip_no_url += discovery.skipped_no_url
+                log.info(f"    Extracting: {meeting.title[:60]}...")
+                new_page = None
+                try:
+                    new_page = await context.new_page()
+                    transcript = await asyncio.wait_for(
+                        extract_transcript_from_sharepoint(new_page, meeting.sharepoint_url),
+                        timeout=PER_MEETING_TIMEOUT,
+                    )
 
-            for m in discovery.meetings:
-                if m.slug not in skip_slugs:
-                    all_meetings.append(m)
-                    skip_slugs.add(m.slug)  # prevent duplicates across weeks
+                    if isinstance(transcript, str) and transcript:
+                        date_str = datetime.now().strftime("%Y-%m-%d")
+                        filename = f"{date_str}_{meeting.slug}.txt"
+                        filepath = output_dir / filename
+                        filepath.write_text(transcript, encoding="utf-8")
+                        log.info(f"    SAVED: {filename} ({len(transcript)} chars)")
+                        counts["collected"] += 1
+                        _mark_attempted(attempted_history, meeting.slug)
+                    elif transcript is False:
+                        # Permanent: no Transcript tab or access denied — won't change.
+                        log.info(f"    No transcript available (permanent — marking attempted)")
+                        counts["skipped"] += 1
+                        _mark_attempted(attempted_history, meeting.slug)
+                    else:
+                        # None: extraction failed for unknown reason — DON'T mark attempted.
+                        # Will be retried on next run.
+                        log.info(f"    Extraction returned empty — will retry next run")
+                        counts["skipped"] += 1
 
-        log.info(f"  Total meetings to extract: {len(all_meetings)}")
+                except TransientExtractionError as e:
+                    log.warning(f"    TRANSIENT: {meeting.title[:40]}: {e}")
+                    errors.append(f"{meeting.title[:40]}: {e} (will retry)")
+                except asyncio.TimeoutError:
+                    log.warning(f"    TIMEOUT: {meeting.title[:40]} exceeded {PER_MEETING_TIMEOUT}s")
+                    errors.append(f"{meeting.title[:40]}: timeout")
+                except Exception as e:
+                    log.warning(f"    ERROR: {meeting.title[:40]}: {e}")
+                    errors.append(f"{meeting.title[:40]}: {e}")
+                finally:
+                    if new_page:
+                        try:
+                            await new_page.close()
+                        except Exception:
+                            pass
 
-        # Phase 2: Extract transcripts — one new tab per meeting
-        for i, meeting in enumerate(all_meetings):
-            if collected >= max_meetings:
-                break
+            async def _on_no_recap(slug: str):
+                """Persist no-recap memoization inline — survives mid-run crashes."""
+                _mark_no_recap(slug)
+                skip_slugs.add(slug)
 
-            log.info(f"  [{i+1}/{len(all_meetings)}] Extracting: {meeting.title[:60]}...")
-
-            new_page = None
-            try:
-                new_page = await context.new_page()
-                transcript = await asyncio.wait_for(
-                    extract_transcript_from_sharepoint(new_page, meeting.sharepoint_url),
-                    timeout=PER_MEETING_TIMEOUT,
+            async def _scan_week(label: str):
+                nonlocal total_scanned, total_skip_attempted, total_skip_future
+                nonlocal total_skip_no_recap, total_skip_no_url
+                discovery = await discover_meetings_with_recaps(
+                    page,
+                    skip_slugs,
+                    _slugify,
+                    on_meeting_found=_on_meeting_found,
+                    on_no_recap=_on_no_recap,
                 )
+                total_scanned += discovery.total_scanned
+                total_skip_attempted += discovery.skipped_already_attempted
+                total_skip_future += discovery.skipped_future
+                total_skip_no_recap += discovery.skipped_no_recap
+                total_skip_no_url += discovery.skipped_no_url
+                # Belt-and-braces: ensure newly-found meetings are also in
+                # skip_slugs so the next week doesn't re-extract a duplicate.
+                for m in discovery.meetings:
+                    skip_slugs.add(m.slug)
 
-                if isinstance(transcript, str) and transcript:
-                    date_str = datetime.now().strftime("%Y-%m-%d")
-                    filename = f"{date_str}_{meeting.slug}.txt"
-                    filepath = output_dir / filename
-                    filepath.write_text(transcript, encoding="utf-8")
-                    log.info(f"    SAVED: {filename} ({len(transcript)} chars)")
-                    collected += 1
-                    _mark_attempted(attempted_history, meeting.slug)
-                elif transcript is False:
-                    # Permanent: no Transcript tab or access denied — won't change.
-                    log.info(f"    No transcript available (permanent — marking attempted)")
-                    skipped += 1
-                    _mark_attempted(attempted_history, meeting.slug)
-                else:
-                    # None: extraction failed for unknown reason — DON'T mark attempted.
-                    # Will be retried on next run.
-                    log.info(f"    Extraction returned empty — will retry next run")
-                    skipped += 1
+            log.info(f"  --- Current week ---")
+            await _diag(page, "week0-current")
+            await _scan_week("current")
 
-            except TransientExtractionError as e:
-                log.warning(f"    TRANSIENT: {meeting.title[:40]}: {e}")
-                errors.append(f"{meeting.title[:40]}: {e} (will retry)")
-                # Don't mark as attempted — transient failures should be retried
-            except asyncio.TimeoutError:
-                log.warning(f"    TIMEOUT: {meeting.title[:40]} exceeded {PER_MEETING_TIMEOUT}s")
-                errors.append(f"{meeting.title[:40]}: timeout")
-            except Exception as e:
-                log.warning(f"    ERROR: {meeting.title[:40]}: {e}")
-                errors.append(f"{meeting.title[:40]}: {e}")
-            finally:
-                if new_page:
-                    try:
-                        await new_page.close()
-                    except Exception:
-                        pass
+            for week_num in range(1, lookback_weeks + 1):
+                if counts["collected"] >= max_meetings:
+                    break
+
+                log.info(f"  --- Week {week_num} of {lookback_weeks} ---")
+                await navigate_weeks_back(page, 1)
+                await _diag(page, f"week{week_num}-navigated")
+                await _scan_week(f"week-{week_num}")
+
+            collected = counts["collected"]
+            skipped = counts["skipped"]
 
     finally:
         # Close the page we created

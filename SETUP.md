@@ -248,22 +248,39 @@ If the above works, the Copilot CLI is ready.
 
 WorkIQ provides Microsoft 365 data access (calendar, email, Teams messages, people). Skip if Node.js wasn't installed.
 
+**Important: pin to version 0.2.8.** WorkIQ 0.4.x initializes the Windows WAM broker before consulting the cached token, which fails for every MCP stdio child with `"An error occurred while processing your request."` See [microsoft/work-iq#87](https://github.com/microsoft/work-iq/issues/87). Pulse's MCP config also pins 0.2.8 via `npx`, so this global install is mainly for the user's own CLI use and the EULA/auth bootstrap.
+
 ```
-npm install -g @microsoft/workiq
+npm install -g @microsoft/workiq@0.2.8
 ```
 
-**Common issue — permission error**: `npm install -g` on Windows may fail with EACCES/EPERM if npm's global prefix is in a protected directory. Fix: run the terminal as Administrator, or change npm's global prefix:
+**Common issue, permission error**: `npm install -g` on Windows may fail with EACCES/EPERM if npm's global prefix is in a protected directory. Fix: run the terminal as Administrator, or change npm's global prefix:
 ```
 npm config set prefix "%APPDATA%\npm"
 ```
 Then retry the install.
 
-**Common issue — not on PATH after install**: Close and reopen the terminal, or add npm's global bin to PATH:
+**Common issue, not on PATH after install**: Close and reopen the terminal, or add npm's global bin to PATH:
 ```powershell
 $env:Path += ";$env:APPDATA\npm"
 ```
 
-**Verify**: `workiq --version` prints a version number.
+**Verify**: `workiq --version` prints `0.2.8.x`. If it prints `0.4.x`, downgrade with `npm install -g @microsoft/workiq@0.2.8`.
+
+### 4.3 WorkIQ EULA + First Auth
+
+### **USER ACTION REQUIRED**
+
+WorkIQ requires a one-time EULA acceptance and an interactive auth bootstrap so the token cache is seeded for non-interactive callers (MCP, daemon).
+
+```
+workiq accept-eula
+workiq ask -q "ping"
+```
+
+The first `ask` opens a browser for device-code authentication. The user signs in with their work Microsoft account. After auth completes, the answer prints in the terminal and the token is cached at `~/.workiq.json` and `~/.work-iq-cli/msal_token_cache.dat`.
+
+**Verify**: `workiq ask -q "ping"` returns a real answer (not an error). Subsequent calls work without prompting until the token expires.
 
 ---
 
@@ -429,7 +446,7 @@ Check the output. Here's what each result means:
 | PULSE_HOME | Yes | OneDrive detection (Step 5.1) |
 | Playwright Edge | Yes | Verify Edge is installed (it ships with Windows 11). Only run `python -m playwright install msedge` if truly missing — see Step 6 troubleshooting. |
 | Browser: Teams auth | Recommended | Re-run `--health-check` with browser login (Step 6) |
-| WorkIQ MCP server | Optional | `npm install -g @microsoft/workiq` (Step 4.2) |
+| WorkIQ MCP server | Optional | `npm install -g @microsoft/workiq@0.2.8` (Step 4.2; pin to 0.2.8) |
 | Config: user identity | No | Will be set in Step 8 |
 
 **All "Yes" checks must pass before continuing.**
@@ -711,7 +728,9 @@ Your data in OneDrive is untouched — only the code updates.
 | "Browser launch failed" at runtime | Profile locked by orphan process | `taskkill /F /IM msedge.exe` then restart Pulse |
 | `OneDriveCommercial` empty | OneDrive for Business not syncing | Open OneDrive settings, add work account, restart terminal |
 | Onboarding keeps repeating | Config not saved / user.name still "TODO" | Check `$PULSE_HOME/standing-instructions.yaml` exists and has real values |
-| WorkIQ errors at runtime | EULA not accepted | Run `workiq mcp` once manually — it opens a browser for EULA acceptance |
+| WorkIQ returns `"An error occurred while processing your request."` for every call | WorkIQ 0.4.x WAM broker bug ([microsoft/work-iq#87](https://github.com/microsoft/work-iq/issues/87)) | Pin to 0.2.8: `npm install -g @microsoft/workiq@0.2.8`. Pulse's MCP config also pins 0.2.8 via npx. |
+| WorkIQ prompts for EULA on every call | EULA not yet accepted for the installed version | Run `workiq accept-eula` (or `npx -y -p @microsoft/workiq@0.2.8 workiq accept-eula`) |
+| WorkIQ first ask hangs or returns nothing in the daemon | Token cache not seeded | Run `workiq ask -q "ping"` once interactively in cmd to complete browser auth, then restart the daemon |
 | npm global tool not found | npm bin not on PATH | Add `%APPDATA%\npm` to PATH, or restart terminal |
 
 ### CRM Plugin (Microsoft Internal Only)

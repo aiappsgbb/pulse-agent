@@ -1,8 +1,10 @@
 """Outlook Calendar navigation, meeting discovery, and SharePoint URL extraction."""
 
+import inspect
 import re
 from datetime import datetime, date
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from playwright.async_api import Page
 
@@ -354,12 +356,28 @@ class DiscoveryResult:
     skipped_future: int = 0
     skipped_no_recap: int = 0
     skipped_no_url: int = 0
+    # Slugs whose popups loaded but had no recap button. Caller should
+    # memoize these so we don't re-poll the same dead meetings every run.
+    no_recap_slugs: list[str] | None = None
+
+    def __post_init__(self):
+        if self.no_recap_slugs is None:
+            self.no_recap_slugs = []
+
+
+async def _maybe_await(value):
+    """Helper: await if it's awaitable, else return as-is."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 async def discover_meetings_with_recaps(
     page: Page,
     skip_slugs: set[str],
     slugify_fn,
+    on_meeting_found: Callable[["MeetingInfo"], Awaitable[None] | None] | None = None,
+    on_no_recap: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> DiscoveryResult:
     """Click each meeting event, check for 'View recap', extract SharePoint URLs.
 
@@ -375,6 +393,14 @@ async def discover_meetings_with_recaps(
 
     skip_slugs: set of slugs to skip (already collected/attempted).
     slugify_fn: function to convert meeting title to slug.
+    on_meeting_found: optional callback fired AS SOON AS a usable
+        SharePoint URL is extracted, before moving to the next meeting.
+        Used by the collector to extract+save the transcript inline so
+        partial progress survives a timeout or crash.
+    on_no_recap: optional callback fired AS SOON AS a meeting popup
+        loads without a recap button. Used to persist the no-recap memo
+        to disk inline (instead of only at function return), so a mid-
+        run crash doesn't lose the work of clicking through dead meetings.
     """
     meeting_buttons = await find_meeting_buttons(page)
     log.info(f"  Scanning {len(meeting_buttons)} meetings for recaps...")
@@ -382,11 +408,29 @@ async def discover_meetings_with_recaps(
 
     results = []
     seen_slugs = set()
+    no_recap_slugs: list[str] = []
     skipped_already_attempted = 0
     skipped_future = 0
     skipped_no_recap = 0
     skipped_no_url = 0
     today = date.today()
+
+    async def _emit_found(meeting: MeetingInfo):
+        results.append(meeting)
+        log.info(f"    -> SharePoint URL: {meeting.sharepoint_url[:80]}...")
+        if on_meeting_found is not None:
+            try:
+                await _maybe_await(on_meeting_found(meeting))
+            except Exception as e:
+                log.warning(f"    on_meeting_found callback raised: {e}")
+
+    async def _emit_no_recap(slug: str):
+        no_recap_slugs.append(slug)
+        if on_no_recap is not None:
+            try:
+                await _maybe_await(on_no_recap(slug))
+            except Exception as e:
+                log.warning(f"    on_no_recap callback raised: {e}")
 
     for meeting_name in meeting_buttons:
         slug = slugify_fn(meeting_name)
@@ -431,8 +475,11 @@ async def discover_meetings_with_recaps(
             if len(seen_slugs) <= 5:
                 await _log_popup_diagnostics(page, meeting_name)
 
-            # No recap — close popup and continue
+            # No recap — close popup and continue.
+            # Memoize: this is a deterministic miss (past meeting, no recording).
+            # Without this, every future run wastes ~15s re-polling the same dead meeting.
             skipped_no_recap += 1
+            await _emit_no_recap(slug)
             try:
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(500)
@@ -470,10 +517,9 @@ async def discover_meetings_with_recaps(
                 await page.goto(OUTLOOK_CALENDAR_URL, wait_until="domcontentloaded")
                 await page.wait_for_timeout(5000)
                 if sharepoint_url:
-                    results.append(MeetingInfo(
+                    await _emit_found(MeetingInfo(
                         title=meeting_name, sharepoint_url=sharepoint_url, slug=slug,
                     ))
-                    log.info(f"    -> SharePoint URL: {sharepoint_url[:80]}...")
                 continue
 
         # Extract SharePoint URL from launcher page
@@ -499,12 +545,11 @@ async def discover_meetings_with_recaps(
             pass
 
         if sharepoint_url:
-            results.append(MeetingInfo(
+            await _emit_found(MeetingInfo(
                 title=meeting_name,
                 sharepoint_url=sharepoint_url,
                 slug=slug,
             ))
-            log.info(f"    → SharePoint URL: {sharepoint_url[:80]}...")
         else:
             skipped_no_url += 1
             log.warning(f"    No SharePoint URL found for: {meeting_name[:50]}")
@@ -522,4 +567,5 @@ async def discover_meetings_with_recaps(
         skipped_future=skipped_future,
         skipped_no_recap=skipped_no_recap,
         skipped_no_url=skipped_no_url,
+        no_recap_slugs=no_recap_slugs,
     )
