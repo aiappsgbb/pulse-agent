@@ -78,16 +78,21 @@ from tui.screens import (
 
 
 def _play_alert() -> None:
-    """Play a retro 3-tone ascending chime in a background thread (non-blocking)."""
-    def _beep():
-        try:
-            import winsound
-            winsound.Beep(660, 80)   # E5
-            winsound.Beep(880, 80)   # A5
-            winsound.Beep(1320, 120) # E6
-        except Exception:
-            pass
-    threading.Thread(target=_beep, daemon=True).start()
+    """No-op (was a 3-tone winsound chime — silenced by user request).
+
+    Kept as a function so the call sites don't need to change. Restore the
+    chime by uncommenting the body if you ever want it back.
+    """
+    return
+    # def _beep():
+    #     try:
+    #         import winsound
+    #         winsound.Beep(660, 80)   # E5
+    #         winsound.Beep(880, 80)   # A5
+    #         winsound.Beep(1320, 120) # E6
+    #     except Exception:
+    #         pass
+    # threading.Thread(target=_beep, daemon=True).start()
 
 
 class StatusBar(Static):
@@ -280,9 +285,8 @@ class PulseApp(App):
             self.query_one(JobsPane).load_data()
             self._update_tab_labels()
             new_count = len(inbox._items)
-            if new_count > self._prev_item_count:
-                _play_alert()
-                self.bell()
+            # Sound on new-item arrival was super annoying; silenced. The tab
+            # label badge change ("Inbox (N)") is enough visual feedback.
             self._prev_item_count = new_count
         except Exception:
             log.debug("Failed to refresh panes", exc_info=True)

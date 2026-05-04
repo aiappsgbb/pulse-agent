@@ -26,10 +26,10 @@ def notify_desktop(title: str, body: str, urgency: str = "normal") -> None:
             msg=body,
             duration="long" if urgency == "urgent" else "short",
         )
-        if urgency == "urgent":
-            toast.set_audio(audio.LoopingAlarm, loop=False)
-        else:
-            toast.set_audio(audio.Default, loop=False)
+        # Silent toasts — the looping alarm on every triage completion was
+        # super annoying. Notifications still appear visually; users who
+        # want sounds can change Windows notification settings per-app.
+        toast.set_audio(audio.Silent, loop=False)
         toast.show()
         log.debug(f"Toast: [{urgency}] {title} — {body[:60]}")
     except ImportError:
