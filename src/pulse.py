@@ -33,6 +33,55 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _disable_console_quick_edit():
+    """Disable cmd.exe / Windows Terminal "Quick Edit Mode" for this console.
+
+    Why this exists: with Quick Edit Mode ON (the Windows default), a single
+    click anywhere in the console window puts cmd into "select mode" which
+    suspends the running process. Worse, certain mouse events while in
+    select mode synthesise Ctrl+C-like signals to the child process. The
+    child (Pulse + Textual TUI) interprets that as KeyboardInterrupt;
+    Textual catches it inside its own run loop and exits cleanly via a
+    path that bypasses ``action_quit``, ``app.exit()``, and
+    ``_handle_exception`` — exactly the silent-death pattern we have been
+    chasing all afternoon.
+
+    SetConsoleMode with the Quick Edit bit cleared prevents that. Mouse
+    input is still available to Textual (it captures it directly through
+    ENABLE_MOUSE_INPUT, which we leave on).
+
+    No-op on non-Windows. Best-effort: any failure is swallowed silently.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        STD_INPUT_HANDLE = -10
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        ENABLE_MOUSE_INPUT = 0x0010
+
+        h_in = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        if h_in == 0 or h_in == -1:
+            return
+
+        mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(h_in, ctypes.byref(mode)):
+            return
+
+        # Setting EXTENDED_FLAGS is required for QUICK_EDIT changes to stick.
+        new_mode = (mode.value | ENABLE_EXTENDED_FLAGS | ENABLE_MOUSE_INPUT) & ~ENABLE_QUICK_EDIT_MODE
+        kernel32.SetConsoleMode(h_in, new_mode)
+    except Exception:
+        # Console mode tweak is purely defensive — never crash the launch
+        # because of it.
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pulse Agent")
     parser.add_argument(
@@ -100,6 +149,58 @@ def main():
         return
 
     # --- Default: daemon + TUI ---
+    # Disable Quick Edit Mode FIRST, before any process spawning, so the
+    # very first click on the cmd window doesn't freeze us.
+    _disable_console_quick_edit()
+
+    # Block accidental Ctrl+C / Ctrl+Break from killing the TUI.
+    #
+    # Real cause of the silent-TUI-death pattern: under cmd.exe / Windows
+    # Terminal, child-process activity (Copilot SDK spawning MCP node
+    # subprocesses, Playwright spawning Edge, console-event passthrough)
+    # synthesises CTRL_C_EVENT / CTRL_BREAK_EVENT to the parent process
+    # group. Python's default SIGINT handler raises KeyboardInterrupt on
+    # the main thread; asyncio.Runner catches that, cancels the main
+    # task, and Textual's `_process_messages_loop` swallows the resulting
+    # CancelledError silently — `app.run()` then returns "cleanly" past
+    # every watcher we have. That's exactly what the logs show: a clean
+    # return with action_quit, the wrapped exit(), the _exit poll, and
+    # _handle_exception all dark.
+    #
+    # asyncio.Runner only installs its own SIGINT handler when the
+    # current handler is `signal.default_int_handler` (see
+    # cpython/Lib/asyncio/runners.py). By installing our own first, we
+    # both (a) preempt Runner's handler and (b) absorb any spurious
+    # signals delivered to the process group during the TUI's lifetime.
+    #
+    # Intentional quits go through 'q' -> QuitConfirmModal -> app.exit().
+    # Window-close still works (CTRL_CLOSE_EVENT terminates the process
+    # rather than going through SIGINT). Task Manager kill still works.
+    _prev_sigint = signal.getsignal(signal.SIGINT)
+    _prev_sigbreak = signal.getsignal(signal.SIGBREAK) if hasattr(signal, "SIGBREAK") else None
+
+    def _log_and_ignore_signal(signum, frame):
+        try:
+            from core.logging import log as _log
+            import traceback as _tb
+            sig_name = {
+                signal.SIGINT: "SIGINT",
+                getattr(signal, "SIGBREAK", -99): "SIGBREAK",
+            }.get(signum, f"signal {signum}")
+            _log.warning(
+                f"TUI: absorbing {sig_name} (signum={signum}) — likely "
+                f"delivered by a child subprocess (MCP node, Playwright/Edge) "
+                f"or a console event. Not propagating to asyncio. "
+                f"Use 'q' to quit intentionally.\n"
+                f"Stack at delivery:\n{''.join(_tb.format_stack(frame, limit=10))}"
+            )
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGINT, _log_and_ignore_signal)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _log_and_ignore_signal)
+
     shutdown_event = threading.Event()
 
     # Start daemon in background thread
@@ -111,53 +212,103 @@ def main():
     )
     daemon_thread.start()
 
-    # Run TUI in main thread.
-    # Log how the TUI ended so we can tell user-initiated quit ("q"/Ctrl+C
-    # in TUI / app.exit()) from a Textual rendering crash that would
-    # otherwise vanish silently.
-    tui_exit_reason = "unknown"
+    # Run TUI in main thread with aggressive instrumentation.
+    #
+    # Past attempts to identify what exits the TUI revealed:
+    #   - action_quit is never invoked (so it's not the q binding, not Ctrl+C
+    #     routed through Textual)
+    #   - app.exit() monkey-patch logs nothing (so it's not direct exit calls)
+    #
+    # That leaves only paths that bypass exit() entirely: direct mutation of
+    # self._exit, asyncio.CancelledError on the main loop, or driver
+    # disconnect. We instrument all three here.
+    import traceback as _tb
+    from core.logging import log as _log
+
     tui_exception: BaseException | None = None
     try:
         from tui.app import PulseApp
 
         app = PulseApp()
         app.needs_onboarding = needs_onboarding
+
+        # 1) Wrap app.exit() to log any direct call.
+        _original_exit = app.exit
+        def _logged_exit(*args, **kwargs):
+            try:
+                _log.warning(
+                    f"app.exit() called (args={args}, kwargs={kwargs})\n"
+                    f"Caller stack:\n{''.join(_tb.format_stack(limit=15))}"
+                )
+            except Exception:
+                pass
+            return _original_exit(*args, **kwargs)
+        app.exit = _logged_exit  # type: ignore[method-assign]
+
+        # 2) Detect direct mutation of the internal _exit flag — this is what
+        #    actually ends Textual's run loop, even if exit() was bypassed.
+        #    We can't override an attribute setter at instance level on a
+        #    Textual App easily, but we CAN poll it from a thread.
+        import threading as _threading
+        import time as _time
+
+        _exit_observed = _threading.Event()
+        def _watch_exit_flag():
+            while not _exit_observed.is_set():
+                try:
+                    if getattr(app, "_exit", False):
+                        _log.warning(
+                            "Textual App._exit became True without going through "
+                            "the patched exit() — driver-level shutdown or direct "
+                            "mutation. This is the path responsible for the silent "
+                            "TUI deaths.\n"
+                            f"Stack at observation:\n{''.join(_tb.format_stack(limit=10))}"
+                        )
+                        _exit_observed.set()
+                        return
+                except Exception:
+                    pass
+                _time.sleep(0.1)
+        _watcher = _threading.Thread(target=_watch_exit_flag, daemon=True, name="pulse-exit-watcher")
+        _watcher.start()
+
+        # 3) Patch _handle_exception so Textual-internal exceptions get our log
+        #    (not just Textual's own console).
+        _original_handle = app._handle_exception
+        def _logged_handle_exception(error):
+            try:
+                _log.error(
+                    f"Textual _handle_exception caught {type(error).__name__}: {error}\n"
+                    f"{''.join(_tb.format_exception(error))}"
+                )
+            except Exception:
+                pass
+            return _original_handle(error)
+        app._handle_exception = _logged_handle_exception  # type: ignore[method-assign]
+
         app.run()
-        # If we get here, the TUI returned normally — user pressed q,
-        # Ctrl+C inside Textual, or some action called app.exit().
-        # Capture Textual's own return_code/exception if exposed.
-        tui_exit_reason = "tui_returned_normally"
-        try:
-            ret = getattr(app, "return_code", None)
-            if ret is not None:
-                tui_exit_reason = f"tui_returned_normally (return_code={ret})"
-        except Exception:
-            pass
+
+        _exit_observed.set()  # let the watcher thread quit
+        _log.info("TUI exited cleanly: app.run() returned (see traces above)")
     except BaseException as e:
         tui_exception = e
-        tui_exit_reason = f"tui_raised: {type(e).__name__}: {e}"
-        # Print to stderr (cmd window) so the user sees it before ``pause``.
-        print(f"\n*** TUI crashed: {tui_exit_reason}\n", file=sys.stderr)
-        import traceback as _tb
+        _log.error(
+            f"TUI raised {type(e).__name__}: {e}\n"
+            f"{''.join(_tb.format_exception(e))}"
+        )
+        print(f"\n*** TUI crashed: {type(e).__name__}: {e}\n", file=sys.stderr)
         _tb.print_exc(file=sys.stderr)
     finally:
-        # Log the TUI exit reason via the structured logger so it lands in
-        # logs/YYYY-MM-DD.jsonl alongside everything else. The daemon thread
-        # has its own logger; we just route through the same module.
+        # Restore default signal handlers so the daemon-shutdown phase
+        # (and any post-TUI prompts) can still be aborted with Ctrl+C
+        # if it hangs. Best-effort: signal.signal can fail during
+        # interpreter teardown, never let that mask the real exit.
         try:
-            from core.logging import log as _log
-            if tui_exception is not None:
-                import traceback as _tb
-                _log.error(
-                    f"TUI exited with exception: {tui_exit_reason}\n"
-                    f"{''.join(_tb.format_exception(tui_exception))}"
-                )
-            else:
-                _log.info(f"TUI exited cleanly: {tui_exit_reason}")
+            signal.signal(signal.SIGINT, _prev_sigint)
+            if hasattr(signal, "SIGBREAK") and _prev_sigbreak is not None:
+                signal.signal(signal.SIGBREAK, _prev_sigbreak)
         except Exception:
             pass
-
-        # TUI exited — signal daemon to shut down
         shutdown_event.set()
         daemon_thread.join(timeout=15)
         if daemon_thread.is_alive():
