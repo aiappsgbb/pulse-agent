@@ -19,10 +19,60 @@ Architecture:
 import argparse
 import asyncio
 import signal
+import subprocess
 import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Detach every child subprocess into its own Windows process group.
+#
+# Why this exists: under cmd.exe / Windows Terminal, all processes attached
+# to the same console form a "process group" that receives broadcast
+# CTRL_C_EVENT / CTRL_BREAK_EVENT signals. When Pulse spawns the Copilot CLI
+# (LLM backend), Playwright's Node driver, the MCP node servers, or the Edge
+# browser, they inherit the parent's group by default. Any console event
+# delivered to the parent — and there are MANY: Edge auto-stopping after
+# idle, Playwright tearing down its driver, MCP subprocesses exiting,
+# console focus quirks — gets broadcast to every member of the group.
+#
+# We installed a Python signal handler ([pulse.py:200] below) so the TUI
+# itself ignores those events. But the handler only protects Python.
+# `copilot.exe` has no Python handler — when an event hits the group,
+# copilot dies, and the SDK client is left waiting forever on a dead
+# subprocess. That's the digest-wedged-after-N-minutes pattern.
+#
+# Fix: monkey-patch subprocess.Popen so EVERY child Pulse spawns gets
+# CREATE_NEW_PROCESS_GROUP set on its creationflags. Per Win32 docs, that
+# flag both (a) makes the child its own process-group leader and (b)
+# disables CTRL_C_EVENT delivery to it. The child is now isolated from
+# our group's broadcasts, and our handler never has to fire because of
+# the child's shutdown noise.
+#
+# We patch instead of fixing each spawn site because the spawns live in
+# third-party libraries we don't control:
+#   - GHCP Copilot SDK at copilot/client.py:1149/1161 (the Copilot CLI)
+#   - Playwright Python -> asyncio.create_subprocess_exec -> Popen (Edge / Node driver)
+#   - The MCP server stdio launcher inside the SDK
+# asyncio's ProactorEventLoop subprocess transport on Windows ultimately
+# also calls subprocess.Popen, so this one patch covers every code path.
+#
+# No-op on non-Windows. Idempotent: if a caller passes an explicit
+# creationflags it is OR'd, never replaced.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    _CREATE_NEW_PROCESS_GROUP = 0x00000200
+    _orig_popen_init = subprocess.Popen.__init__
+
+    def _detached_popen_init(self, *args, **kwargs):
+        existing = kwargs.get("creationflags", 0) or 0
+        kwargs["creationflags"] = existing | _CREATE_NEW_PROCESS_GROUP
+        return _orig_popen_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _detached_popen_init  # type: ignore[method-assign]
+
 
 # Add src/ to path for clean imports
 _src = Path(__file__).parent
